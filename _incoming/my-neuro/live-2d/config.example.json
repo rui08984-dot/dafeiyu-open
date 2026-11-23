@@ -1,0 +1,277 @@
+{
+  "api_gateway": {
+    "use_gateway": false,
+    "base_url": "http://gateway.example.com/api/v1",
+    "api_key": "<填你的密钥>"
+  },
+  "llm": {
+    "system_prompt": "<你的人设提示词：这里写「她是谁、怎么说话、什么脾气」。参考 docs/ 里的性格设计>",
+    "provider_id": "comad",
+    "model_id": "deepseek/deepseek-v4.1-flash",
+    "top_p": 0.95,
+    "filler_enabled": false,
+    "intent_router": {
+      "llm_enabled": false
+    }
+  },
+  "motion_director": {
+    "enabled": true,
+    "stream": true,
+    "timeout_ms": 8000,
+    "temperature": 0.25,
+    "max_tokens": 900,
+    "min_keyframes": 6,
+    "max_keyframes": 10,
+    "wait_before_tts": true,
+    "first_frame_wait_ms": 1500,
+    "fallback_enabled": true,
+    "style": "natural",
+    "body": {
+      "enabled": true
+    },
+    "face": {
+      "enabled": true,
+      "mouth_form_speech_scale": 0.5
+    },
+    "vad": {
+      "enabled": true
+    }
+  },
+  "expression_solver": {
+    "enabled": true,
+    "transition_ms": 600,
+    "neutral_ms": 600,
+    "min_hold_ms": 1500,
+    "randomness": 0.5,
+    "diversity": 0.6,
+    "history_avoidance": 0.7,
+    "max_units": 5,
+    "typicality_floor": 0.3,
+    "typicality_power": 0.5
+  },
+  "tts": {
+    "enabled": true,
+    "url": "http://127.0.0.1:9883/tts",
+    "language": "zh",
+    "speed_factor": 1.06,
+    "muted": false,
+    "backend": "edge",
+    "backend_params": "",
+    "stream_first_segment": true
+  },
+  "asr": {
+    "enabled": true,
+    "vad_url": "ws://127.0.0.1:1000/v1/ws/vad",
+    "asr_url": "http://127.0.0.1:1000/v1/upload_audio",
+    "voice_barge_in": true,
+    "merge_window_ms": 300,
+    "client_silence_ms": 150,
+    "ptt_enabled": true,
+    "ptt_key": "v"
+  },
+  "bert": {
+    "enabled": false,
+    "url": "http://127.0.0.1:6007/classify"
+  },
+  "rag": {
+    "enabled": true,
+    "url": "http://127.0.0.1:8002/ask"
+  },
+  "vision": {
+    "enabled": true,
+    "auto_screenshot": false,
+    "use_vision_model": true,
+    "vision_model": {},
+    "provider_id": "comad",
+    "model_id": "deepseek/deepseek-v4.1-flash",
+    "tiers": {
+      "enabled": false,
+      "high": "qwen3-vl:8b-instruct",
+      "mid": "",
+      "low": "",
+      "highMinFreeVramMb": 6200,
+      "midMinFreeVramMb": 2500,
+      "fallbackToProvider": true
+    }
+  },
+  "cloud": {
+    "provider": "siliconflow",
+    "api_key": "<填你的密钥>",
+    "volcengine_tts": {
+      "enabled": false,
+      "appid": "",
+      "access_token": "<填你的密钥>",
+      "voice_type": "saturn_zh_female_tiaopigongzhu_tob"
+    },
+    "aliyun_tts": {
+      "enabled": false,
+      "api_key": "<填你的密钥>",
+      "model": "cosyvoice-v3-flash",
+      "voice": "",
+      "sample_rate": 48000,
+      "volume": 50,
+      "rate": 1,
+      "pitch": 1
+    },
+    "tts": {
+      "enabled": false,
+      "url": "https://api.siliconflow.cn/v1/audio/speech",
+      "model": "FunAudioLLM/CosyVoice2-0.5B",
+      "voice": "speech:fake-neuro:j3qz9ij4k2:kquiiycgizgaoxeujypx",
+      "response_format": "wav",
+      "speed": 1
+    },
+    "baidu_asr": {
+      "enabled": false,
+      "url": "ws://vop.baidu.com/realtime_asr",
+      "appid": "",
+      "appkey": "<填你的密钥>",
+      "dev_pid": "15372"
+    },
+    "siliconflow_asr": {
+      "enabled": false,
+      "api": "",
+      "key": "<填你的密钥>",
+      "model": ""
+    }
+  },
+  "game": {
+    "Minecraft": {
+      "enabled": false,
+      "server_url": "http://localhost:8080",
+      "agent_name": "fake-neuro"
+    }
+  },
+  "ui": {
+    "intro_text": "来了？行吧，我刚好有点无聊。",
+    "avatar_motion_mode": "blend",
+    "expression_engine": "au",
+    "model_type": "petbody",
+    "vrm_model": "",
+    "vrm_model_path": "3D/VRM/Sample_A/Sample_A.vrm",
+    "model_scale": 0.65,
+    "show_chat_box": true,
+    "show_model": true,
+    "text_only_mode": false,
+    "auto_show_chat_on_text_mode": true,
+    "hide_from_screenshot": true,
+    "model_position": {
+      "x": 1.35,
+      "y": 0.8,
+      "x_dual": 0.825,
+      "y_dual": 0.38,
+      "remember_position": true,
+      "bounce_back": true,
+      "display": {
+        "screenX": 0,
+        "screenY": 0
+      }
+    },
+    "screen_extend": {
+      "extend": false,
+      "left": false,
+      "right": true
+    },
+    "live2d_model": "大肥鱼",
+    "pet_window": {
+      "width": 420,
+      "height": 760,
+      "x": 96,
+      "y": 78
+    },
+    "subtitle_position": null,
+    "click_through_default": true,
+    "petbody_mouth_gain": 1.1,
+    "petbody_emotion_gain": 1,
+    "petbody_framing": "half",
+    "petbody_choreo": true,
+    "petbody_perf_auto": true
+  },
+  "context": {
+    "enable_limit": true,
+    "max_messages": 16,
+    "persistent_history": true,
+    "history_file": "../data/对话历史.json",
+    "token_budget": 12000
+  },
+  "vmc": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 39539
+  },
+  "tools": {
+    "enabled": true,
+    "auto_reload": false
+  },
+  "mcp": {
+    "enabled": false,
+    "config_path": "./mcp/mcp_config.json",
+    "startup_timeout": 20000,
+    "auto_start_servers": true
+  },
+  "subtitle_labels": {
+    "enabled": true,
+    "user": "用户",
+    "ai": "大肥鱼"
+  },
+  "auto_close_services": {
+    "enabled": false
+  },
+  "version": "v6.8.1",
+  "cost": {
+    "quiet": true
+  },
+  "dispatch": {
+    "ledger_v2": true,
+    "workspaces": {
+      "pet": "."
+    },
+    "defaultWorkspace": ".",
+    "cancel": true,
+    "verify": true,
+    "workspace": true,
+    "verify_timeout_ms": 60000,
+    "rework_max": 1,
+    "cancel_grace_ms": 2000
+  },
+  "privacy": {
+    "ack_screen_watch": true,
+    "acked_at": ""
+  },
+  "_deprecated": {
+    "tools.enabled": "无消费者：真正决定插件加载的是 plugins/enabled_plugins.json（2026-11-16 标注）",
+    "tools.auto_reload": "无消费者：全仓只有配置与示例，没有任何代码读它（2026-11-16 标注）",
+    "rag.enabled": "无消费者：rag-memory 插件用自己的 rag_url；run_rag.py 需手动起（2026-11-16 标注）",
+    "rag.url": "无消费者：同上（2026-11-16 标注）",
+    "ui.auto_show_chat_on_text_mode": "无消费者（2026-11-16 标注）",
+    "motion_director.enabled": "petbody 模式下 director 整段被 isPetBodyTakeover() 短路，开关无效（2026-11-16 标注）",
+    "motion_director.wait_before_tts": "无消费者（2026-11-16 标注）",
+    "motion_director.first_frame_wait_ms": "无消费者（2026-11-16 标注）",
+    "motion_director.fallback_enabled": "petbody 下 director 整段短路，fallback 分支也进不去（2026-11-16 标注）",
+    "motion_director.body.enabled": "petbody 下 director 整段短路，body 分支无效（2026-11-16 标注）",
+    "motion_director.face.enabled": "petbody 下 director 整段短路，face 分支无效（2026-11-16 标注）",
+    "motion_director.vad.enabled": "petbody 下 director 整段短路，vad 分支无效（2026-11-16 标注）"
+  },
+  "browser_ext_token": "<填你的密钥>",
+  "world_sense": {
+    "privacy": false,
+    "enabled": true,
+    "low_power": false,
+    "sources": {
+      "foreground": true,
+      "idle": true,
+      "media": true,
+      "clipboard": true
+    }
+  },
+  "voice_style": {
+    "enabled": true
+  },
+  "voice": {
+    "duplex": {
+      "backchannel_gate": false,
+      "noise_confidence_threshold": 0.35,
+      "barge_defer_timeout_ms": 1500
+    }
+  }
+}

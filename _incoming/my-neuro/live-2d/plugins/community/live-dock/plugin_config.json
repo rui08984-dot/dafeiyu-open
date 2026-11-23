@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "server_url": "http://127.0.0.1:8030",
+  "source": "blivedm",
+  "room_id": "3938949",
+  "poll_ms": 3000,
+  "select_window_s": 30,
+  "speak_max_chars": 40
+}

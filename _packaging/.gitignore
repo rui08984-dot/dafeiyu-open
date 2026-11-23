@@ -1,0 +1,14 @@
+# 构建工具依赖：只在本机安装，不入库
+/node_modules/
+
+# 构建产物：几百 MB，不入库
+/out/
+
+# 自签名证书与私钥：绝不入库
+/identity/*.pfx
+/identity/*.cer
+/identity/*.pvk
+
+# 生成出来的清单（模板才入库）
+/identity/stage/
+/identity/generated/

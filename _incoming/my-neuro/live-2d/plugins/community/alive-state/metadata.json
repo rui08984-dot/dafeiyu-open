@@ -1,0 +1,10 @@
+{
+  "name": "alive-state",
+  "displayName": "活着感状态机",
+  "version": "1.0.0",
+  "author": "pet-runtime",
+  "description": "饱食/精力/亲密度的生理层：随时间衰减、被摸头和投喂改变，经系统提示+主动表达+演出三条通路活出来",
+  "framework_version": ">=1.0.0",
+  "main": "index.js",
+  "lang": "js"
+}

@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>大肥鱼 · 直播台</title>
+<style>
+  :root{
+    --bg:#0d0906;
+    --surface:rgba(24, 17, 11, 0.96);
+    --raised:rgba(33, 23, 15, 0.92);
+    --line:rgba(232, 207, 138, 0.18);
+    --line-glow:rgba(232, 207, 138, 0.45);
+    --ink:#f2e6c8; --ink2:#bfa87f; --ink3:#7e6e52;
+    --ocean:#8f7024; --accent:#d9bd72;
+    --cyan:#d9bd72; --cyan-glow:#8f7024;
+    --goldfish:var(--ocean); --goldfish-gold:var(--accent); --goldfish-light:#f7ecc8;
+    --ok:#8aa864; --warn:#d9a441; --bad:#b8473a; --info:#d9bd72;
+    --r:12px;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:radial-gradient(ellipse at 50% 0%, #2a1c11 0%, var(--bg) 75%);
+    color:var(--ink);
+    font:13.5px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    padding:18px 20px 32px;display:grid;gap:14px;
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+    grid-auto-rows:min-content;
+    align-content:start;min-height:100vh
+  }
+  @media (max-width:900px){ body{grid-template-columns:1fr; padding:12px} }
+  h1{font-size:16.5px;margin:0;display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.3px;color:#fff}
+  .brand-avatar-mini{
+    width:32px;height:32px;border-radius:50%;
+    background:linear-gradient(135deg, var(--ocean), var(--accent));
+    display:grid;place-items:center;font-size:16px;
+    box-shadow:0 0 12px rgba(232, 207, 138, 0.45);
+    flex:none;
+  }
+  .badge-tag{
+    font-size:10px;font-weight:700;padding:2px 7px;border-radius:2px;
+    background:rgba(232, 207, 138, 0.16);border:1px solid rgba(232, 207, 138, 0.35);
+    color:var(--cyan);letter-spacing:1px;font-family:Consolas, monospace;margin-left:4px;
+  }
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ink3);flex:none;transition:all .3s}
+  .dot.on{background:var(--ok);box-shadow:0 0 10px var(--ok);animation:dot-glow 2s infinite ease-in-out}
+  .dot.off{background:var(--bad);box-shadow:0 0 8px var(--bad)}
+  @keyframes dot-glow {
+    0%,100%{box-shadow:0 0 6px var(--ok)}
+    50%{box-shadow:0 0 14px var(--ok)}
+  }
+  .sub{color:var(--ink2);font-size:12px;margin-top:2px}
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+    padding:16px 18px;box-shadow:0 12px 36px rgba(0,0,0,.55), 0 0 16px rgba(232, 207, 138,.08);
+    backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+    position:relative;overflow:hidden;
+  }
+  .card::before{
+    content:'';position:absolute;top:0;left:0;right:0;height:1px;
+    background:linear-gradient(90deg, transparent 0%, rgba(232, 207, 138,.45) 30%, rgba(143, 112, 36,.45) 70%, transparent 100%);
+    pointer-events:none;
+  }
+  .card h2{
+    font-size:11.5px;color:var(--cyan);margin:0 0 12px;font-weight:700;
+    letter-spacing:.08em;text-transform:uppercase;display:flex;align-items:center;gap:6px;
+  }
+  .card h2::before{
+    content:'';width:3px;height:12px;background:linear-gradient(to bottom, var(--accent), var(--ocean));
+    border-radius:2px;display:inline-block;
+  }
+  .kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .kpi div{
+    background:var(--raised);border:1px solid rgba(255,255,255,.05);border-radius: 3px;
+    padding:10px 6px;text-align:center;min-width:0;
+    transition:border-color .2s, transform .2s, box-shadow .2s;
+  }
+  .kpi div:hover{
+    border-color:rgba(232, 207, 138,.35);transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.4);
+  }
+  .kpi b{
+    display:block;font-size:22px;font-weight:750;line-height:1.25;
+    background:linear-gradient(135deg, #fff 30%, #d9bd72 100%);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+    font-variant-numeric:tabular-nums;font-family:Consolas,"Segoe UI",monospace;
+  }
+  #k-gift{
+    background:linear-gradient(135deg, #fff 20%, var(--accent) 100%);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  }
+  .kpi span{font-size:11px;color:var(--ink2);white-space:nowrap;font-weight:500}
+  .feed{
+    max-height:360px;overflow-y:auto;display:flex;flex-direction:column;gap:7px;
+    scrollbar-width:thin;scrollbar-color:rgba(232, 207, 138,.3) transparent;
+  }
+  .feed::-webkit-scrollbar{width:4px}
+  .feed::-webkit-scrollbar-thumb{background:rgba(232, 207, 138,.3);border-radius:2px}
+  .item{
+    background:var(--raised);border-radius: 3px;padding:8px 12px;font-size:12.5px;
+    border-left:3px solid var(--line);
+    transition:background .15s, border-color .15s;
+  }
+  .item:hover{background:rgba(52,38,20,.95)}
+  .item.danmu{border-left-color:var(--accent)}
+  .item.gift{border-left-color:var(--accent);background:rgba(232, 207, 138,.12)}
+  .item.superchat{border-left-color:var(--ocean);background:rgba(143, 112, 36,.20);font-weight:600}
+  .item.follow{border-left-color:var(--ocean);background:rgba(143, 112, 36,.12)}
+  .item.enter{border-left-color:rgba(255,255,255,.15);color:var(--ink2);font-size:12px}
+  .item.system{border-left-color:var(--ink3);color:var(--ink2)}
+  .item .u{color:var(--accent);font-weight:600;margin-right:6px}
+  .item.gift .u, .item.superchat .u{color:var(--goldfish-light)}
+  .item .t{color:var(--ink3);font-size:11px;float:right;font-family:Consolas,monospace}
+  .row{display:flex;gap:10px;align-items:center;margin-bottom:10px}
+  .row:last-child{margin-bottom:0}
+  .row label{flex:none;width:58px;color:var(--ink2);font-size:12.5px;font-weight:550}
+  .bar{flex:1;height:7px;background:rgba(255,255,255,.08);border-radius:2px;overflow:hidden}
+  .bar i{display:block;height:100%;border-radius:2px;transition:width .4s ease}
+  #bar-time{background:linear-gradient(90deg, var(--ocean), var(--accent))}
+  #bar-hunger{background:linear-gradient(90deg, #8f7024, #d9bd72)}
+  #bar-energy{background:linear-gradient(90deg, #059669, #8aa864)}
+  #bar-intimacy{background:linear-gradient(90deg, #7a5c18, #ecda9f)}
+  button{
+    font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--raised);
+    border:1px solid var(--line);border-radius: 3px;padding:7px 14px;cursor:pointer;
+    transition:all .18s cubic-bezier(.16,1,.3,1);user-select:none;
+    display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  }
+  button:hover{
+    background:rgba(232, 207, 138,.16);border-color:var(--cyan);color:#fff;
+    box-shadow:0 0 12px rgba(232, 207, 138,.25);
+  }
+  button:active{transform:scale(.97)}
+  button.primary{
+    background:linear-gradient(135deg, var(--ocean) 0%, var(--accent) 100%);
+    border-color:rgba(232, 207, 138,.6);color:#fff;
+    box-shadow:0 4px 14px rgba(143, 112, 36,.35);
+  }
+  button.primary:hover{filter:brightness(1.15);box-shadow:0 4px 20px rgba(232, 207, 138,.45)}
+  button#btn-quiet.on{
+    background:linear-gradient(135deg, var(--ocean) 0%, var(--accent) 100%);
+    border-color:var(--accent);color:#fff;
+    box-shadow:0 0 16px rgba(232, 207, 138,.45);
+  }
+  .empty{color:var(--ink3);font-size:12.5px;text-align:center;padding:24px 0}
+  .wide{grid-column:1/-1}
+  input{
+    background:var(--raised);border:1px solid var(--line);border-radius: 3px;
+    color:var(--ink);padding:8px 14px;font:inherit;font-size:13px;flex:1;outline:none;
+    transition:border-color .2s, box-shadow .2s;
+  }
+  input:focus{border-color:var(--cyan);box-shadow:0 0 14px rgba(232, 207, 138,.3)}
+</style>
+<!-- ══ 古董画框覆盖层（2026-11-16）══════════════════════════════════════════
+     遥控页/直播台原本各带一套深海蓝黑 :root。这里统一成木框+黄铜+绒布：
+     · 圆角一律 ≤3px（胶囊禁令）· 标题改衬线 · 卡片加铜边与内高光 · 零青蓝
+     想回退：删掉这个 <style> 块即可（前面的 token 映射在 :root 里，见注释）
+     ═══════════════════════════════════════════════════════════════════════ -->
+<style>
+  :root {
+    --fx-brass-100: #f7ecc8; --fx-brass-200: #ecda9f; --fx-brass-300: #d9bd72;
+    --fx-brass-500: #8f7024; --fx-brass-700: #5c4613; --fx-brass-900: #2e2309;
+    --fx-seal: #9c3527;
+    --r-card: 3px !important; --r-btn: 2px !important;
+  }
+  body {
+    background:
+      radial-gradient(120% 70% at 50% -10%, rgba(255, 240, 200, 0.05), transparent 62%),
+      repeating-linear-gradient(92deg, rgba(255, 236, 200, 0.035) 0 1px, transparent 1px 5px),
+      repeating-linear-gradient(89deg, rgba(0, 0, 0, 0.38) 0 2px, transparent 2px 8px),
+      linear-gradient(170deg, #3b2b1c, #180f09 60%, #0d0906) !important;
+    background-attachment: fixed;
+  }
+  /* 标题：衬线 + 宽字距 + 铜金 */
+  .header h1, .card-head, .brand-group h1, h1, h2 {
+    font-family: Georgia, "Source Han Serif SC", "Noto Serif CJK SC", serif !important;
+    letter-spacing: 0.14em !important;
+    color: var(--fx-brass-200) !important;
+    text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
+  }
+  /* 卡片：绒布底 + 铜边 + 内高光（替代原来的玻璃） */
+  .card {
+    background: linear-gradient(180deg, rgba(24, 33, 26, 0.94), rgba(13, 20, 16, 0.96)) !important;
+    border: 1px solid rgba(232, 207, 138, 0.20) !important;
+    border-radius: 3px !important;
+    box-shadow: inset 0 1px 0 rgba(255, 240, 200, 0.07), 0 8px 22px rgba(0, 0, 0, 0.5) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  /* 按钮：铜牌 */
+  .btn-action, .btn-emo, .btn-quiet-toggle, .primary-send, button {
+    border-radius: 2px !important;
+    border: 1px solid var(--fx-brass-700) !important;
+    background: linear-gradient(180deg, #2c2014, #170f09) !important;
+    color: var(--fx-brass-200) !important;
+    box-shadow: inset 0 1px 0 rgba(232, 207, 138, 0.16), 0 2px 4px rgba(0, 0, 0, 0.5) !important;
+    backdrop-filter: none !important;
+  }
+  .primary-send {
+    background: linear-gradient(180deg, var(--fx-brass-100), var(--fx-brass-300) 48%, var(--fx-brass-500)) !important;
+    color: #2b2014 !important;
+  }
+  button:active, .btn-action:active, .primary-send:active {
+    transform: translateY(1px) !important;
+    box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.75) !important;
+  }
+  /* 输入框：内凹纸面 */
+  input, textarea, select {
+    border-radius: 2px !important;
+    border: 1px solid var(--fx-brass-700) !important;
+    background: linear-gradient(180deg, #2a1f14, #1b130c) !important;
+    color: #f2e6c8 !important;
+    box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.8) !important;
+  }
+  input::placeholder, textarea::placeholder { color: #7e6e52 !important; }
+  /* 状态点/徽章：暖系 */
+  .conn-dot, .conn-badge { border-radius: 2px !important; }
+  .conn-badge {
+    border: 1px solid rgba(232, 207, 138, 0.26) !important;
+    background: rgba(20, 14, 8, 0.8) !important;
+    color: var(--fx-brass-300) !important;
+  }
+  ::selection { background: rgba(232, 207, 138, 0.3) !important; color: #fff8e4 !important; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #8f7024, #5c4613) !important; border-radius: 2px !important; }
+  ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.35) !important; }
+  /* 触摸设备：可点目标抬到 44px（真机上 36px 的按钮容易点偏） */
+  @media (pointer: coarse) {
+    button, input, textarea, select { min-height: 44px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="card wide" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+  <div style="display:flex;align-items:center;gap:12px">
+    <div class="brand-avatar-mini">🐟</div>
+    <div>
+      <h1><span class="dot" id="dot"></span>大肥鱼 · 直播台 <span class="badge-tag">LIVE DOCK</span></h1>
+      <div class="sub" id="status">正在连接…</div>
+    </div>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center">
+    <button id="btn-quiet">静默模式</button>
+    <button id="btn-feed">🐟 投喂</button>
+    <button id="btn-say" class="primary">💬 手动说一句</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>本场数据</h2>
+  <div class="kpi">
+    <div><b id="k-danmu">0</b><span>弹幕总数</span></div>
+    <div><b id="k-replied">0</b><span>她回了</span></div>
+    <div><b id="k-gift">0</b><span>礼物</span></div>
+    <div><b id="k-buffer">0</b><span>等待中</span></div>
+  </div>
+  <div style="margin-top:14px">
+    <div class="row"><label>播了</label><div class="bar"><i id="bar-time" style="width:0%"></i></div><span class="sub mono" id="t-time" style="min-width:64px;text-align:right">—</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>她的状态</h2>
+  <div class="row"><label>饱食</label><div class="bar"><i id="bar-hunger" style="width:0%"></i></div><span class="sub mono" id="t-hunger" style="min-width:40px;text-align:right">—</span></div>
+  <div class="row"><label>精力</label><div class="bar"><i id="bar-energy" style="width:0%"></i></div><span class="sub mono" id="t-energy" style="min-width:40px;text-align:right">—</span></div>
+  <div class="row"><label>亲密</label><div class="bar"><i id="bar-intimacy" style="width:0%"></i></div><span class="sub mono" id="t-intimacy" style="min-width:40px;text-align:right">—</span></div>
+  <div class="row"><label>心情</label><span class="sub" id="t-mood" style="flex:1;color:var(--accent);font-weight:600">—</span></div>
+</div>
+
+<div class="card" style="grid-row:span 2">
+  <h2>弹幕流（最近 40 条）</h2>
+  <div class="feed" id="feed" style="max-height:520px"><div class="empty">还没收到弹幕</div></div>
+</div>
+
+<div class="card wide">
+  <h2>她最近回的</h2>
+  <div class="feed" id="replies" style="max-height:180px"><div class="empty">还没回过</div></div>
+</div>
+
+<div class="card wide">
+  <h2>手动说话</h2>
+  <div style="display:flex;gap:10px">
+    <input id="say-input" placeholder="打一句让她说…（回车发送）">
+    <button id="btn-say-send" class="primary">发送</button>
+  </div>
+</div>
+
+<script>
+async function api(path, body) {
+  const r = await fetch(path, body ? {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  } : {});
+  return r.json();
+}
+function esc(s) { return String(s || '').replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c])); }
+function fmtTime(s) {
+  if (!s || s < 0) return '—';
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = Math.floor(s % 60);
+  return h > 0 ? h + '小时' + m + '分' : (m > 0 ? m + '分' + ss + '秒' : ss + '秒');
+}
+let lastFeedKey = '';
+
+async function refresh() {
+  try {
+    const d = await api('/live-panel/data');
+    if (!d.ok) { document.getElementById('status').textContent = '数据读取失败：' + (d.error || ''); return; }
+    const s = d.data || {};
+    // 连接状态
+    const dot = document.getElementById('dot');
+    dot.className = 'dot ' + (s.serverUp ? 'on' : 'off');
+    document.getElementById('status').textContent =
+      (s.serverUp ? '弹幕服务在线' : '弹幕服务离线') +
+      ' · 房间 ' + (s.roomId || '未设置') +
+      ' · 源 ' + (s.source || '?') +
+      (s.liveNow ? ' · 正在直播' : '') +
+      (s.quiet ? ' · 静默中' : '');
+
+    // KPI
+    document.getElementById('k-danmu').textContent = s.totalDanmaku || 0;
+    document.getElementById('k-replied').textContent = s.repliedCount || 0;
+    document.getElementById('k-gift').textContent = s.giftCount || 0;
+    document.getElementById('k-buffer').textContent = s.bufferLen || 0;
+
+    // 时长
+    const dur = s.liveSeconds || 0;
+    document.getElementById('t-time').textContent = fmtTime(dur);
+    document.getElementById('bar-time').style.width = Math.min(100, (dur / 7200) * 100) + '%';
+
+    // 状态
+    const st = s.alive || {};
+    for (const k of ['hunger', 'energy', 'intimacy']) {
+      const v = Number(st[k]);
+      const pct = Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : 0;
+      document.getElementById('bar-' + k).style.width = pct + '%';
+      document.getElementById('t-' + k).textContent = Number.isFinite(v) ? Math.round(v) + '%' : '—';
+    }
+    document.getElementById('t-mood').textContent = s.mood || '—';
+
+    // 弹幕流
+    const feed = s.feed || [];
+    const key = feed.map(f => f.seq).join(',');
+    if (key !== lastFeedKey) {
+      lastFeedKey = key;
+      const box = document.getElementById('feed');
+      box.innerHTML = feed.length ? feed.slice().reverse().map(f =>
+        '<div class="item ' + esc(f.type) + '"><span class="u">' + esc(f.user) + '</span>' +
+        esc(f.text) + '<span class="t">' + (f.ago != null ? f.ago + 's前' : '') + '</span></div>'
+      ).join('') : '<div class="empty">还没收到弹幕</div>';
+    }
+
+    // 她的回应
+    const rep = s.replies || [];
+    const rkey = rep.length + ':' + (rep[0] ? rep[0].at : '');
+    if (rep._k !== rkey) {
+      document.getElementById('replies').innerHTML = rep.length ? rep.map(r =>
+        '<div class="item danmu">' + esc(r.text) + '<span class="t">' + esc(r.to || '') + '</span></div>'
+      ).join('') : '<div class="empty">还没回过</div>';
+      rep._k = rkey;
+    }
+
+    document.getElementById('btn-quiet').classList.toggle('on', !!s.quiet);
+    document.getElementById('btn-quiet').textContent = s.quiet ? '静默：开' : '静默：关';
+  } catch (e) {
+    document.getElementById('status').textContent = '连不上面板服务：' + e.message;
+  }
+}
+
+document.getElementById('btn-quiet').addEventListener('click', async () => {
+  const cur = document.getElementById('btn-quiet').classList.contains('on');
+  await api('/live-panel/quiet', { on: !cur });
+  refresh();
+});
+document.getElementById('btn-say-send').addEventListener('click', doSay);
+document.getElementById('say-input').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') doSay(); });
+async function doSay() {
+  const el = document.getElementById('say-input');
+  const t = el.value.trim();
+  if (!t) return;
+  await api('/live-panel/say', { text: t });
+  el.value = '';
+}
+document.getElementById('btn-say').addEventListener('click', () => {
+  document.getElementById('say-input').focus();
+});
+document.getElementById('btn-feed').addEventListener('click', async () => {
+  const r = await api('/live-panel/feed', {});
+  refresh();
+});
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body></html>

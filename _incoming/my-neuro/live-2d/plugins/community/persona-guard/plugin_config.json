@@ -1,0 +1,23 @@
+{
+  "enabled": {
+    "title": "启用",
+    "description": "关掉就完全不检测",
+    "type": "bool",
+    "default": true,
+    "value": true
+  },
+  "max_chars": {
+    "title": "单条回复字数上限",
+    "description": "单条回复字数上限（读屏/解释类会自然超长，200 以内不算啰嗦；超过算一次「啰嗦漂移」，属轻危不计红）",
+    "type": "int",
+    "default": 140,
+    "value": 140
+  },
+  "inject_warning": {
+    "title": "漂移时在提示词里提醒她",
+    "description": "连续漂移时加一句纠正提示（零成本）",
+    "type": "bool",
+    "default": true,
+    "value": true
+  }
+}

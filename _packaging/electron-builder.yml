@@ -1,0 +1,99 @@
+# 大肥鱼打包配置
+#
+# 设计原则：
+# 1. 本目录只放“构建工具”，她的应用目录（live-2d）一行都不改；
+# 2. 依赖只读她的 node_modules，不回写、不 npm install；
+# 3. 先能 `--dir` 出可运行目录，再谈 NSIS；MSIX（包身份）走单独的稀疏包流程，
+#    因为 electron-builder 的 appx 目标无法声明 userNotificationListener，
+#    详见 <project-root>\docs\打包-安装器与包身份-2026-11-18.md。
+
+appId: com.myneuro.dafeiyu
+productName: 大肥鱼
+copyright: Copyright © 2026 MyNeuro
+
+# 她的 Electron 工程是 28.3.3（node_modules/electron/package.json 实测）
+electronVersion: 28.3.3
+
+# 关键：直接用她仓里已经解开的 Electron 运行时，避免 electron-builder 去 GitHub
+# 下载 electron-v28.3.3-win32-x64.zip（本机到 GitHub Releases 超时，实测失败）。
+# 这是只读使用，不会改动她的运行时目录。
+electronDist: ../_incoming/my-neuro/live-2d/node_modules/electron/dist
+
+directories:
+  # 不是她的源码目录，而是 build-installer.ps1 用 robocopy 准备的一份构建副本。
+  # 唯一原因：electron-builder 硬性禁止 electron 出现在 dependencies
+  # （她的 package.json 把 electron 写在 dependencies 里），
+  # 又不能用 --config 关闭这条校验。构建副本里把 electron 挪到 devDependencies，
+  # 她的真 package.json 一个字节都不动。副本每次构建前增量刷新。
+  app: out/appstage
+  output: out/electron-builder
+  buildResources: build-resources
+
+# 关键取舍：这里必须关掉 asar。
+# 她的 main.js 用 __dirname 写 render-watchdog.log、crash-dumps，
+# 又用 app.getAppPath()/config.json 当配置路径（第 46-53 行）。
+# 打成 asar 后这两处都落在只读的 app.asar 内：日志写入抛错、配置无法保存。
+# 不改她运行时代码的前提下，asar: false 是唯一能让打包产物“跑起来”的选择。
+# 代价：resources\app 是散文件，启动稍慢，且用户能直接看到源码。
+asar: false
+
+# 她的 node_modules 里 electron 本身也是 dependencies（不是 devDependencies），
+# 必须显式排除，否则会把 200MB 运行时再打一份进去。
+# 同时排除本机运行状态、日志、以及含密钥的配置文件。
+files:
+  - "**/*"
+  - "!node_modules/electron/**"
+  - "!node_modules/.bin/**"
+  - "!node_modules/.cache/**"
+  - "!node_modules/**/test/**"
+  - "!node_modules/**/tests/**"
+  - "!.runtime/**"
+  - "!crash-dumps/**"
+  - "!**/*.log"
+  - "!@AutomationLog.txt"
+  # 隐私 / 本机状态：安装包不带用户密钥与窗口位置
+  - "!config.json"
+  - "!config.json.bak*"
+  - "!llm_providers.json"
+  - "!llm_providers.json.bak*"
+  - "!panel-bounds.json"
+  - "!avatar-loading-position.json"
+  - "!character_backups*.json"
+  - "!.voice-upload-client.json"
+  - "!scripts/.voice-host-work/**"
+  # 打包工具自身，没必要进安装包
+  - "!scripts/electron-ui-package/**"
+
+# 不重新编译原生模块：uiohook-napi 1.5.4 自带 N-API prebuild，Electron 28 可直接用
+npmRebuild: false
+
+win:
+  target:
+    - target: dir
+    - target: nsis
+  icon: ../_incoming/my-neuro/live-2d/fake_neuro.ico
+  # 用 ASCII 可执行名，后面的 MSIX 清单里写 Executable="DaFeiyu.exe" 更稳
+  executableName: DaFeiyu
+  # 关掉 rcedit/签名，避免 electron-builder 去下载 winCodeSign
+  # （它包含 macOS 符号链接，非管理员账户解压会失败；现有脚本也这么绕）
+  signAndEditExecutable: false
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 大肥鱼
+  uninstallDisplayName: 大肥鱼
+  artifactName: DaFeiyu-Setup-${version}.${ext}
+  deleteAppDataOnUninstall: false
+
+# ── 下一步：MSIX / AppX（当前不启用）──────────────────────────────
+# electron-builder 的 appx 目标只能声明它内置支持的少量 capability，
+# 无法声明 uap3:Capability Name="userNotificationListener"，
+# 也无法做“外部位置（external location）”稀疏包。
+# 因此包身份不在这里产出，而是用 Windows SDK 的 MakeAppx + 自签名证书，
+# 由 identity\make-identity-package.ps1 生成。
+# 见 docs\打包-安装器与包身份-2026-11-18.md。

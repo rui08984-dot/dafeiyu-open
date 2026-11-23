@@ -1,0 +1,73 @@
+{
+  "game": "我的世界",
+  "version": "Java 版（1.20+ 默认键位）",
+  "updatedAt": "2026-11-09",
+  "confidence": "high",
+  "rules": [
+    {
+      "id": "rcon-zero-risk",
+      "kind": "method",
+      "text": "我的世界服务端**原生支持 RCON 协议**，走 `mc` 动作零注入、零反作弊风险。前提：server.properties 里 enable-rcon=true + rcon.password"
+    },
+    {
+      "id": "rcon-safe-cmds",
+      "kind": "method",
+      "text": "RCON 安全命令：list（在线玩家）/ pos（位置）/ say（说话）/ time（时间）/ weather（天气）。改世界（fill/setblock）需显式 allowWorldModify"
+    },
+    {
+      "id": "rcon-dangerous",
+      "kind": "pitfall",
+      "text": "RCON 拒绝执行的：op/deop/ban/kick/stop/kill @a/fill ... air。这些能毁掉存档或踢人"
+    },
+    {
+      "id": "mouse-relative",
+      "kind": "method",
+      "text": "视角控制必须用鼠标**相对位移**（MOUSEEVENTF_MOVE + dx,dy），不能绝对定位。且精度受系统指针加速影响，要按游戏实测标定"
+    },
+    {
+      "id": "raw-input",
+      "kind": "pitfall",
+      "text": "我的世界用 Raw Input 读键盘，PostMessage 完全无效（RIDEV_NOLEGACY 下不生成 WM_KEYDOWN）。必须 SendInput + KEYEVENTF_SCANCODE"
+    },
+    {
+      "id": "inventory-slots",
+      "kind": "mechanic",
+      "text": "快捷栏 9 格用数字键 1-9 选。背包按 E 打开，鼠标拖拽物品"
+    },
+    {
+      "id": "survival-priority",
+      "kind": "mechanic",
+      "text": "生存模式优先级：木头→工作台→工具→食物→火把→挖矿。白天 10 分钟一个循环"
+    },
+    {
+      "id": "screenshot-chat",
+      "kind": "pitfall",
+      "text": "按 T 打开聊天框后，所有按键都进聊天而不是游戏。发完消息必须按回车关闭聊天框"
+    }
+  ],
+  "keys": {
+    "前进": "w",
+    "后退": "s",
+    "左移": "a",
+    "右移": "d",
+    "跳跃": "space",
+    "潜行": "shift",
+    "冲刺": "ctrl",
+    "攻击": "鼠标左",
+    "使用": "鼠标右",
+    "丢弃": "q",
+    "背包": "e",
+    "聊天": "t",
+    "快捷栏1": "1",
+    "快捷栏2": "2",
+    "快捷栏3": "3"
+  },
+  "typicalActions": [
+    "mc list 看在线的玩家",
+    "mc pos <玩家名> 查坐标",
+    "mc say <话> 在游戏里说话",
+    "mc raw time set day 改成白天",
+    "semantic 前进,2 往前走两秒",
+    "hold_key w,2 按住 W 两秒"
+  ]
+}

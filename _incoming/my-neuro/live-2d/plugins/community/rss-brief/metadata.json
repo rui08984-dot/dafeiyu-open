@@ -1,0 +1,10 @@
+{
+  "name": "rss-brief",
+  "displayName": "RSS 今日简报",
+  "version": "1.0.0",
+  "author": "pet-runtime",
+  "description": "世界感知 Phase 2：定时串行抓取 RSS/Atom（零依赖自写解析），按 72h 剪枝、id/Jaccard 去重、recency/interest/source_trust/novelty 打分，在早/午/晚窗口把 top_n 条标记 pushed 并写 rss-brief-last.json 供注入层读取。默认关闭，需先在 data/feeds.json 配置源。",
+  "framework_version": ">=1.0.0",
+  "main": "index.js",
+  "lang": "js"
+}

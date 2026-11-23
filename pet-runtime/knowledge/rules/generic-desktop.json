@@ -1,0 +1,68 @@
+{
+  "game": "通用桌面",
+  "version": "any",
+  "updatedAt": "2026-11-09",
+  "confidence": "high",
+  "rules": [
+    {
+      "id": "uia-first",
+      "kind": "method",
+      "text": "先 snapshot 读控件树（快、准、抗分辨率）；UIA 读不到（Qt 自绘像微信、游戏引擎如 Unity/Unreal）才用 som_snapshot 看画面"
+    },
+    {
+      "id": "chrome-tree",
+      "kind": "method",
+      "text": "Chromium/Electron 应用（QQ、微信桌面版、ZCode、VS Code、Discord）都有 UIA 树，实测能扫几十到几百个节点，别以为自绘就放弃"
+    },
+    {
+      "id": "minimized-fake-coords",
+      "kind": "pitfall",
+      "text": "窗口最小化时 UIA 返回的元素坐标是**旧值**（看起来正常但点了没反应）。先 focus_window 恢复再操作"
+    },
+    {
+      "id": "postmessage-useless",
+      "kind": "pitfall",
+      "text": "PostMessage 对 Chromium/自绘输入框原理性无效（消息进了队列但控件不响应）。输入文字必须真聚焦 + SendInput"
+    },
+    {
+      "id": "foreground-required",
+      "kind": "pitfall",
+      "text": "SendInput 没有 hwnd 参数，永远发给当前前台窗口。按键前必须确认焦点在目标上，否则按键落到别的窗口"
+    },
+    {
+      "id": "verify-everything",
+      "kind": "method",
+      "text": "每个动作做完都要看结果。画面没变 = 大概率没生效，别假设成功就继续下一步"
+    },
+    {
+      "id": "uia-invoke-no-mouse",
+      "kind": "method",
+      "text": "UIA Invoke/Select/Toggle 是「直接命令控件」，不移动鼠标、不抢焦点，比坐标点击可靠。优先用它"
+    },
+    {
+      "id": "text-vs-button",
+      "kind": "pitfall",
+      "text": "OCR 找到的是「文字」不是「按钮」。有些 UI 里文字和按钮是分开的，点文字中心可能点到空白"
+    }
+  ],
+  "keys": {
+    "确认": "enter",
+    "取消": "esc",
+    "关闭": "alt+f4",
+    "复制": "ctrl+c",
+    "粘贴": "ctrl+v",
+    "全选": "ctrl+a",
+    "保存": "ctrl+s",
+    "查找": "ctrl+f",
+    "撤销": "ctrl+z"
+  },
+  "typicalActions": [
+    "list_windows 看现在开着什么",
+    "focus_window <标题> 切过去",
+    "snapshot <标题> 读控件菜单",
+    "click_element <编号> 点第 N 个",
+    "type_text <文字> 输入",
+    "click_text <文字> 按文字点（UIA 优先 OCR 兜底）",
+    "som_snapshot 看标注画面"
+  ]
+}

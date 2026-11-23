@@ -1,0 +1,10 @@
+{
+  "name": "world-sense",
+  "displayName": "世界感知",
+  "version": "1.0.0",
+  "author": "pet-runtime",
+  "description": "每秒读一次便宜的世界源（前台应用/空闲/媒体会话/剪贴板变化），汇总成 WorldStore；每轮对话只把「变化」注入到最后一条 user 的易变尾巴（≤100 tokens），不动 system 前缀缓存",
+  "framework_version": ">=1.0.0",
+  "main": "index.js",
+  "lang": "js"
+}

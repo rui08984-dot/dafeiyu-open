@@ -1,0 +1,51 @@
+{
+  "enabled": {
+    "title": "启用认知内核",
+    "description": "目标栈 + 30s arbiter。关闭时不跑 tick、不注入计划行；开启前请先读 docs/汇总-调研落地三列-2026-11-20.md §1",
+    "type": "bool",
+    "default": false,
+    "value": false
+  },
+  "inject_plan_line": {
+    "title": "注入计划行",
+    "description": "计划变化时才注入，走易变尾巴（不伤前缀缓存），默认上限 150 字符",
+    "type": "bool",
+    "default": true,
+    "value": true
+  },
+  "tick_ms": {
+    "title": "arbiter 节拍（毫秒）",
+    "description": "事件优先 + 这个值兜底；小于 5000 会被抬到 5000",
+    "type": "number",
+    "default": 30000,
+    "value": 30000
+  },
+  "max_tail_chars": {
+    "title": "计划行上限（字符）",
+    "description": "约 80 tokens 的中文上限；超出截断并加省略号",
+    "type": "number",
+    "default": 150,
+    "value": 150
+  },
+  "plan_generate": {
+    "title": "自动生成多步计划",
+    "description": "goal 创建后用一次 LLM 生成 3–8 步计划（简单任务 1–2 步）；失败保持原单步计划，不阻塞派活",
+    "type": "bool",
+    "default": true,
+    "value": true
+  },
+  "plan_max_steps": {
+    "title": "计划最大步数",
+    "description": "生成计划的步数上限（1–8，plan-store 硬上限 8）；模型多给了就截断",
+    "type": "number",
+    "default": 8,
+    "value": 8
+  },
+  "plan_timeout_ms": {
+    "title": "计划生成超时（毫秒）",
+    "description": "LLM 生成计划的硬超时。实测同一 provider 反思调用可达 17.8s，15s 会偶发超时退回单步计划；默认 30s",
+    "type": "number",
+    "default": 30000,
+    "value": 30000
+  }
+}

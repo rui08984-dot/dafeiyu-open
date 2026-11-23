@@ -1,0 +1,21 @@
+{
+  "name": "pet-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "大肥鱼独立皮套运行时：VTube Studio 协议兼容 + 自带 Cubism 渲染",
+  "main": "electron-main.mjs",
+  "scripts": {
+    "start": "electron .",
+    "build": "node build-app.mjs",
+    "build:petbody": "node build-petbody.mjs",
+    "build:petbody:deploy": "node build-and-deploy-petbody.mjs",
+    "serve-only": "node vts-server.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0"
+  }
+}

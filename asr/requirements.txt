@@ -1,0 +1,16 @@
+# asr —— SenseVoice 本地语音识别服务（1000）
+#
+# 安装：py -m pip install -r asr/requirements.txt
+# 说明：版本用下限而非精确锁定，避免换机器/换 Python 小版本时装不上。
+#       本机实测（Python 3.13.3）：numpy 2.3.5 / aiohttp 3.14.5 /
+#       sherpa-onnx 1.13.8 / soundfile 0.14.0 / scipy 1.17.1。
+
+aiohttp>=3.9
+numpy>=1.26,<3
+sherpa-onnx>=1.10
+soundfile>=0.12
+scipy>=1.11
+
+# 仅 test_asr.py 需要（合成测试音频 / HTTP 上传）：
+#   edge-tts>=6
+#   requests>=2.31

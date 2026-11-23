@@ -1,0 +1,50 @@
+# 大肥鱼 · 8090 嵌入服务（llama.cpp + Qwen3-Embedding-0.6B）
+#
+# 为什么单独一个 compose 文件：这个服务是**共用基础设施**，刻意不在
+# pet-runtime/tools/services.json 里，任何脚本都不许杀它（见该文件 _comment）。
+# MemOS 8003、记忆召回、知识库向量通道都指向 http://127.0.0.1:8090/v1。
+#
+# 前置：
+#   1) Docker Desktop 已启动；
+#   2) 模型文件已放到 EMBED_MODELS_DIR，默认 ./models：
+#        Qwen3-Embedding-0.6B-Q8_0.gguf
+#      （Hugging Face: Qwen/Qwen3-Embedding-0.6B-GGUF，Q8_0 约 640MB）
+#
+# 用法：
+#   docker compose -f docker-compose.embed.yml up -d
+#   pwsh -File scripts/start-embed.ps1        # 等价，带健康轮询与更清楚的报错
+#
+# 参数来源：本机实际运行中的 llama-embed 容器（2026-11-23 docker inspect 实测）
+#   -m /models/Qwen3-Embedding-0.6B-Q8_0.gguf --embedding --pooling last
+#   -c 2048 -b 1024 --host 0.0.0.0 --port 8080 -t 4
+# 关键点：
+#   · --embedding       开 /v1/embeddings（OpenAI 兼容）
+#   · --pooling last    Qwen3-Embedding 是 last-token pooling；用 mean 维度对但语义会变差
+#   · 1024 维，与 MemOS 的 storage.vector.vector_size / embedding.vector_size 一致
+#   · 容器内 8080 → 宿主 8090；只绑 127.0.0.1，不暴露到局域网
+
+services:
+  llama-embed:
+    image: ${EMBED_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    container_name: llama-embed
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8090:8080"
+    volumes:
+      - "${EMBED_MODELS_DIR:-./models}:/models:ro"
+    command:
+      - "-m"
+      - "/models/Qwen3-Embedding-0.6B-Q8_0.gguf"
+      - "--embedding"
+      - "--pooling"
+      - "last"
+      - "-c"
+      - "2048"
+      - "-b"
+      - "1024"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+      - "-t"
+      - "4"

@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "decay_interval_min": 5,
+  "hungry_cooldown_min": 120,
+  "sleepy_cooldown_min": 240
+}

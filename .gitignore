@@ -1,0 +1,53 @@
+# ── 依赖 / 构建产物 ──
+node_modules/
+__pycache__/
+*.pyc
+dist/
+pet-core/target/
+pet-runtime/.state/
+pet-runtime/tmp-verify/
+_probe/out/
+_probe/recovery/
+_probe/shots*/
+_incoming/my-neuro/live-2d/build/
+
+# ── 运行数据 ──
+*.log
+*.log.*
+crash-dumps/
+_incoming/my-neuro/data/
+live-2d/song-library/
+_incoming/my-neuro/plugins-dlc/memos/memos_system/data/
+
+# ── 用户配置（含密钥，绝不入库）──
+config.json
+llm_providers.json
+memos_config.json
+.control-token
+.qq-token.txt
+.env
+.env.*
+*.key
+*.pem
+*.token
+
+# ── 自备资产（不随仓库分发）──
+*.moc3
+models/
+*.gguf
+*.onnx
+*.pt
+*.pth
+_incoming/my-neuro/live-2d/libs/
+_incoming/my-neuro/live-2d/vendor/cubism/
+_incoming/my-neuro/live-2d/assets/petbody/
+pet-runtime/desktop/vendor/
+pet-runtime/desktop/vendor2/
+pet-runtime/desktop/assets/*/textures/
+pet-runtime/desktop/assets/*/expressions/
+pet-runtime/desktop/assets/*/motions/
+pet-runtime/venv-voice/
+
+# 运行日志（兼容旧规则的显式形式）
+pet-runtime/.state/*.log*
+*.out.log*

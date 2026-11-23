@@ -1,0 +1,8 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#fff}canvas{display:block}</style>
+<script>const rf=window.fetch.bind(window);function post(o){try{rf('/__log',{method:'POST',body:JSON.stringify(o)});}catch(e){}}
+const ms=new URLSearchParams(location.search).get('slow'); if(ms){const i=new Image();i.src='/slow?ms='+ms;i.style.display='none';document.body.appendChild(i);}
+window.addEventListener('error',e=>post({stage:'err',msg:String(e.message||'')}));</script></head>
+<body><canvas id="model"></canvas>
+<script src="vendor/cubism/Core/live2dcubismcore.min.js"></script>
+<script type="module" src="build/scan.js"></script>
+<script>setTimeout(function(){ if(window.__scan) window.__scan().catch(e=>post({stage:'scan-fail',msg:String(e&&e.stack||e)})); }, 200);</script></body></html>

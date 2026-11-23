@@ -1,0 +1,23 @@
+{
+  "enabled": {
+    "title": "启用",
+    "description": "关掉就完全不统计也不提醒",
+    "type": "bool",
+    "default": true,
+    "value": true
+  },
+  "daily_threshold_min": {
+    "title": "每日提醒阈值（分钟）",
+    "description": "超过这么久会主动提一句",
+    "type": "int",
+    "default": 180,
+    "value": 180
+  },
+  "repeat_gap_min": {
+    "title": "两次提醒最小间隔（分钟）",
+    "description": "避免反复唠叨",
+    "type": "int",
+    "default": 120,
+    "value": 120
+  }
+}

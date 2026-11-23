@@ -1,0 +1,9 @@
+{
+  "python_cmd": {
+    "title": "Python 解释器",
+    "description": "执行代码用的命令（py / python / 绝对路径）。这台机器没有 conda，所以默认 py",
+    "type": "string",
+    "default": "py",
+    "value": "py"
+  }
+}

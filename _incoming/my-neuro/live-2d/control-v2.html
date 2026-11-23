@@ -1,0 +1,926 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>大肥鱼 · 控制中心</title>
+  <link rel="stylesheet" href="control-v2.css">
+  <!-- 画框皮肤层（2026-11-16）：想回退深海蓝黑就删掉这一行 -->
+  <link rel="stylesheet" href="control-v2-frame.css">
+  <!-- 第二层皮肤：只补知识库/技能库/操控日志/记录四页，想回退删这一行 -->
+  <link rel="stylesheet" href="control-v2-frame-pages.css">
+</head>
+<body spellcheck="false">
+<main class="shell">
+  <!-- 四角花枝绽放延伸角饰 (Classic Blue-Black Four-Corner Branch Flourishes) -->
+  <div class="shell-corner-branches" aria-hidden="true">
+    <svg class="corner-branch branch-tl" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path class="branch-stem" d="M2 2 C 12 5, 24 9, 38 8 C 50 7, 58 4, 70 3" stroke-linecap="round"/>
+      <path class="branch-stem" d="M2 2 C 5 12, 9 24, 8 38 C 7 50, 4 58, 3 70" stroke-linecap="round"/>
+      <path class="branch-twig" d="M22 8 C 28 15, 38 19, 50 17" stroke-linecap="round"/>
+      <path class="branch-twig" d="M8 22 C 15 28, 19 38, 17 50" stroke-linecap="round"/>
+      <path class="branch-twig" d="M38 8 C 44 4, 52 2, 62 2" stroke-linecap="round"/>
+      <path class="branch-twig" d="M8 38 C 4 44, 2 52, 2 62" stroke-linecap="round"/>
+      <g class="branch-blossom main" transform="translate(28, 28)">
+        <circle cx="0" cy="0" r="2.4" class="blossom-core"/>
+        <path d="M0 -7 C2 -4, 2 -2, 0 0 C-2 -2, -2 -4, 0 -7 Z" class="blossom-petal"/>
+        <path d="M6.6 -2.1 C4.5 -0.6, 2.3 0.6, 0 0 C1.2 -2.1, 2.9 -3.7, 6.6 -2.1 Z" class="blossom-petal"/>
+        <path d="M4.1 5.6 C2.1 3.5, 1.2 1.7, 0 0 C2.3 0.6, 4.4 2.3, 4.1 5.6 Z" class="blossom-petal"/>
+        <path d="M-4.1 5.6 C-2.3 2.3, -0.6 0.6, 0 0 C-1.2 1.7, -2.1 3.5, -4.1 5.6 Z" class="blossom-petal"/>
+        <path d="M-6.6 -2.1 C-2.9 -3.7, -1.2 -2.1, 0 0 C-2.3 0.6, -4.5 -0.6, -6.6 -2.1 Z" class="blossom-petal"/>
+      </g>
+      <g class="branch-blossom sub" transform="translate(50, 15) scale(0.75)">
+        <circle cx="0" cy="0" r="2" class="blossom-core"/>
+        <path d="M0 -6 C1.8 -3.5, 1.8 -1.5, 0 0 C-1.8 -1.5, -1.8 -3.5, 0 -6 Z" class="blossom-petal"/>
+        <path d="M5.7 -1.8 C3.8 -0.5, 2 0.5, 0 0 C1 -1.8, 2.5 -3.2, 5.7 -1.8 Z" class="blossom-petal"/>
+        <path d="M3.5 4.8 C1.8 3, 1 1.5, 0 0 C2 0.5, 3.8 2, 3.5 4.8 Z" class="blossom-petal"/>
+        <path d="M-3.5 4.8 C-2 2, -0.5 0.5, 0 0 C-1 1.5, -1.8 3, -3.5 4.8 Z" class="blossom-petal"/>
+        <path d="M-5.7 -1.8 C-2.5 -3.2, -1 -1.8, 0 0 C-2 0.5, -3.8 -0.5, -5.7 -1.8 Z" class="blossom-petal"/>
+      </g>
+      <g class="branch-blossom sub" transform="translate(15, 50) scale(0.75)">
+        <circle cx="0" cy="0" r="2" class="blossom-core"/>
+        <path d="M0 -6 C1.8 -3.5, 1.8 -1.5, 0 0 C-1.8 -1.5, -1.8 -3.5, 0 -6 Z" class="blossom-petal"/>
+        <path d="M5.7 -1.8 C3.8 -0.5, 2 0.5, 0 0 C1 -1.8, 2.5 -3.2, 5.7 -1.8 Z" class="blossom-petal"/>
+        <path d="M3.5 4.8 C1.8 3, 1 1.5, 0 0 C2 0.5, 3.8 2, 3.5 4.8 Z" class="blossom-petal"/>
+        <path d="M-3.5 4.8 C-2 2, -0.5 0.5, 0 0 C-1 1.5, -1.8 3, -3.5 4.8 Z" class="blossom-petal"/>
+        <path d="M-5.7 -1.8 C-2.5 -3.2, -1 -1.8, 0 0 C-2 0.5, -3.8 -0.5, -5.7 -1.8 Z" class="blossom-petal"/>
+      </g>
+      <circle cx="70" cy="3" r="2.2" class="branch-bud"/>
+      <circle cx="3" cy="70" r="2.2" class="branch-bud"/>
+    </svg>
+    <svg class="corner-branch branch-tr" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path class="branch-stem" d="M2 2 C 12 5, 24 9, 38 8 C 50 7, 58 4, 70 3" stroke-linecap="round"/>
+      <path class="branch-stem" d="M2 2 C 5 12, 9 24, 8 38 C 7 50, 4 58, 3 70" stroke-linecap="round"/>
+      <path class="branch-twig" d="M22 8 C 28 15, 38 19, 50 17" stroke-linecap="round"/>
+      <path class="branch-twig" d="M8 22 C 15 28, 19 38, 17 50" stroke-linecap="round"/>
+      <path class="branch-twig" d="M38 8 C 44 4, 52 2, 62 2" stroke-linecap="round"/>
+      <path class="branch-twig" d="M8 38 C 4 44, 2 52, 2 62" stroke-linecap="round"/>
+      <g class="branch-blossom main" transform="translate(28, 28)">
+        <circle cx="0" cy="0" r="2.4" class="blossom-core"/>
+        <path d="M0 -7 C2 -4, 2 -2, 0 0 C-2 -2, -2 -4, 0 -7 Z" class="blossom-petal"/>
+        <path d="M6.6 -2.1 C4.5 -0.6, 2.3 0.6, 0 0 C1.2 -2.1, 2.9 -3.7, 6.6 -2.1 Z" class="blossom-petal"/>
+        <path d="M4.1 5.6 C2.1 3.5, 1.2 1.7, 0 0 C2.3 0.6, 4.4 2.3, 4.1 5.6 Z" class="blossom-petal"/>
+        <path d="M-4.1 5.6 C-2.3 2.3, -0.6 0.6, 0 0 C-1.2 1.7, -2.1 3.5, -4.1 5.6 Z" class="blossom-petal"/>
+        <path d="M-6.6 -2.1 C-2.9 -3.7, -1.2 -2.1, 0 0 C-2.3 0.6, -4.5 -0.6, -6.6 -2.1 Z" class="blossom-petal"/>
+      </g>
+      <g class="branch-blossom sub" transform="translate(50, 15) scale(0.75)">
+        <circle cx="0" cy="0" r="2" class="blossom-core"/>
+        <path d="M0 -6 C1.8 -3.5, 1.8 -1.5, 0 0 C-1.8 -1.5, -1.8 -3.5, 0 -6 Z" class="blossom-petal"/>
+        <path d="M5.7 -1.8 C3.8 -0.5, 2 0.5, 0 0 C1 -1.8, 2.5 -3.2, 5.7 -1.8 Z" class="blossom-petal"/>
+        <path d="M3.5 4.8 C1.8 3, 1 1.5, 0 0 C2 0.5, 3.8 2, 3.5 4.8 Z" class="blossom-petal"/>
+        <path d="M-3.5 4.8 C-2 2, -0.5 0.5, 0 0 C-1 1.5, -1.8 3, -3.5 4.8 Z" class="blossom-petal"/>
+        <path d="M-5.7 -1.8 C-2.5 -3.2, -1 -1.8, 0 0 C-2 0.5, -3.8 -0.5, -5.7 -1.8 Z" class="blossom-petal"/>
+      </g>
+      <g class="branch-blossom sub" transform="translate(15, 50) scale(0.75)">
+        <circle cx="0" cy="0" r="2" class="blossom-core"/>
+        <path d="M0 -6 C1.8 -3.5, 1.8 -1.5, 0 0 C-1.8 -1.5, -1.8 -3.5, 0 -6 Z" class="blossom-petal"/>
+        <path d="M5.7 -1.8 C3.8 -0.5, 2 0.5, 0 0 C1 -1.8, 2.5 -3.2, 5.7 -1.8 Z" class="blossom-petal"/>
+        <path d="M3.5 4.8 C1.8 3, 1 1.5, 0 0 C2 0.5, 3.8 2, 3.5 4.8 Z" class="blossom-petal"/>
+        <path d="M-3.5 4.8 C-2 2, -0.5 0.5, 0 0 C-1 1.5, -1.8 3, -3.5 4.8 Z" class="blossom-petal"/>
+        <path d="M-5.7 -1.8 C-2.5 -3.2, -1 -1.8, 0 0 C-2 0.5, -3.8 -0.5, -5.7 -1.8 Z" class="blossom-petal"/>
+      </g>
+      <circle cx="70" cy="3" r="2.2" class="branch-bud"/>
+      <circle cx="3" cy="70" r="2.2" class="branch-bud"/>
+    </svg>
+    <svg class="corner-branch branch-bl" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path class="branch-stem" d="M2 2 C 12 5, 24 9, 38 8 C 50 7, 58 4, 70 3" stroke-linecap="round"/>
+      <path class="branch-stem" d="M2 2 C 5 12, 9 24, 8 38 C 7 50, 4 58, 3 70" stroke-linecap="round"/>
+      <path class="branch-twig" d="M22 8 C 28 15, 38 19, 50 17" stroke-linecap="round"/>
+      <path class="branch-twig" d="M8 22 C 15 28, 19 38, 17 50" stroke-linecap="round"/>
+      <path class="branch-twig" d="M38 8 C 44 4, 52 2, 62 2" stroke-linecap="round"/>
+      <path class="branch-twig" d="M8 38 C 4 44, 2 52, 2 62" stroke-linecap="round"/>
+      <g class="branch-blossom main" transform="translate(28, 28)">
+        <circle cx="0" cy="0" r="2.4" class="blossom-core"/>
+        <path d="M0 -7 C2 -4, 2 -2, 0 0 C-2 -2, -2 -4, 0 -7 Z" class="blossom-petal"/>
+        <path d="M6.6 -2.1 C4.5 -0.6, 2.3 0.6, 0 0 C1.2 -2.1, 2.9 -3.7, 6.6 -2.1 Z" class="blossom-petal"/>
+        <path d="M4.1 5.6 C2.1 3.5, 1.2 1.7, 0 0 C2.3 0.6, 4.4 2.3, 4.1 5.6 Z" class="blossom-petal"/>
+        <path d="M-4.1 5.6 C-2.3 2.3, -0.6 0.6, 0 0 C-1.2 1.7, -2.1 3.5, -4.1 5.6 Z" class="blossom-petal"/>
+        <path d="M-6.6 -2.1 C-2.9 -3.7, -1.2 -2.1, 0 0 C-2.3 0.6, -4.5 -0.6, -6.6 -2.1 Z" class="blossom-petal"/>
+      </g>
+      <g class="branch-blossom sub" transform="translate(50, 15) scale(0.75)">
+        <circle cx="0" cy="0" r="2" class="blossom-core"/>
+        <path d="M0 -6 C1.8 -3.5, 1.8 -1.5, 0 0 C-1.8 -1.5, -1.8 -3.5, 0 -6 Z" class="blossom-petal"/>
+        <path d="M5.7 -1.8 C3.8 -0.5, 2 0.5, 0 0 C1 -1.8, 2.5 -3.2, 5.7 -1.8 Z" class="blossom-petal"/>
+        <path d="M3.5 4.8 C1.8 3, 1 1.5, 0 0 C2 0.5, 3.8 2, 3.5 4.8 Z" class="blossom-petal"/>
+        <path d="M-3.5 4.8 C-2 2, -0.5 0.5, 0 0 C-1 1.5, -1.8 3, -3.5 4.8 Z" class="blossom-petal"/>
+        <path d="M-5.7 -1.8 C-2.5 -3.2, -1 -1.8, 0 0 C-2 0.5, -3.8 -0.5, -5.7 -1.8 Z" class="blossom-petal"/>
+      </g>
+      <g class="branch-blossom sub" transform="translate(15, 50) scale(0.75)">
+        <circle cx="0" cy="0" r="2" class="blossom-core"/>
+        <path d="M0 -6 C1.8 -3.5, 1.8 -1.5, 0 0 C-1.8 -1.5, -1.8 -3.5, 0 -6 Z" class="blossom-petal"/>
+        <path d="M5.7 -1.8 C3.8 -0.5, 2 0.5, 0 0 C1 -1.8, 2.5 -3.2, 5.7 -1.8 Z" class="blossom-petal"/>
+        <path d="M3.5 4.8 C1.8 3, 1 1.5, 0 0 C2 0.5, 3.8 2, 3.5 4.8 Z" class="blossom-petal"/>
+        <path d="M-3.5 4.8 C-2 2, -0.5 0.5, 0 0 C-1 1.5, -1.8 3, -3.5 4.8 Z" class="blossom-petal"/>
+        <path d="M-5.7 -1.8 C-2.5 -3.2, -1 -1.8, 0 0 C-2 0.5, -3.8 -0.5, -5.7 -1.8 Z" class="blossom-petal"/>
+      </g>
+      <circle cx="70" cy="3" r="2.2" class="branch-bud"/>
+      <circle cx="3" cy="70" r="2.2" class="branch-bud"/>
+    </svg>
+    <svg class="corner-branch branch-br" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path class="branch-stem" d="M2 2 C 12 5, 24 9, 38 8 C 50 7, 58 4, 70 3" stroke-linecap="round"/>
+      <path class="branch-stem" d="M2 2 C 5 12, 9 24, 8 38 C 7 50, 4 58, 3 70" stroke-linecap="round"/>
+      <path class="branch-twig" d="M22 8 C 28 15, 38 19, 50 17" stroke-linecap="round"/>
+      <path class="branch-twig" d="M8 22 C 15 28, 19 38, 17 50" stroke-linecap="round"/>
+      <path class="branch-twig" d="M38 8 C 44 4, 52 2, 62 2" stroke-linecap="round"/>
+      <path class="branch-twig" d="M8 38 C 4 44, 2 52, 2 62" stroke-linecap="round"/>
+      <g class="branch-blossom main" transform="translate(28, 28)">
+        <circle cx="0" cy="0" r="2.4" class="blossom-core"/>
+        <path d="M0 -7 C2 -4, 2 -2, 0 0 C-2 -2, -2 -4, 0 -7 Z" class="blossom-petal"/>
+        <path d="M6.6 -2.1 C4.5 -0.6, 2.3 0.6, 0 0 C1.2 -2.1, 2.9 -3.7, 6.6 -2.1 Z" class="blossom-petal"/>
+        <path d="M4.1 5.6 C2.1 3.5, 1.2 1.7, 0 0 C2.3 0.6, 4.4 2.3, 4.1 5.6 Z" class="blossom-petal"/>
+        <path d="M-4.1 5.6 C-2.3 2.3, -0.6 0.6, 0 0 C-1.2 1.7, -2.1 3.5, -4.1 5.6 Z" class="blossom-petal"/>
+        <path d="M-6.6 -2.1 C-2.9 -3.7, -1.2 -2.1, 0 0 C-2.3 0.6, -4.5 -0.6, -6.6 -2.1 Z" class="blossom-petal"/>
+      </g>
+      <g class="branch-blossom sub" transform="translate(50, 15) scale(0.75)">
+        <circle cx="0" cy="0" r="2" class="blossom-core"/>
+        <path d="M0 -6 C1.8 -3.5, 1.8 -1.5, 0 0 C-1.8 -1.5, -1.8 -3.5, 0 -6 Z" class="blossom-petal"/>
+        <path d="M5.7 -1.8 C3.8 -0.5, 2 0.5, 0 0 C1 -1.8, 2.5 -3.2, 5.7 -1.8 Z" class="blossom-petal"/>
+        <path d="M3.5 4.8 C1.8 3, 1 1.5, 0 0 C2 0.5, 3.8 2, 3.5 4.8 Z" class="blossom-petal"/>
+        <path d="M-3.5 4.8 C-2 2, -0.5 0.5, 0 0 C-1 1.5, -1.8 3, -3.5 4.8 Z" class="blossom-petal"/>
+        <path d="M-5.7 -1.8 C-2.5 -3.2, -1 -1.8, 0 0 C-2 0.5, -3.8 -0.5, -5.7 -1.8 Z" class="blossom-petal"/>
+      </g>
+      <g class="branch-blossom sub" transform="translate(15, 50) scale(0.75)">
+        <circle cx="0" cy="0" r="2" class="blossom-core"/>
+        <path d="M0 -6 C1.8 -3.5, 1.8 -1.5, 0 0 C-1.8 -1.5, -1.8 -3.5, 0 -6 Z" class="blossom-petal"/>
+        <path d="M5.7 -1.8 C3.8 -0.5, 2 0.5, 0 0 C1 -1.8, 2.5 -3.2, 5.7 -1.8 Z" class="blossom-petal"/>
+        <path d="M3.5 4.8 C1.8 3, 1 1.5, 0 0 C2 0.5, 3.8 2, 3.5 4.8 Z" class="blossom-petal"/>
+        <path d="M-3.5 4.8 C-2 2, -0.5 0.5, 0 0 C-1 1.5, -1.8 3, -3.5 4.8 Z" class="blossom-petal"/>
+        <path d="M-5.7 -1.8 C-2.5 -3.2, -1 -1.8, 0 0 C-2 0.5, -3.8 -0.5, -5.7 -1.8 Z" class="blossom-petal"/>
+      </g>
+      <circle cx="70" cy="3" r="2.2" class="branch-bud"/>
+      <circle cx="3" cy="70" r="2.2" class="branch-bud"/>
+    </svg>
+  </div>
+  <header class="titlebar">
+    <div class="brand">
+      <span class="brand-avatar-mini" aria-hidden="true">🐟</span>
+      <strong>大肥鱼</strong>
+      <span class="brand-tag">CONTROL</span>
+    </div>
+    <div class="win-actions">
+      <button data-window="minimize" title="最小化" aria-label="最小化"><svg viewBox="0 0 20 20" aria-hidden="true"><line x1="4.5" y1="10" x2="15.5" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+      <button data-window="maximize" title="最大化" aria-label="最大化"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="5" y="5" width="10" height="10" rx="1.5" stroke="currentColor" stroke-width="1.5" fill="none"/></svg></button>
+      <button class="close" data-window="close" title="关闭" aria-label="关闭"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+    </div>
+  </header>
+
+  <div class="main">
+    <nav class="sidebar" aria-label="页面导航">
+      <button class="nav active" data-page="overview" type="button">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 C15.2 6.5 17 10 16.5 13.5 C16 16.5 14 18.5 12 20 C10 18.5 8 16.5 7.5 13.5 C7 10 8.8 6.5 12 3.5 Z"/><path d="M10.5 19.5 C8.5 21 6 21.5 4 21 C5 19 7 17.5 9.5 17"/><path d="M13.5 19.5 C15.5 21 18 21.5 20 21 C19 19 17 17.5 14.5 17"/><path d="M7.2 11.5 C5 12.5 3.5 14.5 3.5 16 C5 15.5 6.8 14.5 7.5 13"/><path d="M16.8 11.5 C19 12.5 20.5 14.5 20.5 16 C19 15.5 17.2 14.5 16.5 13"/><line x1="12" y1="6.5" x2="12" y2="14" stroke-dasharray="1.5 2"/><circle cx="12" cy="7.5" r="1.2" fill="#38bdf8"/></svg>
+        </span>
+        <span class="nav-text">总览</span>
+      </button>
+      <button class="nav" data-page="model" type="button">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12 C4.5 7.2 7.8 3.5 12 3.5 C16.2 3.5 19.5 7.2 19.5 12 C17 11 14.5 11.8 12 11.8 C9.5 11.8 7 11 4.5 12 Z"/><path d="M8 12 C8 15.5 9.5 17.5 9 21"/><path d="M12 11.8 V21.5"/><path d="M16 12 C16 15.5 14.5 17.5 15 21"/><circle cx="12" cy="7.5" r="2" fill="rgba(56, 189, 248, 0.2)"/><circle cx="12" cy="7.5" r="1.1" fill="#38bdf8"/></svg>
+        </span>
+        <span class="nav-text">模型</span>
+      </button>
+      <button class="nav" data-page="chat" type="button">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 C6.8 3.5 3 7.3 3 12 C3 14.5 4.1 16.8 5.8 18.4 L4.5 21.5 L8.2 20.3 C9.4 20.8 10.7 21 12 21 C17.2 21 21 17.2 21 12 C21 7.3 17.2 3.5 12 3.5 Z"/><circle cx="8" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="#38bdf8"/><circle cx="16" cy="12" r="1.2" fill="currentColor"/></svg>
+        </span>
+        <span class="nav-text">对话</span>
+      </button>
+      <button class="nav" data-page="memory" type="button">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2.5 20.5 9 12 21.5 3.5 9"/><line x1="12" y1="2.5" x2="12" y2="21.5"/><line x1="3.5" y1="9" x2="20.5" y2="9"/><polyline points="3.5 9 12 15 20.5 9"/><circle cx="12" cy="12" r="1.5" fill="#38bdf8"/></svg>
+        </span>
+        <span class="nav-text">记忆</span>
+      </button>
+      <button class="nav" data-page="knowledge" type="button">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6 C8.5 4 5 4.5 3 6 V18.5 C5 17 8.5 16.5 12 18.5 C15.5 16.5 19 17 21 18.5 V6 C19 4.5 15.5 4 12 6 Z"/><line x1="12" y1="6" x2="12" y2="18.5"/><path d="M6 10 C7.5 9.5 9 9.7 10 10"/><path d="M14 10 C15 9.7 16.5 9.5 18 10"/><path d="M6 13.5 C7.5 13 9 13.2 10 13.5"/><path d="M14 13.5 C15 13.2 16.5 13 18 13.5"/><circle cx="12" cy="4" r="1.2" fill="#38bdf8"/></svg>
+        </span>
+        <span class="nav-text">知识库</span>
+      </button>
+      <button class="nav" data-page="skills" type="button">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 2.5 L4.5 13 H11 L10 21.5 L19.5 10.5 H13 L13.5 2.5 Z"/><path d="M18.5 4.5 C20.5 6.5 21.5 9.5 21.5 12.5 C21.5 15.5 20.5 18 18.5 20" stroke-dasharray="1.5 2.5"/><circle cx="12" cy="12" r="1.2" fill="#38bdf8"/></svg>
+        </span>
+        <span class="nav-text">技能库</span>
+      </button>
+      <button class="nav" data-page="actions" type="button">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12 H6 L8.5 5.5 L12 18.5 L15 9 L17.5 14 H21.5"/><circle cx="8.5" cy="5.5" r="1.2" fill="currentColor"/><circle cx="12" cy="18.5" r="1.5" fill="#38bdf8"/><circle cx="15" cy="9" r="1.2" fill="#7dd3fc"/></svg>
+        </span>
+        <span class="nav-text">操控日志</span>
+      </button>
+      <button class="nav" data-page="plugins" type="button">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 10.5 C20.5 10.5 21.5 11.5 21.5 13 C21.5 14.5 20.5 15.5 19 15.5 V19 C19 19.5 18.5 20 18 20 H14.5 C14.5 18.5 13.5 17.5 12 17.5 C10.5 17.5 9.5 18.5 9.5 20 H6 C5.5 20 5 19.5 5 19 V15.5 C6.5 15.5 7.5 14.5 7.5 13 C7.5 11.5 6.5 10.5 5 10.5 V7 C5 6.5 5.5 6 6 6 H9.5 C9.5 7.5 10.5 8.5 12 8.5 C13.5 8.5 14.5 7.5 14.5 6 H18 C18.5 6 19 6.5 19 7 V10.5 Z"/><circle cx="12" cy="13" r="1.4" fill="#38bdf8"/></svg>
+        </span>
+        <span class="nav-text">插件</span>
+      </button>
+      <button class="nav" data-page="petbody" type="button">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="3.5"/><path d="M5 19.5 C5 15.5 8 13 12 13 C16 13 19 15.5 19 19.5"/><line x1="12" y1="13" x2="12" y2="21"/><path d="M7.5 17 C6 18.5 5 20 4.5 21"/><path d="M16.5 17 C18 18.5 19 20 19.5 21"/><circle cx="12" cy="7" r="1.2" fill="#38bdf8"/></svg>
+        </span>
+        <span class="nav-text">皮套</span>
+      </button>
+      <button class="nav" data-page="history" type="button">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 A8.5 8.5 0 1 1 5.5 6.5"/><polyline points="4 3 5.5 6.5 9 5"/><polyline points="12 7.5 12 12 15 14"/><circle cx="12" cy="12" r="1.3" fill="#38bdf8"/></svg>
+        </span>
+        <span class="nav-text">记录</span>
+      </button>
+      <button class="nav" data-page="settings" type="button">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><line x1="12" y1="2" x2="12" y2="4.5"/><line x1="12" y1="19.5" x2="12" y2="22"/><line x1="2" y1="12" x2="4.5" y2="12"/><line x1="19.5" y1="12" x2="22" y2="12"/><circle cx="12" cy="12" r="3.5" stroke-dasharray="1.5 2"/><circle cx="12" cy="12" r="1.3" fill="#38bdf8"/></svg>
+        </span>
+        <span class="nav-text">外观</span>
+      </button>
+    </nav>
+
+    <div class="content">
+      <div class="pages">
+
+        <!-- 1 总览 -->
+        <section class="page active" id="overview">
+          <div class="page-head"><h1>总览</h1><button class="btn small" id="ov-refresh" type="button">↺ 刷新</button></div>
+          <p class="hint" id="ov-uptime">正在读取…</p>
+
+          <h2 class="sec">她</h2>
+          <!-- 2026-11-10：她的身体/心情/技能/历史/知识库 —— 这些后端都有数据，
+               但控制面板里没有任何显示；「投喂」也只有说话和长按摸头两个隐性入口。 -->
+          <div class="rows">
+            <div class="row">
+              <span class="row-label">饱食 / 精力 / 亲密<span class="sub mono" id="ov-body">正在读取…</span></span>
+              <button class="btn small" id="ov-feed" type="button">投喂一份</button>
+            </div>
+            <div class="row">
+              <span class="row-label">心情<span class="sub" id="ov-mood">正在读取…</span></span>
+            </div>
+            <div class="row">
+              <span class="row-label">技能 / 执行历史 / 知识库<span class="sub" id="ov-kit">正在读取…</span></span>
+            </div>
+          </div>
+
+          <h2 class="sec">服务</h2>
+          <div id="svc-list" class="rows"><p class="hint" style="margin:8px 0">正在读取…</p></div>
+
+          <h2 class="sec">静默模式</h2>
+          <div class="rows">
+            <div class="row">
+              <span class="row-label" id="quiet-desc">正在读取…</span>
+              <label class="switch big"><input type="checkbox" id="quiet-switch"><i></i><span class="sr">静默模式开关</span></label>
+            </div>
+          </div>
+
+          <h2 class="sec">桌宠</h2>
+          <div class="rows">
+            <div class="row">
+              <span class="row-label">进程<span class="sub mono" id="ov-pet-pos">正在读取…</span></span>
+              <button class="btn primary" id="start-pet" type="button">启动桌宠</button>
+            </div>
+            <div class="row">
+              <span class="row-label">字幕窗<span class="sub mono" id="ov-sub-pos">正在读取…</span></span>
+            </div>
+          </div>
+
+          <h2 class="sec">演出</h2>
+          <div class="rows">
+            <div class="row">
+              <span class="row-label">情绪微动作<span class="sub">说话时的小动作（2–4 秒，跟着每句话的情绪走）</span></span>
+              <label class="switch"><input type="checkbox" id="choreo-switch"><i></i><span class="sr">情绪微动作开关</span></label>
+            </div>
+            <div class="row">
+              <span class="row-label">自动演长戏<span class="sub">情绪到位时演一段（19–38 秒；4 分钟冷却、同段 15 分钟、单会话上限 6 段）</span></span>
+              <label class="switch"><input type="checkbox" id="perf-auto-switch"><i></i><span class="sr">自动演长戏开关</span></label>
+            </div>
+            <div class="row">
+              <span class="row-label">手动试演<span class="sub" id="perf-state">读取中…</span></span>
+              <div class="row-inline">
+                <select id="perf-pick" aria-label="表演片段" style="max-width:230px;padding:6px 8px;border-radius:8px;border:1px solid var(--line, #2a3340);background:var(--panel-2, #141a22);color:var(--ink, #e6edf5);font-size:12.5px">
+                  <option value="">读取中…</option>
+                </select>
+                <button class="btn small primary" id="perf-play" type="button">演</button>
+                <button class="btn small" id="perf-stop" type="button">停</button>
+              </div>
+            </div>
+          </div>
+
+          <h2 class="sec">记忆</h2>
+          <div class="rows">
+            <div class="row">
+              <span class="row-label"><span class="big-num" id="ov-memory">…</span><span class="sub">条长期记忆</span></span>
+              <button class="btn small" data-go="memory" type="button">查看记忆</button>
+            </div>
+            <div class="row">
+              <span class="row-label">当前模型</span>
+              <span class="row-value mono" id="ov-model">正在读取…</span>
+            </div>
+          </div>
+
+          <h2 class="sec">日志</h2>
+          <div class="log-grid">
+            <section class="log-pane"><header><span>桌宠日志</span></header><pre id="pet-log"></pre></section>
+            <section class="log-pane"><header><span>工具日志</span><button class="btn tiny" id="clear-logs" type="button">清空</button></header><pre id="tool-log"></pre></section>
+          </div>
+        </section>
+
+        <!-- 2 模型 -->
+        <section class="page" id="model">
+          <div class="page-head"><h1>模型</h1><p class="page-sub">提供商、模型与思考深度</p></div>
+          <!-- 2026-11-21 迁移引导（每页只放一条）：启停类开关统一到能力页，避免老用户找不到。 -->
+          <p class="hint migrate-hint" data-migrate-hint="model">启停类开关统一在「外观 → 能力」页管理；本页只留模型与提示词。<button class="btn small" type="button" data-cap-link>去能力页</button></p>
+
+          <div id="model-form">
+            <h2 class="sec">模型提供商</h2>
+            <div class="rows">
+              <div class="row col">
+                <span class="row-label">当前提供商</span>
+                <div class="dd" id="llm-provider-dd">
+                  <button class="dd-trigger" type="button" aria-haspopup="listbox"><span class="dd-text" id="llm-provider-text">请选择提供商</span><svg class="caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></button>
+                  <div class="dd-menu" id="llm-provider-options" role="listbox"></div>
+                </div>
+              </div>
+              <div class="row col">
+                <span class="row-label">接口地址</span>
+                <input id="llm-url" type="text" placeholder="所选提供商的接口地址" autocomplete="off" spellcheck="false">
+              </div>
+              <div class="row col">
+                <span class="row-label">API 密钥</span>
+                <span class="secret"><input id="llm-key" type="password" placeholder="所选提供商的 API 密钥" autocomplete="off"></span>
+              </div>
+              <div class="row col">
+                <span class="row-label">模型</span>
+                <div class="model-pick">
+                  <div class="dd" id="llm-model-dd">
+                    <div class="model-input">
+                      <input id="llm-model" type="text" placeholder="输入或选择模型" autocomplete="off" spellcheck="false" aria-label="模型名称">
+                      <button class="dd-caret" id="toggle-llm-models" type="button" aria-label="展开模型列表" aria-expanded="false" aria-controls="llm-model-options"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></button>
+                    </div>
+                    <div class="dd-menu" id="llm-model-options" role="listbox"></div>
+                  </div>
+                  <button class="btn" id="fetch-llm-models" type="button">获取模型</button>
+                </div>
+              </div>
+            </div>
+
+            <h2 class="sec">思考等级</h2>
+            <div class="seg" id="llm-reasoning" role="radiogroup" aria-label="思考等级">
+              <button type="button" role="radio" data-reasoning="off" aria-checked="false">关闭</button>
+              <button type="button" role="radio" data-reasoning="low" aria-checked="false">低</button>
+              <button type="button" role="radio" data-reasoning="medium" aria-checked="false">中</button>
+              <button type="button" role="radio" data-reasoning="high" aria-checked="false">高</button>
+            </div>
+            <p class="hint" id="llm-reasoning-hint">不开思考：回复最快，日常聊天够用。</p>
+
+            <h2 class="sec">系统提示词</h2>
+            <button class="btn small" id="open-prompt-market" type="button">提示词广场</button>
+            <textarea id="llm-prompt" rows="9" spellcheck="false"></textarea>
+          </div>
+
+          <section id="prompt-market" hidden>
+            <div class="page-head">
+              <h1>提示词广场</h1>
+              <span class="head-actions">
+                <button class="btn small" id="close-prompt-market" type="button">返回模型配置</button>
+                <button class="btn small" id="refresh-prompts" type="button">刷新</button>
+              </span>
+            </div>
+            <p class="hint" id="prompt-market-status">进入后自动获取</p>
+            <div id="prompt-market-list" class="rows"></div>
+          </section>
+        </section>
+
+        <!-- 3 对话 -->
+        <section class="page" id="chat">
+          <div class="page-head"><h1>对话</h1><p class="page-sub">语音、上下文与辅助视觉</p></div>
+          <!-- 2026-11-21 迁移引导（每页只放一条）：语音/视觉/记忆开关已集中到能力页。 -->
+          <p class="hint migrate-hint" data-migrate-hint="chat">语音、视觉与记忆开关已统一到「外观 → 能力」页管理；本页只留参数。<button class="btn small" type="button" data-cap-link>去能力页</button></p>
+
+          <h2 class="sec">基础</h2>
+          <div class="rows">
+            <div class="row">
+              <span class="row-label">说话语言</span>
+              <span class="row-inline">
+                <input type="hidden" id="tts-language" value="zh">
+                <span style="display:inline-block;width:132px">
+                  <span class="dd" id="tts-lang-dd" data-target="tts-language" style="display:block">
+                    <button class="dd-trigger" type="button" aria-haspopup="listbox"><span class="dd-text">中文</span><svg class="caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></button>
+                    <span class="dd-menu" role="listbox">
+                      <button class="dd-item selected" data-value="zh" type="button">中文</button>
+                      <button class="dd-item" data-value="en" type="button">English</button>
+                      <button class="dd-item" data-value="ja" type="button">日本語</button>
+                    </span>
+                  </span>
+                </span>
+              </span>
+            </div>
+            <div class="row">
+              <span class="row-label">语音引擎<span class="sub">换 TTS 不用改代码</span></span>
+              <span class="row-inline">
+                <input type="hidden" id="tts-backend" value="edge">
+                <span style="display:inline-block;width:172px">
+                  <span class="dd" id="tts-backend-dd" data-target="tts-backend" style="display:block">
+                    <button class="dd-trigger" type="button" aria-haspopup="listbox"><span class="dd-text">Edge TTS（本地）</span><svg class="caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></button>
+                    <span class="dd-menu" role="listbox">
+                      <button class="dd-item selected" data-value="edge" type="button">Edge TTS（本地）</button>
+                      <button class="dd-item" data-value="sovits" type="button">GPT-SoVITS api_v2</button>
+                      <button class="dd-item" data-value="openai" type="button">OpenAI 兼容接口</button>
+                      <button class="dd-item" data-value="custom" type="button">自定义 POST {text}</button>
+                    </span>
+                  </span>
+                </span>
+              </span>
+            </div>
+            <div class="row">
+              <span class="row-label">引擎参数<span class="sub">JSON：sovits 填 ref_audio_path 等；openai 填 base_url/api_key/voice/model</span></span>
+              <span class="row-inline"><input type="text" id="tts-backend-params" class="w-num" style="width:100%" placeholder='{"api_key":"sk-...","voice":"alloy"}' aria-label="引擎参数 JSON"></span>
+            </div>
+            <div class="row">
+              <span class="row-label">语速<span class="sub">1.0 原速；她说话偏慢就调到 1.05~1.15</span></span>
+              <span class="row-inline"><input type="number" id="tts-speed" step="0.01" min="0.5" max="2" class="w-num" aria-label="语速"></span>
+            </div>
+            <!-- 2026-11-21 统一管辖：文字输入框 / 键盘语音输入 / 语音打断 / 每次对话识图 /
+                 对话历史记忆 / 上下文上限开关 / 采样温度开关 / 启用辅助视觉模型 的布尔开关
+                 已从本页移除 —— 它们都能在「外观 → 能力」找到唯一入口（同一 config 键）。
+                 本页只留参数（数值/文本/选择）。 -->
+            <div class="row">
+              <span class="row-label">上下文限制<span class="sub">保留最近的消息条数</span></span>
+              <span class="row-inline"><input type="number" id="max-messages" min="1" step="1" class="w-num" aria-label="最大消息数"></span>
+            </div>
+            <div class="row">
+              <span class="row-label">温度<span class="sub">0 到 2</span></span>
+              <span class="row-inline"><input type="number" id="temperature" min="0" max="2" step="0.1" class="w-num" aria-label="温度"></span>
+            </div>
+          </div>
+
+          <h2 class="sec">辅助视觉</h2>
+          <div class="rows">
+            <div class="row col">
+              <span class="row-label">提供商</span>
+              <div class="dd" id="vision-provider-dd">
+                <button class="dd-trigger" type="button" aria-haspopup="listbox"><span class="dd-text" id="vision-provider-text">未配置</span><svg class="caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></button>
+                <div class="dd-menu" id="vision-provider-options" role="listbox"></div>
+              </div>
+            </div>
+            <div class="row col">
+              <span class="row-label">模型</span>
+              <div class="model-pick">
+                <div class="dd" id="vision-model-dd">
+                  <div class="model-input">
+                    <input id="vision-model" type="text" placeholder="输入或选择模型" autocomplete="off" spellcheck="false" aria-label="视觉模型名称">
+                    <button class="dd-caret" id="toggle-vision-models" type="button" aria-label="展开视觉模型列表" aria-expanded="false" aria-controls="vision-model-options"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></button>
+                  </div>
+                  <div class="dd-menu" id="vision-model-options" role="listbox"></div>
+                </div>
+                <button class="btn" id="fetch-vision-models" type="button">获取模型</button>
+              </div>
+            </div>
+            <div class="row col">
+              <span class="row-label">接口地址</span>
+              <input id="vision-url" type="text" placeholder="所选提供商的接口地址" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="row col">
+              <span class="row-label">API 密钥</span>
+              <span class="secret"><input id="vision-key" type="password" placeholder="所选提供商的 API 密钥" autocomplete="off"></span>
+            </div>
+          </div>
+          <p class="hint">与对话模型共用提供商通讯录，改这里即改该提供商。</p>
+        </section>
+
+        <!-- 4 记忆 -->
+        <section class="page" id="memory">
+          <div class="page-head">
+            <h1>记忆</h1>
+            <span class="head-actions">
+              <button class="btn small" id="memory-retry" type="button" hidden>重试</button>
+              <button class="btn small" id="memory-refresh" type="button">↺ 刷新</button>
+            </span>
+          </div>
+          <div class="mem-stats">
+            <span class="big-num" id="mem-count">…</span>
+            <span class="mem-meta" id="mem-meta">正在读取…</span>
+          </div>
+          <input id="mem-search" type="text" class="mem-search" placeholder="搜索记忆内容或标签" spellcheck="false">
+          <div id="mem-list" class="rows"><p class="hint" style="margin:8px 0">正在读取…</p></div>
+
+          <h2 class="sec">记忆图谱 <button class="btn small" id="memory-graph-btn" type="button" style="margin-left:10px;vertical-align:1px">图谱</button></h2>
+          <p class="hint" id="memory-graph-note" hidden></p>
+          <div id="memory-graph-view"><p class="hint" style="margin:8px 0">点「图谱」查看记忆关联网络</p></div>
+
+          <h2 class="sec">记忆体检 <button class="btn small" id="memory-health-btn" type="button" style="margin-left:10px;vertical-align:1px">开始体检</button></h2>
+          <p class="hint" id="memory-health-note">只读：核对向量库 / 记忆图谱 / BM25 三处计数是否一致，不改任何数据（约 10–40 秒）。</p>
+          <pre class="status-pre" id="memory-health-out" hidden></pre>
+          <div class="row-inline" id="memory-health-fix" hidden style="margin-top:8px;flex-wrap:wrap">
+            <code class="mono" id="memory-health-fix-cmd" style="font-size:12px">node pet-runtime/tools/memos-consistency.mjs --fix</code>
+            <button class="btn small" id="memory-health-copy" type="button">复制修复命令</button>
+          </div>
+
+          <h2 class="sec">整理日志</h2>
+          <div id="digest-list"><p class="hint" style="margin:8px 0">正在读取…</p></div>
+
+          <h2 class="sec">核心记忆</h2>
+          <div id="core-memory" class="core-box">正在读取…</div>
+        </section>
+
+        <!-- 5 插件 -->
+        <section class="page" id="plugins">
+          <div class="page-head">
+            <h1>插件</h1>
+            <span class="head-actions">
+              <span class="seg" role="tablist">
+                <button type="button" data-plugin-tab="installed" aria-pressed="true">已安装</button>
+                <button type="button" data-plugin-tab="market" aria-pressed="false">广场</button>
+              </span>
+              <button class="btn small" id="refresh-plugins" type="button">↺ 刷新广场</button>
+            </span>
+          </div>
+          <div id="plugin-lists">
+            <div id="installed-plugin-list" class="rows"></div>
+            <div id="market-plugin-list" class="rows" hidden></div>
+          </div>
+          <div id="plugin-editor" hidden>
+            <div class="page-head">
+              <h1 id="plugin-detail-title">插件配置</h1>
+              <span class="head-actions">
+                <button class="btn small" id="plugin-readme" type="button" hidden>使用教程</button>
+                <button class="btn small" id="plugin-detail-back" type="button">返回列表</button>
+              </span>
+            </div>
+            <div id="plugin-detail-content"></div>
+          </div>
+        </section>
+
+        <!-- 6 皮套 -->
+        <section class="page" id="petbody">
+          <div class="page-head"><h1>皮套</h1><p class="page-sub">皮套参数，重启桌宠生效</p></div>
+          <!-- 2026-11-21 迁移引导（每页只放一条）：穿透/取景开关已集中到能力页。 -->
+          <p class="hint migrate-hint" data-migrate-hint="petbody">鼠标穿透与取景开关已统一到「外观 → 能力」页管理。<button class="btn small" type="button" data-cap-link>去能力页</button></p>
+
+          <h2 class="sec">窗口</h2>
+          <div class="rows">
+            <div class="row"><span class="row-label">窗口宽度<span class="sub">px，240 到 1200</span></span><input type="number" id="petbody-width" min="240" max="1200" step="10" class="w-num"></div>
+            <div class="row"><span class="row-label">窗口高度<span class="sub">px，320 到 1600</span></span><input type="number" id="petbody-height" min="320" max="1600" step="10" class="w-num"></div>
+            <!-- 2026-11-21 统一管辖：「默认鼠标穿透」与「取景」的开关移到「外观 → 能力」
+                 （ui.click_through / ui.framing，取景是下拉）；托盘仍可临时切穿透/取景。 -->
+          </div>
+
+          <h2 class="sec">表现</h2>
+          <div class="rows">
+            <div class="row"><span class="row-label">口型增益<span class="sub">0.6 到 1.6，越大嘴张得越开</span></span><input type="number" id="petbody-mouth-gain" min="0.6" max="1.6" step="0.05" class="w-num"></div>
+            <div class="row"><span class="row-label">情绪增益<span class="sub">0 到 1.5，越大表情越夸张，调到 0 是面瘫脸</span></span><input type="number" id="petbody-emotion-gain" min="0" max="1.5" step="0.05" class="w-num"></div>
+          </div>
+          <p class="hint">无独立表情文件，情绪靠参数合成（眉毛、嘴角、笑眼、瞳孔）。</p>
+
+          <h2 class="sec">装扮与形态</h2>
+          <p class="hint" id="dressup-status" hidden>桌宠不在线</p>
+          <div id="dressup" hidden>
+            <div class="preset-row" id="preset-row"></div>
+            <div class="asset-columns" id="asset-groups"></div>
+          </div>
+
+          <h2 class="sec">演出</h2>
+          <div class="scene-grid" id="scene-box"></div>
+          <p class="hint">本地执行。换装在皮套身上右键。</p>
+
+          <h2 class="sec">自查</h2>
+          <div class="probe-box">
+            <button class="btn" id="petbody-probe" type="button">自查当前状态</button>
+            <button class="btn" id="petbody-cowatch-refresh" type="button">一起看刷新</button>
+          </div>
+          <pre class="status-pre" id="petbody-status">（未自查）</pre>
+          <pre class="status-pre" id="petbody-cowatch" style="display:none"></pre>
+        </section>
+
+        <!-- 7 记录 -->
+        <section class="page" id="history">
+          <div class="page-head"><h1>记录</h1><p class="page-sub mono" id="history-sub">按轮分页</p></div>
+          <div id="history-list" class="rows"></div>
+          <nav id="history-pagination" class="pager" aria-label="对话记录分页" hidden></nav>
+        </section>
+
+        <!-- 8 外观 -->
+        <section class="page" id="settings">
+          <div class="page-head"><h1>外观</h1><p class="page-sub">字幕、皮套显示与位置</p></div>
+          <!-- 2026-11-21 迁移引导（每页只放一条）：本页删掉的开关就在下方能力区，点击直达。 -->
+          <p class="hint migrate-hint" data-migrate-hint="settings">字幕、隐藏皮套等开关已统一到下方「能力」区管理。<button class="btn small" type="button" data-cap-link>去能力区</button></p>
+          <h2 class="sec">字幕与名称</h2>
+          <div class="rows">
+            <div class="row col"><span class="row-label">开场白</span><input id="opening-text" type="text" spellcheck="false"></div>
+            <div class="row"><span class="row-label">用户显示名称</span><input id="user-name" type="text" class="w-text" spellcheck="false"></div>
+            <div class="row"><span class="row-label">AI 显示名称</span><input id="ai-name" type="text" class="w-text" spellcheck="false"></div>
+            <!-- 2026-11-21 统一管辖：字幕显示开关 → 能力页 ui.subtitle_labels；本页只留名称/文本参数。 -->
+          </div>
+          <h2 class="sec">皮套</h2>
+          <div class="rows">
+            <div class="row">
+              <span class="row-label">位置<span class="sub">立即生效</span></span>
+              <span class="row-inline">
+                <button class="btn" id="reset-model-position" type="button">复位皮套位置</button>
+                <button class="btn" id="adjust-subtitle-position" type="button">调整字幕位置</button>
+              </span>
+            </div>
+          </div>
+
+          <!-- 行为开关（2026-11-09 补齐）：这些原先只在 config.json 里，用户改不了。
+               2026-11-21 统一管辖（第二次）：本页原有的布尔开关全部交给能力页唯一入口 ——
+               「意图前缀路由」已废弃移除（只有单测调 classifyIntent，主链走零延迟
+               classifyIntentLocal，开关拨了不生效，config.llm.intent_router 读取代码保留）；
+               「字幕显示 / 隐藏皮套 / 关闭面板自动关服务 / 等待垫场音 / 静默模式」分别对应
+               能力页 ui.subtitle_labels / ui.show_model / svc.auto_close / llm.filler /
+               proactive.quiet（静默另有总览与托盘快捷入口，同走 8103）。
+               本页只留参数：垫场触发阈值（数值）。 -->
+          <h2 class="sec">对话行为</h2>
+          <div class="rows">
+            <div class="row">
+              <span class="row-label">垫场触发阈值<span class="sub">毫秒；是否启用见能力页「延迟垫场」</span></span>
+              <input id="latency-filler-delay" type="number" class="w-text" min="600" max="5000" step="100" placeholder="1200">
+            </div>
+          </div>
+
+          <!-- 能力注册表（2026-11-16 P1）：行由 js/core/capabilities.js 自动生成，
+               不再手写。config 类开关走 control:set-config-value（白名单 + 类型校验），
+               plugin 类走已有的 control:set-plugin-enabled。 -->
+          <h2 class="sec">能力（自动生成）<span class="sub">由 capabilities.js 生成 · 「需重启」= 改完要重启桌宠</span></h2>
+          <div class="rows" id="capability-rows"></div>
+        </section>
+        <!-- 9 知识库 -->
+        <section class="page" id="knowledge">
+          <div class="page-head">
+            <div>
+              <h1>知识库</h1>
+              <p class="page-sub">稳定规则 · 动态时效 · 探索经验三层沉淀</p>
+            </div>
+            <div class="head-actions">
+              <button class="btn small" id="kn-refresh" type="button">↺ 刷新</button>
+              <button class="btn small primary" id="kn-add-rule-btn" type="button">＋ 新增游戏规则</button>
+            </div>
+          </div>
+
+          <!-- 游戏选择器 -->
+          <div class="game-selector-bar">
+            <span class="game-sel-label">知识域：</span>
+            <div class="game-tabs" id="kn-game-tabs"></div>
+          </div>
+
+          <!-- 知识概览状态带 -->
+          <div class="kn-status-banner" id="kn-status-banner">
+            <div class="kn-stat-item">
+              <span class="kn-stat-label">稳定规则 (Rules)</span>
+              <strong class="kn-stat-val" id="kn-rule-count">-</strong>
+            </div>
+            <div class="kn-stat-item">
+              <span class="kn-stat-label">动态时效 (Live)</span>
+              <span class="kn-badge" id="kn-live-freshness">检测中</span>
+            </div>
+            <div class="kn-stat-item">
+              <span class="kn-stat-label">实战经验数</span>
+              <strong class="kn-stat-val" id="kn-exp-count">-</strong>
+            </div>
+            <div class="kn-stat-item">
+              <span class="kn-stat-label">综合可信度</span>
+              <span class="kn-badge high" id="kn-confidence-badge">High</span>
+            </div>
+          </div>
+
+          <!-- 层级展示区 -->
+          <div class="kn-layers-layout">
+            <!-- 左栏：稳定规则与按键绑定 -->
+            <div class="kn-left-col">
+              <div class="kn-card">
+                <div class="kn-card-head">
+                  <h2>① 稳定规则层 (rules)</h2>
+                  <button class="btn tiny" id="kn-edit-rules-btn" type="button">编辑此游戏规则</button>
+                </div>
+                <div id="kn-rules-list" class="kn-rules-container"></div>
+
+                <div class="kn-card-head" style="margin-top:16px;">
+                  <h2>常用键位映射</h2>
+                </div>
+                <div id="kn-keys-grid" class="kn-keys-matrix"></div>
+
+                <div class="kn-card-head" style="margin-top:16px;">
+                  <h2>常用推荐动作</h2>
+                </div>
+                <div id="kn-typical-actions" class="kn-actions-chips"></div>
+              </div>
+
+              <!-- 动态层 (live) -->
+              <div class="kn-card" style="margin-top:16px;">
+                <div class="kn-card-head">
+                  <h2>② 动态 RAG 层 (live)</h2>
+                  <span class="sub" id="kn-live-time">更新时间：-</span>
+                </div>
+                <div id="kn-live-content" class="kn-live-body"></div>
+              </div>
+            </div>
+
+            <!-- 右栏：她的经验时间线 -->
+            <div class="kn-right-col">
+              <div class="kn-card">
+                <div class="kn-card-head">
+                  <h2>③ 她的实战经验 (experience)</h2>
+                  <button class="btn tiny primary" id="kn-add-exp-btn" type="button">＋ 补录实操经验</button>
+                </div>
+                <p class="hint" style="margin:4px 0 10px;">她在游戏与系统中的每一次尝试：✓ 成功沉淀有效模式，✗ 失败立下排坑警示。</p>
+                <div id="kn-exp-timeline" class="kn-timeline"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 10 技能库 -->
+        <section class="page" id="skills">
+          <div class="page-head">
+            <div>
+              <h1>技能库</h1>
+              <p class="page-sub">验证成功的自足动作序列 · 一键复现 · Beta后验可靠度</p>
+            </div>
+            <div class="head-actions">
+              <button class="btn small" id="sk-refresh" type="button">↺ 刷新技能</button>
+            </div>
+          </div>
+
+          <div class="kn-status-banner">
+            <div class="kn-stat-item">
+              <span class="kn-stat-label">总就绪技能</span>
+              <strong class="kn-stat-val" id="sk-total-count">-</strong>
+            </div>
+            <div class="kn-stat-item">
+              <span class="kn-stat-label">已验证动作率</span>
+              <strong class="kn-stat-val" id="sk-avg-rel">-</strong>
+            </div>
+            <div class="kn-stat-item">
+              <span class="kn-stat-label">最近执行记录</span>
+              <span class="sub mono" id="sk-last-run">-</span>
+            </div>
+          </div>
+
+          <div id="skills-grid" class="skills-card-grid"></div>
+        </section>
+
+        <!-- 11 操控执行日志 -->
+        <section class="page" id="actions">
+          <div class="page-head">
+            <div>
+              <h1>操控执行日志</h1>
+              <p class="page-sub">闭环执行监控 · 重点关注疑似未生效状态 (suspected_noop)</p>
+            </div>
+            <div class="head-actions">
+              <button class="btn small" id="act-refresh" type="button">↺ 刷新日志</button>
+            </div>
+          </div>
+
+          <!-- 后台任务（派活账本 P0 · 2026-11-23 · 只读）
+               列表：control-main 直读 data/dispatch-tasks.jsonl（不依赖 8103 在线）；
+               详情：点一行 → 8103 GET /dispatch/tasks?id= + .control-token。
+               本版没有取消/重试按钮（取消端点固定 501，P1 才实现）。 -->
+          <section class="log-pane" id="dispatch-tasks-panel" aria-label="后台任务（只读）">
+            <header>
+              <span>后台任务</span>
+              <span class="sub mono" id="dispatch-task-count">正在读取…</span>
+            </header>
+            <div style="padding:10px 12px">
+              <div id="dispatch-tasks-list" class="actions-log-timeline">
+                <p class="hint">正在读取账本…</p>
+              </div>
+              <div id="dispatch-task-detail" class="hint" hidden></div>
+            </div>
+          </section>
+
+          <!-- 过滤器栏 -->
+          <div class="act-filter-bar">
+            <div class="filter-group" id="act-filter-chips">
+              <button class="chip active" data-filter="all">全部</button>
+              <button class="chip warn" data-filter="suspected_noop">⚠️ 疑似空操作 (重点关注)</button>
+              <button class="chip ok" data-filter="confirmed">✓ 确认生效</button>
+              <button class="chip neutral" data-filter="unverifiable">? 未验证</button>
+              <button class="chip bad" data-filter="not_sent">✕ 未发送</button>
+            </div>
+            <span class="sub" id="act-count-hint">正在读取…</span>
+          </div>
+
+          <div id="actions-timeline" class="actions-log-timeline"></div>
+        </section>
+
+      </div>
+
+      <footer class="savebar">
+        <span id="save-hint">未保存</span>
+        <button class="btn primary small" id="save-config" type="button">保存配置</button>
+      </footer>
+    </div>
+  </div>
+</main>
+
+<div class="modal" id="history-image-modal" role="dialog" aria-modal="true" aria-label="截图大图预览">
+  <button class="modal-close" id="history-image-close" type="button" aria-label="关闭大图"><svg viewBox="0 0 20 20" aria-hidden="true" width="14" height="14" fill="none"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+  <div class="modal-viewport" id="history-image-viewport"><img id="history-image-preview" alt="对话截图大图" draggable="false"></div>
+  <div class="modal-toolbar">
+    <button class="btn small" id="history-image-zoom-out" type="button" aria-label="缩小">−</button>
+    <span id="history-image-zoom-value">100%</span>
+    <button class="btn small" id="history-image-zoom-in" type="button" aria-label="放大">＋</button>
+    <button class="btn small" id="history-image-reset" type="button">重置</button>
+  </div>
+</div>
+
+<div class="modal" id="memory-graph-modal" role="dialog" aria-modal="true" aria-label="记忆图谱节点详情">
+  <button class="modal-close" id="memory-graph-detail-close" type="button" aria-label="关闭详情"><svg viewBox="0 0 20 20" aria-hidden="true" width="14" height="14" fill="none"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+  <div id="memory-graph-detail"></div>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+<!-- 续聊判定与 control-main 的 IPC 共用同一份（window.DispatchFollowupPolicy） -->
+<script src="js/core/dispatch-followup-policy.js"></script>
+<script src="control-v2-renderer.js"></script>
+
+<div class="modal" id="kn-edit-modal" role="dialog" aria-modal="true" aria-label="编辑规则">
+  <div class="modal-card">
+    <div class="card-corner-branches" aria-hidden="true">
+      <svg class="corner-branch branch-tl" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path class="branch-stem" d="M2 2 C 12 5, 24 9, 38 8 C 50 7, 58 4, 70 3" stroke-linecap="round"/>
+        <path class="branch-stem" d="M2 2 C 5 12, 9 24, 8 38 C 7 50, 4 58, 3 70" stroke-linecap="round"/>
+        <path class="branch-twig" d="M22 8 C 28 15, 38 19, 50 17" stroke-linecap="round"/>
+        <path class="branch-twig" d="M8 22 C 15 28, 19 38, 17 50" stroke-linecap="round"/>
+        <g class="branch-blossom main" transform="translate(24, 24)">
+          <circle cx="0" cy="0" r="2.2" class="blossom-core"/>
+          <path d="M0 -6 C1.8 -3.5, 1.8 -1.5, 0 0 C-1.8 -1.5, -1.8 -3.5, 0 -6 Z" class="blossom-petal"/>
+          <path d="M5.7 -1.8 C3.8 -0.5, 2 0.5, 0 0 C1 -1.8, 2.5 -3.2, 5.7 -1.8 Z" class="blossom-petal"/>
+          <path d="M3.5 4.8 C1.8 3, 1 1.5, 0 0 C2 0.5, 3.8 2, 3.5 4.8 Z" class="blossom-petal"/>
+          <path d="M-3.5 4.8 C-2 2, -0.5 0.5, 0 0 C-1 1.5, -1.8 3, -3.5 4.8 Z" class="blossom-petal"/>
+          <path d="M-5.7 -1.8 C-2.5 -3.2, -1 -1.8, 0 0 C-2 0.5, -3.8 -0.5, -5.7 -1.8 Z" class="blossom-petal"/>
+        </g>
+        <circle cx="70" cy="3" r="2" class="branch-bud"/>
+        <circle cx="3" cy="70" r="2" class="branch-bud"/>
+      </svg>
+      <svg class="corner-branch branch-tr" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path class="branch-stem" d="M2 2 C 12 5, 24 9, 38 8 C 50 7, 58 4, 70 3" stroke-linecap="round"/>
+        <path class="branch-stem" d="M2 2 C 5 12, 9 24, 8 38 C 7 50, 4 58, 3 70" stroke-linecap="round"/>
+        <path class="branch-twig" d="M22 8 C 28 15, 38 19, 50 17" stroke-linecap="round"/>
+        <path class="branch-twig" d="M8 22 C 15 28, 19 38, 17 50" stroke-linecap="round"/>
+        <g class="branch-blossom main" transform="translate(24, 24)">
+          <circle cx="0" cy="0" r="2.2" class="blossom-core"/>
+          <path d="M0 -6 C1.8 -3.5, 1.8 -1.5, 0 0 C-1.8 -1.5, -1.8 -3.5, 0 -6 Z" class="blossom-petal"/>
+          <path d="M5.7 -1.8 C3.8 -0.5, 2 0.5, 0 0 C1 -1.8, 2.5 -3.2, 5.7 -1.8 Z" class="blossom-petal"/>
+          <path d="M3.5 4.8 C1.8 3, 1 1.5, 0 0 C2 0.5, 3.8 2, 3.5 4.8 Z" class="blossom-petal"/>
+          <path d="M-3.5 4.8 C-2 2, -0.5 0.5, 0 0 C-1 1.5, -1.8 3, -3.5 4.8 Z" class="blossom-petal"/>
+          <path d="M-5.7 -1.8 C-2.5 -3.2, -1 -1.8, 0 0 C-2 0.5, -3.8 -0.5, -5.7 -1.8 Z" class="blossom-petal"/>
+        </g>
+        <circle cx="70" cy="3" r="2" class="branch-bud"/>
+        <circle cx="3" cy="70" r="2" class="branch-bud"/>
+      </svg>
+      <svg class="corner-branch branch-bl" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path class="branch-stem" d="M2 2 C 12 5, 24 9, 38 8 C 50 7, 58 4, 70 3" stroke-linecap="round"/>
+        <path class="branch-stem" d="M2 2 C 5 12, 9 24, 8 38 C 7 50, 4 58, 3 70" stroke-linecap="round"/>
+        <path class="branch-twig" d="M22 8 C 28 15, 38 19, 50 17" stroke-linecap="round"/>
+        <path class="branch-twig" d="M8 22 C 15 28, 19 38, 17 50" stroke-linecap="round"/>
+        <g class="branch-blossom main" transform="translate(24, 24)">
+          <circle cx="0" cy="0" r="2.2" class="blossom-core"/>
+          <path d="M0 -6 C1.8 -3.5, 1.8 -1.5, 0 0 C-1.8 -1.5, -1.8 -3.5, 0 -6 Z" class="blossom-petal"/>
+          <path d="M5.7 -1.8 C3.8 -0.5, 2 0.5, 0 0 C1 -1.8, 2.5 -3.2, 5.7 -1.8 Z" class="blossom-petal"/>
+          <path d="M3.5 4.8 C1.8 3, 1 1.5, 0 0 C2 0.5, 3.8 2, 3.5 4.8 Z" class="blossom-petal"/>
+          <path d="M-3.5 4.8 C-2 2, -0.5 0.5, 0 0 C-1 1.5, -1.8 3, -3.5 4.8 Z" class="blossom-petal"/>
+          <path d="M-5.7 -1.8 C-2.5 -3.2, -1 -1.8, 0 0 C-2 0.5, -3.8 -0.5, -5.7 -1.8 Z" class="blossom-petal"/>
+        </g>
+        <circle cx="70" cy="3" r="2" class="branch-bud"/>
+        <circle cx="3" cy="70" r="2" class="branch-bud"/>
+      </svg>
+      <svg class="corner-branch branch-br" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path class="branch-stem" d="M2 2 C 12 5, 24 9, 38 8 C 50 7, 58 4, 70 3" stroke-linecap="round"/>
+        <path class="branch-stem" d="M2 2 C 5 12, 9 24, 8 38 C 7 50, 4 58, 3 70" stroke-linecap="round"/>
+        <path class="branch-twig" d="M22 8 C 28 15, 38 19, 50 17" stroke-linecap="round"/>
+        <path class="branch-twig" d="M8 22 C 15 28, 19 38, 17 50" stroke-linecap="round"/>
+        <g class="branch-blossom main" transform="translate(24, 24)">
+          <circle cx="0" cy="0" r="2.2" class="blossom-core"/>
+          <path d="M0 -6 C1.8 -3.5, 1.8 -1.5, 0 0 C-1.8 -1.5, -1.8 -3.5, 0 -6 Z" class="blossom-petal"/>
+          <path d="M5.7 -1.8 C3.8 -0.5, 2 0.5, 0 0 C1 -1.8, 2.5 -3.2, 5.7 -1.8 Z" class="blossom-petal"/>
+          <path d="M3.5 4.8 C1.8 3, 1 1.5, 0 0 C2 0.5, 3.8 2, 3.5 4.8 Z" class="blossom-petal"/>
+          <path d="M-3.5 4.8 C-2 2, -0.5 0.5, 0 0 C-1 1.5, -1.8 3, -3.5 4.8 Z" class="blossom-petal"/>
+          <path d="M-5.7 -1.8 C-2.5 -3.2, -1 -1.8, 0 0 C-2 0.5, -3.8 -0.5, -5.7 -1.8 Z" class="blossom-petal"/>
+        </g>
+        <circle cx="70" cy="3" r="2" class="branch-bud"/>
+        <circle cx="3" cy="70" r="2" class="branch-bud"/>
+      </svg>
+    </div>
+    <div class="modal-head">
+      <h3 id="kn-modal-title">编辑游戏规则</h3>
+      <button class="modal-close" id="kn-modal-close" type="button" aria-label="关闭"><svg viewBox="0 0 20 20" aria-hidden="true" width="14" height="14" fill="none"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="row col">
+        <span class="row-label">游戏名称</span>
+        <input type="text" id="kn-modal-gamename" readonly class="mono">
+      </div>
+      <div class="row col">
+        <span class="row-label">键位映射 (JSON: 如 {"暂停": "space"})</span>
+        <textarea id="kn-modal-keys" rows="5" class="mono"></textarea>
+      </div>
+      <div class="row col">
+        <span class="row-label">规则列表 (JSON Array: [{"id": "...", "text": "...", "kind": "..."}])</span>
+        <textarea id="kn-modal-rules" rows="7" class="mono"></textarea>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn small" id="kn-modal-cancel" type="button">取消</button>
+      <button class="btn small primary" id="kn-modal-save" type="button">保存规则</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,13 @@
+# audio-loop —— 「一起看」系统声音回环采集（1001）
+#
+# 安装：py -m pip install -r audio-loop/requirements.txt
+# 运行时只依赖 numpy + soundcard（WASAPI loopback，跟随默认输出设备）。
+# 本机实测：numpy 2.3.5 / SoundCard 0.4.6。
+
+numpy>=1.26,<3
+soundcard>=0.4.2
+
+# 仅 selftest.py 需要（播放测试音 + 解码 mp3）：
+#   sounddevice>=0.4.6
+#   pydub>=0.25
+#   edge-tts>=6.1

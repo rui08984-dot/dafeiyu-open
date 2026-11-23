@@ -1,0 +1,13 @@
+{
+  "name": "dafeiyu-packaging",
+  "version": "1.0.0",
+  "private": true,
+  "description": "大肥鱼桌面伴侣的打包工作区：为 live-2d 产出 NSIS 安装器与稀疏 MSIX 包身份。构建工具只装在这里，绝不污染 live-2d/node_modules。",
+  "scripts": {
+    "dir": "electron-builder --config electron-builder.yml --dir",
+    "nsis": "electron-builder --config electron-builder.yml --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron-builder": "25.1.8"
+  }
+}

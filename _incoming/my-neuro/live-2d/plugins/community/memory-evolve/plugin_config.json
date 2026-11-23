@@ -1,0 +1,58 @@
+{
+  "enabled": {
+    "title": "启用",
+    "description": "关掉就完全不整理",
+    "type": "bool",
+    "default": true,
+    "value": true
+  },
+  "gate_threshold": {
+    "title": "门控阈值",
+    "description": "0~1，越高越严格（越少写库）",
+    "type": "float",
+    "default": 0.6,
+    "value": 0.6
+  },
+  "dedupe_threshold": {
+    "title": "去重阈值",
+    "description": "与已有记忆的加权综合分超过它就认为「已经记得」。注意：服务端 /search 返回的是综合分不是纯余弦——实测真重复 ≥1.0、语义邻居 0.72~0.95（面试0.88 vs 考试 曾被 0.82 误杀，见交接 2026-11-01-1900 §3 bug6）",
+    "type": "float",
+    "default": 0.82,
+    "value": 0.82
+  },
+  "consolidate_every": {
+    "title": "巩固间隔（轮）",
+    "description": "每多少轮对话整理一次",
+    "type": "int",
+    "default": 6,
+    "value": 6
+  },
+  "reflect_enabled": {
+    "title": "反思（记忆 v2，实验）",
+    "description": "重要性累加触发，只写 data/insights.jsonl，不在本轮注入人格。默认关闭：阈值/权重尚未用真实语料校准，开启前先读 docs/调研-记忆v2-2026-11-20.md §6",
+    "type": "bool",
+    "default": false,
+    "value": false
+  },
+  "reflect_threshold": {
+    "title": "反思触发阈值",
+    "description": "每条消息 1..10 分累减，<=0 触发一次；60 是我们的校准值（不是 GA 的 150）",
+    "type": "int",
+    "default": 60,
+    "value": 60
+  },
+  "reflect_daily_cap": {
+    "title": "反思每日上限",
+    "description": "成本红线：一天最多跑几次 LLM 反思（失败也计数）",
+    "type": "int",
+    "default": 4,
+    "value": 4
+  },
+  "reflect_max_entries": {
+    "title": "反思输入条目上限",
+    "description": "一次最多读多少条游标后的新条目（片段卡 + 卡内事实）",
+    "type": "int",
+    "default": 30,
+    "value": 30
+  }
+}

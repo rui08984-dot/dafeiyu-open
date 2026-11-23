@@ -1,0 +1,1034 @@
+/* ============================================================================
+ * styles.css —— 桌宠皮套主窗口样式（Vogue 虎鲸与金鱼：Orca Abyss & Goldfish Haute-Couture）
+ *
+ * 遵循 ai-design-workflow 规范与设计令牌 (tokens.css)。
+ * 材质：虎鲸深渊极夜玻璃 (#080c14) + 发光深海青 (Cyan) + 珊瑚赤焰金鱼金 (Goldfish Gold)
+ * 动效：流光曳尾双色微光、有机波纹呼吸感、严格 GPU 合成层 (transform/opacity)
+ * 布局：完美适配 420x760 桌面悬浮小窗与多屏/大屏自适应
+ * ========================================================================= */
+
+body {
+    margin: 0;
+    padding: 0;
+    background: transparent !important;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+    font-family: var(--font-ui);
+}
+
+.avatar-container {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    transition: opacity .38s ease, filter .38s ease, transform .38s cubic-bezier(.2,.8,.2,1);
+}
+
+body.avatar-switching .avatar-container {
+    opacity: 0;
+    transform: scale(.97);
+}
+
+body.avatar-revealing .avatar-container {
+    animation: avatar-reveal .5s cubic-bezier(.2,.8,.2,1);
+}
+
+#avatar-transition {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    z-index: 9000;
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(.88);
+    transition: opacity .18s ease, transform .25s cubic-bezier(.2,.8,.2,1);
+    pointer-events: none;
+}
+
+#avatar-transition.active {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+}
+
+.avatar-transition-spinner {
+    width: 42px;
+    height: 42px;
+    border: 3px solid rgba(232, 207, 138, 0.18);
+    border-top-color: var(--c-cyan-glow);
+    border-right-color: var(--c-goldfish);
+    border-radius: 50%;
+    filter: drop-shadow(0 4px 12px rgba(232, 207, 138, 0.35));
+    animation: avatar-spin .72s linear infinite;
+}
+
+@keyframes avatar-spin { to { transform: rotate(360deg); } }
+
+@keyframes avatar-reveal {
+    from { opacity: 0; transform: scale(.97); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.avatar-container canvas {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+}
+
+#canvas {
+    image-rendering: auto;
+}
+
+/* ==================== 字幕条容器（主屏模式兜底） ==================== */
+#subtitle-container {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 92%;
+    box-sizing: border-box;
+    max-height: 40%;
+    padding: 8px 24px;
+    border-radius: var(--r-md);
+    background: linear-gradient(180deg, rgba(26, 19, 12, 0.90) 0%, rgba(12, 9, 6, 0.88) 100%);
+    border: 1px solid rgba(232, 207, 138, 0.28);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.48), 0 2px 6px rgba(0, 0, 0, 0.3), inset 0 0 0 1px rgba(143, 112, 36, 0.20);
+    z-index: var(--z-subtitle);
+    display: none;
+    text-align: center;
+    overflow-y: auto;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+#subtitle-text {
+    color: #f2e6c8;
+    font-size: clamp(14px, 3.8vw, 20px);
+    margin: 0;
+    font-family: var(--font-ui);
+    line-height: 1.55;
+    font-weight: 450;
+    letter-spacing: 0.3px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+}
+
+/* ==================== 模型控制浮动面板 ==================== */
+#model-controls {
+    position: fixed;
+    bottom: 120px;
+    right: 20px;
+    z-index: 1001;
+    display: none;
+    pointer-events: auto;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+#panel-buttons {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: max-height var(--t-slow) var(--ease), opacity var(--t-base) var(--ease);
+}
+
+#panel-buttons.expanded {
+    max-height: 320px;
+    opacity: 1;
+}
+
+.ctrl-btn {
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    margin: 0;
+    outline: none;
+    font: inherit;
+    border-radius: var(--r-md);
+    background: var(--grad-vogue-glaze);
+    border: 1px solid rgba(232, 207, 138, 0.30);
+    color: var(--c-text);
+    font-size: 16px;
+    line-height: 38px;
+    text-align: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all var(--t-base) var(--ease);
+    user-select: none;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
+.ctrl-btn svg {
+    display: block;
+    pointer-events: none;
+}
+
+.ctrl-btn:hover {
+    background: rgba(18, 28, 46, 0.96);
+    border-color: var(--c-cyan-glow);
+    color: #ffffff;
+    transform: scale(1.08);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55), 0 0 16px rgba(232, 207, 138, 0.35);
+}
+
+.ctrl-btn.active {
+    background: rgba(232, 207, 138, 0.25);
+    border-color: var(--c-cyan-glow);
+    color: #ffffff;
+    box-shadow: 0 0 16px rgba(232, 207, 138, 0.45);
+}
+
+.ctrl-btn.disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+#btn-reset-position:hover {
+    transform: rotate(360deg);
+    transition: transform 0.5s var(--ease), background 0.2s var(--ease);
+}
+
+#chat-messages {
+    display: none;
+    max-height: 300px;
+    overflow-y: auto;
+    margin-bottom: 10px;
+    color: white;
+    font-family: var(--font-ui);
+}
+
+/* ============================================================================
+ * Vogue 虎鲸与金鱼 · 输入胶囊 (Vogue Orca Abyss Capsule)
+ * ========================================================================= */
+#text-chat-container {
+    position: fixed !important;
+    bottom: 50px;
+    right: 390px;
+    left: auto;
+    width: 360px !important;
+    max-height: 400px !important;
+    z-index: var(--z-chat) !important;
+    display: none !important;
+    pointer-events: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    transition: opacity var(--t-base) var(--ease), transform var(--t-base) var(--ease);
+}
+
+body.screen-left #text-chat-container {
+    right: auto;
+    left: 20px;
+}
+
+#chat-input-container {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: 6px 12px;
+    border-radius: var(--r-md);
+    background: var(--grad-vogue-glaze);
+    border: 1px solid var(--c-cyan-border);
+    box-shadow: var(--sh-vogue), inset 0 0 0 1px rgba(143, 112, 36, 0.16);
+    transition: border-color var(--t-base) var(--ease), box-shadow var(--t-base) var(--ease), background var(--t-base) var(--ease);
+}
+
+#chat-input-container:hover {
+    border-color: rgba(232, 207, 138, 0.65);
+    box-shadow: 0 12px 36px rgba(4, 7, 14, 0.6), 0 0 22px rgba(232, 207, 138, 0.28);
+}
+
+#chat-input-container:focus-within {
+    border-color: var(--c-goldfish);
+    box-shadow: 0 12px 36px rgba(4, 7, 14, 0.65), 0 0 0 1px var(--c-cyan-glow), 0 0 28px rgba(232, 207, 138, 0.35);
+}
+
+.chat-input-frame {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+}
+
+#chat-input {
+    width: 100%;
+    min-height: 38px;
+    max-height: 110px;
+    padding: 8px 14px;
+    border-radius: var(--r-full);
+    border: none;
+    outline: none;
+    color: var(--c-text);
+    background: transparent;
+    font-family: var(--font-ui);
+    font-size: var(--fs-md);
+    line-height: 1.5;
+    overflow-y: auto;
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+#chat-input:empty::before {
+    content: "";
+}
+
+.chat-input-label {
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--c-text-faint);
+    font-size: var(--fs-md);
+    font-family: var(--font-ui);
+    pointer-events: none;
+    transition: opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.chat-input-frame:focus-within .chat-input-label,
+.chat-input-frame:has(#chat-input:not(:empty)) .chat-input-label {
+    opacity: 0;
+    transform: translateY(-50%) translateX(8px);
+    pointer-events: none;
+}
+
+.chat-input-topline,
+.chat-input-underline {
+    display: none !important;
+}
+
+#chat-send-btn {
+    display: none !important;
+}
+
+/* 兼容多主题选择机制：统一采用 Vogue 虎鲸深渊黑 */
+#text-chat-container[data-style] #chat-input-container,
+#text-chat-container:not([data-style]) #chat-input-container {
+    background: var(--grad-vogue-glaze);
+    border: 1px solid var(--c-cyan-border);
+    box-shadow: var(--sh-vogue), inset 0 0 0 1px rgba(143, 112, 36, 0.16);
+}
+
+#text-chat-container[data-style] #chat-input,
+#text-chat-container:not([data-style]) #chat-input {
+    color: var(--c-text);
+    background: transparent;
+    font-family: var(--font-ui);
+}
+
+/* ============================================================================
+ * Vogue 虎鲸与金鱼 · 拟态对话气泡 (Orca & Goldfish Speech Bubble)
+ * ========================================================================= */
+#bubble-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: var(--z-subtitle);
+    display: none;
+    pointer-events: none;
+    transition: none;
+}
+
+#bubble-text {
+    position: relative;
+    display: inline-block;
+    min-width: 140px;
+    max-width: 300px;
+    padding: 14px 20px;
+    background: var(--grad-vogue-bubble);
+    border: 1px solid var(--c-cyan-border);
+    border-radius: var(--r-md);
+    box-shadow: var(--sh-vogue-bubble), 0 8px 30px rgba(4, 7, 14, 0.55), inset 0 0 0 1px rgba(143, 112, 36, 0.18);
+    font-family: var(--font-ui);
+    font-size: var(--fs-md);
+    font-weight: var(--fw-medium);
+    color: #f2e6c8;
+    line-height: 1.6;
+    text-align: left;
+    word-wrap: break-word;
+    white-space: pre-line;
+    letter-spacing: 0.3px;
+    pointer-events: none;
+    animation: bubble-vogue-breathe 4.2s ease-in-out infinite;
+}
+
+/* 顶部双色发光微光高光线 */
+#bubble-text::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 18px;
+    right: 18px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent 0%, rgba(232, 207, 138, 0.55) 30%, rgba(143, 112, 36, 0.55) 70%, transparent 100%);
+    pointer-events: none;
+}
+
+/* 气泡左下角流线小尾巴 */
+#bubble-text::after {
+    content: '';
+    position: absolute;
+    bottom: -8px;
+    left: 20px;
+    width: 14px;
+    height: 10px;
+    background: inherit;
+    border-left: 1px solid var(--c-cyan-border);
+    border-bottom: 1px solid var(--c-cyan-border);
+    clip-path: polygon(0 0, 100% 0, 20% 100%);
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.45));
+}
+
+@keyframes bubble-vogue-breathe {
+    0%, 100% {
+        transform: translateY(0px);
+        box-shadow: var(--sh-vogue-bubble), 0 8px 26px rgba(4, 7, 14, 0.45);
+    }
+    50% {
+        transform: translateY(-5px);
+        box-shadow: 0 14px 34px rgba(4, 7, 14, 0.55), 0 0 0 1px rgba(232, 207, 138, 0.45), 0 0 24px rgba(143, 112, 36, 0.28);
+    }
+}
+
+/* ============================================================================
+ * Vogue 虎鲸与金鱼 · 歌词气泡 (Orca Abyss Lyrics Bubble)
+ * ========================================================================= */
+#lyrics-bubble-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: var(--z-subtitle);
+    display: none;
+    pointer-events: none;
+    transition: none;
+}
+
+#lyrics-bubble-text {
+    position: relative;
+    display: inline-block;
+    min-width: 160px;
+    max-width: 320px;
+    padding: 14px 22px;
+    background: var(--grad-vogue-bubble);
+    border: 1px solid rgba(232, 207, 138, 0.45);
+    border-radius: var(--r-md);
+    box-shadow: 0 12px 32px rgba(4, 7, 14, 0.55), 0 0 24px rgba(232, 207, 138, 0.22), inset 0 0 0 1px rgba(143, 112, 36, 0.18);
+    font-family: var(--font-ui);
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: #f7ecc8;
+    line-height: 1.55;
+    text-align: center;
+    word-wrap: break-word;
+    white-space: pre-line;
+    pointer-events: none;
+    animation: lyrics-vogue-breathe 3.4s ease-in-out infinite;
+}
+
+#lyrics-bubble-text::before {
+    content: "♫ ";
+    color: var(--c-goldfish-gold);
+    margin-right: 4px;
+}
+
+@keyframes lyrics-vogue-breathe {
+    0%, 100% {
+        transform: translateY(0px) scale(1);
+    }
+    50% {
+        transform: translateY(-6px) scale(1.015);
+    }
+}
+
+/* ============================================================================
+ * Vogue 虎鲸与金鱼 · 工具调用气泡 (Goldfish Fin Glide Tool Bubbles)
+ * ========================================================================= */
+#tool-bubbles-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: var(--z-subtitle);
+    pointer-events: none;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: var(--sp-2);
+    max-height: 80vh;
+    overflow: visible;
+    transition: none;
+    padding: 0;
+}
+
+.tool-bubble {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    min-width: 160px;
+    max-width: 320px;
+    padding: 10px 16px;
+    background: var(--grad-vogue-glaze);
+    border: 1px solid var(--c-cyan-border);
+    border-radius: var(--r-md);
+    box-shadow: var(--sh-md), 0 0 14px rgba(232, 207, 138, 0.18), inset 0 0 0 1px rgba(143, 112, 36, 0.16);
+    font-family: var(--font-ui);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-medium);
+    color: #f2e6c8;
+    line-height: 1.5;
+    text-align: left;
+    word-wrap: break-word;
+    white-space: pre-line;
+    letter-spacing: 0.3px;
+    pointer-events: none;
+    animation: tool-fin-slide-in var(--t-slow) var(--ease);
+    align-self: flex-end;
+}
+
+.tool-bubble-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: var(--c-cyan-glow);
+    opacity: 0.95;
+}
+.tool-bubble-head .ico { width: 13px; height: 13px; }
+.tool-bubble-body {
+    font-size: var(--fs-sm);
+    line-height: 1.5;
+    color: #f2e6c8;
+    white-space: pre-line;
+}
+
+@keyframes tool-fin-slide-in {
+    0% {
+        opacity: 0;
+        transform: translateY(-16px) scale(0.95);
+    }
+    100% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@keyframes tool-fin-slide-out {
+    0% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+    100% {
+        opacity: 0;
+        transform: translateY(-18px) scale(0.96);
+    }
+}
+
+.tool-bubble.removing {
+    animation: tool-fin-slide-out 0.4s var(--ease) forwards;
+}
+
+/* ============================================================================
+ * Vogue 虎鲸与金鱼 · 快捷右键菜单 (Orca Abyss Context Menu)
+ * ========================================================================= */
+#quick-settings {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: var(--z-menu);
+    display: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-2);
+    pointer-events: auto;
+}
+
+#quick-settings.context-open {
+    display: flex;
+}
+
+#quick-settings-items {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 3px;
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: max-height var(--t-slow) var(--ease), opacity var(--t-base) var(--ease);
+}
+
+#quick-settings-items.expanded {
+    max-height: 520px;
+    opacity: 1;
+}
+
+#quick-settings.context-open #quick-settings-items {
+    min-width: 200px;
+    padding: 8px;
+    border: 1px solid var(--c-cyan-border);
+    border-radius: var(--r-md);
+    background: var(--grad-vogue-glaze);
+    box-shadow: 0 16px 40px rgba(4, 7, 14, 0.65), 0 0 24px rgba(232, 207, 138, 0.22), inset 0 0 0 1px rgba(143, 112, 36, 0.18);
+}
+
+.quick-menu-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px 6px;
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-bold);
+    color: var(--c-cyan-glow);
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid rgba(232, 207, 138, 0.2);
+    margin-bottom: 4px;
+}
+
+.quick-header-dot {
+    font-size: 13px;
+    color: var(--c-goldfish-gold);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.quick-header-dot svg {
+    display: block;
+}
+
+.quick-header-text {
+    flex: 1;
+}
+
+.quick-section-label {
+    padding: 6px 8px 2px;
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-medium);
+    color: var(--c-text-faint);
+    letter-spacing: 0.8px;
+}
+
+.quick-item-divider {
+    height: 1px;
+    margin: 4px 6px;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.quick-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    min-height: var(--h-control);
+    border-radius: var(--r-sm);
+    background: transparent;
+    border: none;
+    color: var(--c-text);
+    font-size: var(--fs-md);
+    font-weight: var(--fw-medium);
+    font-family: var(--font-ui);
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+    user-select: none;
+    white-space: nowrap;
+}
+
+.quick-item:hover {
+    background: rgba(232, 207, 138, 0.16);
+    color: #ffffff;
+    transform: translateX(2px);
+}
+
+.quick-item:active {
+    background: rgba(232, 207, 138, 0.26);
+    transform: translateX(1px);
+}
+
+.quick-item.active {
+    background: rgba(232, 207, 138, 0.16);
+    color: var(--c-goldfish-light);
+    box-shadow: inset 2.5px 0 0 var(--c-goldfish-gold);
+}
+
+.quick-item-icon {
+    font-size: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    color: var(--c-cyan-glow);
+    flex-shrink: 0;
+}
+
+.quick-item-icon svg {
+    display: block;
+    width: 16px;
+    height: 16px;
+    stroke: currentColor;
+    pointer-events: none;
+    transition: transform var(--t-fast) var(--ease), stroke var(--t-fast) var(--ease);
+}
+
+.quick-item:hover .quick-item-icon svg {
+    transform: scale(1.12);
+    stroke: var(--c-cyan-light);
+}
+
+.quick-item-text {
+    flex: 1;
+}
+
+.quick-kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-family: Consolas, monospace;
+    font-weight: 700;
+    color: var(--c-cyan-light);
+    background: rgba(232, 207, 138, 0.16);
+    border: 1px solid rgba(232, 207, 138, 0.35);
+    border-radius: 3px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    margin-left: auto;
+}
+
+#quick-gear {
+    width: 44px;
+    height: 44px;
+    border-radius: var(--r-md);
+    background: var(--grad-vogue-glaze);
+    border: 1px solid var(--c-cyan-border);
+    color: #ffffff;
+    font-size: 20px;
+    line-height: 44px;
+    text-align: center;
+    cursor: pointer;
+    transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.35s ease;
+    user-select: none;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55);
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+
+#quick-gear svg {
+    display: block;
+    pointer-events: none;
+}
+
+#quick-gear:hover {
+    border-color: var(--c-cyan-glow);
+    box-shadow: 0 0 16px var(--sh-vogue-glow);
+}
+
+#quick-gear.open {
+    transform: rotate(90deg);
+}
+
+/* ==================== 字幕位置调整模式 ==================== */
+#subtitle-container.subtitle-adjusting {
+    border: 1.5px dashed rgba(232, 207, 138, 0.55) !important;
+    display: block !important;
+    position: fixed !important;
+    overflow: visible !important;
+    z-index: 9999 !important;
+    background: rgba(16, 11, 7, 0.92) !important;
+    box-sizing: border-box;
+    cursor: grab;
+    pointer-events: auto;
+}
+
+#subtitle-confirm-btn {
+    display: none;
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 28px;
+    height: 28px;
+    background: linear-gradient(135deg, rgba(143, 112, 36, 0.95), rgba(232, 207, 138, 0.85));
+    color: #ffffff;
+    border: 1px solid rgba(232, 207, 138, 0.85);
+    border-radius: var(--r-sm);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 26px;
+    text-align: center;
+    cursor: pointer;
+    z-index: 10001;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+    user-select: none;
+    -webkit-user-select: none;
+    transition: background 0.15s ease, transform 0.15s ease;
+    pointer-events: auto !important;
+}
+
+#subtitle-confirm-btn:hover {
+    background: rgba(232, 207, 138, 0.95);
+    transform: scale(1.1);
+}
+
+#subtitle-container.subtitle-adjusting #subtitle-confirm-btn {
+    display: block;
+}
+
+/* ==================== 响应式布局 (桌宠 420x760 窄窗适配) ==================== */
+@media (max-width: 699px) {
+    #text-chat-container {
+        left: 16px !important;
+        right: 16px !important;
+        width: calc(100vw - 32px) !important;
+        max-width: calc(100vw - 32px) !important;
+        box-sizing: border-box !important;
+        bottom: 20px !important;
+    }
+
+    #text-chat-container #chat-input {
+        box-sizing: border-box !important;
+    }
+
+    #subtitle-container {
+        bottom: 132px !important;
+        max-height: 126px !important;
+        overflow-y: auto !important;
+        width: 92vw !important;
+        max-width: 92vw !important;
+        box-sizing: border-box !important;
+    }
+
+    #subtitle-container::-webkit-scrollbar { display: none; }
+}
+
+/* ============================================================================
+ * Vogue 虎鲸与金鱼 · 换装面板 (Orca Costume Panel)
+ * ========================================================================= */
+#costume-panel {
+    position: fixed;
+    z-index: 1002;
+    min-width: 220px;
+    max-width: 280px;
+    padding: 12px;
+    border: 1px solid var(--c-cyan-border);
+    border-radius: var(--r-md);
+    background: rgba(20, 14, 9, 0.96);
+    box-shadow: 0 16px 40px rgba(4, 7, 14, 0.6), 0 0 20px rgba(232, 207, 138, 0.18), inset 0 0 0 1px rgba(143, 112, 36, 0.18);
+    color: var(--c-text);
+    font-size: var(--fs-sm);
+    pointer-events: auto;
+    max-height: 74vh;
+    overflow-y: auto;
+}
+
+#costume-panel::-webkit-scrollbar {
+    width: 6px;
+}
+
+#costume-panel::-webkit-scrollbar-thumb {
+    background: rgba(232, 207, 138, 0.3);
+    border-radius: var(--r-full);
+}
+
+#costume-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: var(--fw-bold);
+    padding: 0 2px 8px;
+    letter-spacing: 0.5px;
+    color: var(--c-cyan-light);
+    border-bottom: 1px solid rgba(232, 207, 138, 0.22);
+    margin-bottom: 10px;
+}
+
+#costume-close {
+    cursor: pointer;
+    opacity: 0.65;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 4px;
+    transition: opacity var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+
+#costume-close:hover {
+    opacity: 1;
+    color: var(--c-cyan-glow);
+}
+
+.costume-group {
+    margin-bottom: 10px;
+}
+
+.costume-group:last-child {
+    margin-bottom: 0;
+}
+
+.costume-label {
+    color: var(--c-text-muted);
+    font-size: var(--fs-xs);
+    margin: 0 2px 5px;
+    font-weight: var(--fw-medium);
+}
+
+.costume-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.costume-chip {
+    padding: 5px 10px;
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--c-text);
+    font-size: var(--fs-xs);
+    transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+    user-select: none;
+}
+
+.costume-chip:hover {
+    background: rgba(232, 207, 138, 0.16);
+    border-color: rgba(232, 207, 138, 0.45);
+}
+
+.costume-chip:active {
+    transform: scale(0.96);
+}
+
+.costume-chip.on {
+    background: rgba(232, 207, 138, 0.22);
+    border-color: var(--c-goldfish);
+    color: #ffffff;
+    box-shadow: inset 0 0 0 1px rgba(232, 207, 138, 0.45), 0 0 12px rgba(232, 207, 138, 0.3);
+}
+
+
+/* ============================================================================
+ * 桌宠生命力感知光环 / 状态反馈 (Classic Blue-Black Life-Force Aura & State Feedback)
+ * ========================================================================= */
+#pet-state-aura {
+    position: fixed;
+    top: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-10px) scale(0.92);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    border-radius: var(--r-md);
+    background: rgba(20, 14, 9, 0.96);
+    border: 1px solid rgba(232, 207, 138, 0.4);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8), 0 0 16px rgba(143, 112, 36, 0.3), inset 0 0 0 1px rgba(143, 112, 36, 0.20);
+    color: #f2e6c8;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 999;
+    transition: opacity 0.32s cubic-bezier(0.2, 0.8, 0.25, 1), transform 0.32s cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+
+#pet-state-aura .aura-icon {
+    font-size: 14px;
+    color: #d9bd72;
+    filter: drop-shadow(0 0 6px #d9bd72);
+    animation: auraPulse 1.8s infinite ease-in-out;
+}
+
+#pet-state-aura .aura-text {
+    font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    color: #f7ecc8;
+}
+
+@keyframes auraPulse {
+    0%, 100% { transform: scale(1); filter: drop-shadow(0 0 4px #d9bd72); }
+    50% { transform: scale(1.18); filter: drop-shadow(0 0 10px #ecda9f); }
+}
+
+body.state-listening #pet-state-aura,
+body.state-thinking #pet-state-aura,
+body.state-speaking #pet-state-aura,
+body.state-acting #pet-state-aura {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+}
+
+body.state-listening #pet-state-aura {
+    border-color: rgba(236, 218, 159, 0.60);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8), 0 0 14px rgba(236, 218, 159, 0.26), inset 0 0 0 1px rgba(143, 112, 36, 0.18);
+}
+body.state-listening #pet-state-aura .aura-icon { color: #ecda9f; filter: drop-shadow(0 0 6px #ecda9f); }
+
+body.state-thinking #pet-state-aura {
+    border-color: rgba(217, 164, 65, 0.70);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8), 0 0 16px rgba(217, 164, 65, 0.30), inset 0 0 0 1px rgba(143, 112, 36, 0.20);
+}
+body.state-thinking #pet-state-aura .aura-icon { color: #d9a441; filter: drop-shadow(0 0 6px #d9a441); }
+
+body.state-speaking #pet-state-aura {
+    border-color: rgba(247, 236, 200, 0.55);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.75), 0 0 12px rgba(247, 236, 200, 0.20), inset 0 0 0 1px rgba(143, 112, 36, 0.16);
+}
+body.state-speaking #pet-state-aura .aura-icon { color: #f7ecc8; filter: drop-shadow(0 0 6px #f7ecc8); }
+
+body.state-acting #pet-state-aura {
+    border-color: rgba(156, 53, 39, 0.85);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8), 0 0 16px rgba(156, 53, 39, 0.40), inset 0 0 0 1px rgba(156, 53, 39, 0.30);
+}
+body.state-acting #pet-state-aura .aura-icon { color: #c96a5a; filter: drop-shadow(0 0 6px #9c3527); }
+
+body.state-listening .avatar-container canvas {
+    filter: drop-shadow(0 0 12px rgba(236, 218, 159, 0.18));
+    transition: filter 0.4s ease;
+}
+body.state-thinking .avatar-container canvas {
+    filter: drop-shadow(0 0 14px rgba(217, 164, 65, 0.22));
+    transition: filter 0.4s ease;
+}
+body.state-speaking .avatar-container canvas {
+    filter: drop-shadow(0 0 12px rgba(247, 236, 200, 0.16));
+    transition: filter 0.4s ease;
+}
+body.state-acting .avatar-container canvas {
+    filter: drop-shadow(0 0 15px rgba(156, 53, 39, 0.30));
+    transition: filter 0.4s ease;
+}
+
+
+/* ============================================================================
+ * 图标系统（2026-11-16）：Lucide ISC 图标（sprite 内联在 index.html）
+ * 统一 24 视窗 / 2px 描边 / currentColor，跟画框语言一致（不用 emoji）
+ * ========================================================================== */
+.ico {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    display: block;
+    width: 16px;
+    height: 16px;
+}
+#pet-state-aura .aura-icon .ico { width: 14px; height: 14px; }
+.ctrl-btn .ctrl-icon.ico { width: 18px; height: 18px; }
+.goldfish-dot.ico { width: 14px; height: 14px; flex: none; }
+.quick-item-icon .ico { width: 16px; height: 16px; }

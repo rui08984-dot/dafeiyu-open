@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <!-- 设计令牌必须先于 styles.css 加载：styles.css 里的组件样式引用 var(--c-*)/--sp-* 等 -->
+    <link rel="stylesheet" href="css/tokens.css">
+    <link rel="stylesheet" href="css/styles.css">
+    <style>body { background: transparent !important; }</style>
+    <title>Live2D桌宠与语音聊天</title>
+</head>
+
+<body>
+<svg id="pet-icon-sprite" width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 19v3" />
+  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+  <rect x="9" y="2" width="6" height="13" rx="3" /></symbol>
+  <symbol id="i-brain" viewBox="0 0 24 24"><path d="M12 18V5" />
+  <path d="M15 13a4.17 4.17 0 01-3-4 4.17 4.17 0 01-3 4" />
+  <path d="M17.707 6.294A3 3 0 1012 5a3 3 0 10-5.707 1.294" />
+  <path d="M17.996 5.125a4 4 0 012.526 5.77" />
+  <path d="M18 18a4 4 0 002-7.465" />
+  <path d="M19.967 17.482a4 4 0 11-7.967.517 4 4 0 11-7.967-.517" />
+  <path d="M6 18a4 4 0 01-2-7.465" />
+  <path d="M6.004 5.125a4 4 0 00-2.526 5.77" /></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z" />
+  <path d="M20 2v4" />
+  <path d="M22 4h-4" />
+  <circle cx="4" cy="20" r="2" /></symbol>
+  <symbol id="i-volume-2" viewBox="0 0 24 24"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z" />
+  <path d="M16 9a5 5 0 0 1 0 6" />
+  <path d="M19.364 18.364a9 9 0 0 0 0-12.728" /></symbol>
+  <symbol id="i-mouse-pointer-2" viewBox="0 0 24 24"><path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z" /></symbol>
+  <symbol id="i-fish" viewBox="0 0 24 24"><path d="M6.5 12c.94-3.46 4.94-6 8.5-6 3.56 0 6.06 2.54 7 6-.94 3.47-3.44 6-7 6s-7.56-2.53-8.5-6Z" />
+  <path d="M18 12v.5" />
+  <path d="M16 17.93a9.77 9.77 0 0 1 0-11.86" />
+  <path d="M7 10.67C7 8 5.58 5.97 2.73 5.5c-1 1.5-1 5 .23 6.5-1.24 1.5-1.24 5-.23 6.5C5.58 18.03 7 16 7 13.33" />
+  <path d="M10.46 7.26C10.2 5.88 9.17 4.24 8 3h5.8a2 2 0 0 1 1.98 1.67l.23 1.4" />
+  <path d="m16.01 17.93-.23 1.4A2 2 0 0 1 13.8 21H9.5a5.96 5.96 0 0 0 1.49-3.98" /></symbol>
+  <symbol id="i-message-square-text" viewBox="0 0 24 24"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" />
+  <path d="M7 11h10" />
+  <path d="M7 15h6" />
+  <path d="M7 7h8" /></symbol>
+  <symbol id="i-shirt" viewBox="0 0 24 24"><path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z" /></symbol>
+  <symbol id="i-drama" viewBox="0 0 24 24"><path d="M10 11h.01" />
+  <path d="M14 6h.01" />
+  <path d="M18 6h.01" />
+  <path d="M6.5 13.1h.01" />
+  <path d="M22 5c0 9-4 12-6 12s-6-3-6-12c0-2 2-3 6-3s6 1 6 3" />
+  <path d="M17.4 9.9c-.8.8-2 .8-2.8 0" />
+  <path d="M10.1 7.1C9 7.2 7.7 7.7 6 8.6c-3.5 2-4.7 3.9-3.7 5.6 4.5 7.8 9.5 8.4 11.2 7.4.9-.5 1.9-2.1 1.9-4.7" />
+  <path d="M9.1 16.5c.3-1.1 1.4-1.7 2.4-1.4" /></symbol>
+  <symbol id="i-hand" viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2" />
+  <path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2" />
+  <path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8" />
+  <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" /></symbol>
+  <symbol id="i-heart" viewBox="0 0 24 24"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5" /></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" />
+  <circle cx="12" cy="12" r="3" /></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" />
+  <circle cx="12" cy="12" r="3" /></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" />
+  <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" />
+  <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" />
+  <path d="m2 2 20 20" /></symbol>
+  <symbol id="i-radio" viewBox="0 0 24 24"><path d="M16.247 7.761a6 6 0 0 1 0 8.478" />
+  <path d="M19.075 4.933a10 10 0 0 1 0 14.134" />
+  <path d="M4.925 19.067a10 10 0 0 1 0-14.134" />
+  <path d="M7.753 16.239a6 6 0 0 1 0-8.478" />
+  <circle cx="12" cy="12" r="2" /></symbol>
+  <symbol id="i-rotate-ccw" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+  <path d="M3 3v5h5" /></symbol>
+  <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z" /></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18" />
+  <path d="m6 6 12 12" /></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z" />
+  <path d="m21.854 2.147-10.94 10.939" /></symbol>
+</svg>
+    <div id="live2d-container" class="avatar-container">
+        <canvas id="canvas"></canvas>
+    </div>
+    <div id="vrm-container" class="avatar-container" style="display: none;">
+        <canvas id="vrm-canvas"></canvas>
+    </div>
+    <div id="mmd-container" class="avatar-container" style="display: none;">
+        <canvas id="mmd-canvas"></canvas>
+    </div>
+    <div id="avatar-transition" aria-hidden="true">
+        <div class="avatar-transition-spinner"></div>
+    </div>
+
+    <!-- 桌宠生命力感知光环 / 状态徽章 (Classic Blue-Black Life-Force Aura & State Feedback) -->
+    <div id="pet-state-aura" aria-hidden="true">
+        <span class="aura-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sparkles"></use></svg></span>
+        <span class="aura-text"></span>
+    </div>
+    <div id="subtitle-container">
+        <div id="subtitle-confirm-btn">确定</div>
+        <p id="subtitle-text"></p>
+    </div>
+
+    <!-- VRM模型控制面板（展开式） -->
+    <div id="model-controls">
+        <section id="panel-buttons">
+            <button id="btn-toggle-gaze" class="ctrl-btn" title="视线追踪鼠标"><svg class="ico ctrl-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-eye"></use></svg></button>
+            <button id="btn-toggle-render" class="ctrl-btn" title="关闭VRM渲染（需VMC启用）"><svg class="ico ctrl-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-eye-off"></use></svg></button>
+            <button id="btn-toggle-vmc" class="ctrl-btn" title="VMC数据发送开关"><svg class="ico ctrl-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-radio"></use></svg></button>
+            <button id="btn-reset-position" class="ctrl-btn" title="重置相机视角"><svg class="ico ctrl-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-rotate-ccw"></use></svg></button>
+            <button id="btn-click-through" class="ctrl-btn" title="鼠标穿透（模型不拦截鼠标）"><svg class="ico ctrl-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mouse-pointer-2"></use></svg></button>
+        </section>
+        <button id="btn-toggle-panel" class="ctrl-btn" title="展开控制面板"><svg class="ico ctrl-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-settings"></use></svg></button>
+    </div>
+
+    <div id="text-chat-container">
+        <div id="chat-messages"></div>
+        <div id="chat-input-container">
+            <div class="chat-input-frame">
+                <div id="chat-input" contenteditable="true" role="textbox" aria-label="输入消息"></div>
+                <span class="chat-input-label"><svg class="ico goldfish-dot" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-fish"></use></svg><span>输入消息，回车发送</span></span>
+                <span class="chat-input-topline"></span>
+                <span class="chat-input-underline"></span>
+            </div>
+            <button id="chat-send-btn" type="button" hidden aria-hidden="true" tabindex="-1">发送</button>
+        </div>
+    </div>
+
+    <!-- 歌词气泡容器 -->
+    <div id="lyrics-bubble-container">
+        <div id="lyrics-bubble-text"></div>
+    </div>
+
+    <!-- 气泡框容器 -->
+    <div id="bubble-container">
+        <div id="bubble-text"></div>
+    </div>
+
+    <!-- 工具调用气泡框堆叠容器 -->
+    <div id="tool-bubbles-container"></div>
+
+    <!-- 快捷设置面板 -->
+    <div id="quick-settings">
+        <section id="quick-settings-items">
+            <header class="quick-menu-header">
+                <span class="quick-header-dot"><svg class="ico goldfish-dot" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-fish"></use></svg></span>
+                <span class="quick-header-text">桌宠快捷指令</span>
+            </header>
+            <span class="quick-section-label">交互</span>
+            <button class="quick-item" id="btn-toggle-chat" title="打字框" aria-label="打字框"><span class="quick-item-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-message-square-text"></use></svg></span><span class="quick-item-text">打字框</span></button>
+            <button class="quick-item" id="btn-toggle-mode" title="按键录音" aria-label="按键录音"><span class="quick-item-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mic"></use></svg></span><span class="quick-item-text">按键录音</span><span class="quick-kbd">V</span></button>
+            <hr class="quick-item-divider">
+            <span class="quick-section-label">才艺</span>
+            <button class="quick-item" id="btn-quick-costume" title="随心配换装" aria-label="随心配换装"><span class="quick-item-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-shirt"></use></svg></span><span class="quick-item-text">随心配换装</span></button>
+            <button class="quick-item" id="btn-quick-perform" title="才艺演一段" aria-label="才艺演一段"><span class="quick-item-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-drama"></use></svg></span><span class="quick-item-text">才艺演一段</span></button>
+            <button class="quick-item" id="btn-quick-gesture" title="换个动作" aria-label="换个动作"><span class="quick-item-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-hand"></use></svg></span><span class="quick-item-text">换个动作</span></button>
+            <button class="quick-item" id="btn-quick-mood" title="她现在的心情" aria-label="她现在的心情"><span class="quick-item-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-heart"></use></svg></span><span class="quick-item-text">她现在的心情</span></button>
+            <hr class="quick-item-divider">
+            <span class="quick-section-label">系统</span>
+            <button class="quick-item" id="btn-quick-settings" title="控制中心" aria-label="控制中心"><span class="quick-item-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-settings"></use></svg></span><span class="quick-item-text">控制中心</span></button>
+            <button class="quick-item" id="btn-quick-hide" title="先藏起来" aria-label="先藏起来"><span class="quick-item-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-eye-off"></use></svg></span><span class="quick-item-text">先藏起来</span></button>
+        </section>
+        <div id="quick-gear" title="快捷功能" aria-label="快捷功能"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-settings"></use></svg></div>
+    </div>
+
+    <!-- 换装面板：右键快捷菜单「随心配换装」打开。按互斥组排，点一下就穿上，再点一下脱掉。 -->
+    <div id="costume-panel" style="display:none">
+        <div id="costume-head">
+            <span>换装</span>
+            <span id="costume-close">×</span>
+        </div>
+        <div id="costume-body"></div>
+    </div>
+
+    <!-- 上游 PIXI 6 + pixi-live2d-display 运行时 -->
+    <script src="libs/live2d.min.js"></script>
+    <script src="libs/live2dcubismcore.min.js"></script>
+<script src="libs/live2dcubismcore.petbody.js"></script>
+    <script src="libs/pixi.min.js"></script>
+    <script src="libs/pixi-live2d-display.min.js"></script>
+    <script src="libs/pixi-live2d-display-extra.min.js"></script>
+    <script src="js/avatar/petbody/assets-data.js"></script>
+<script src="build/petbody.js"></script>
+<script src="app.js"></script>
+
+
+</body>
+
+</html>

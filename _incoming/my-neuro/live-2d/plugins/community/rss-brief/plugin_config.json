@@ -1,0 +1,59 @@
+{
+  "enabled": {
+    "title": "启用 RSS 今日简报",
+    "description": "默认关闭。开启前请先在 data/feeds.json 里配置至少一个源，否则定时器只会空转（不会报错，但也不会有简报）",
+    "type": "bool",
+    "default": false,
+    "value": false
+  },
+  "interval_minutes": {
+    "title": "抓取间隔（分钟）",
+    "description": "串行抓取所有启用源的最小间隔。建议 30–60；小于 1 按 1 处理",
+    "type": "int",
+    "default": 45,
+    "value": 45
+  },
+  "push_windows": {
+    "title": "推送窗口",
+    "description": "每天哪几个时刻尝试推送（本地时间 HH:MM，逗号分隔）。窗口 ±5 分钟内只推一次；数组形式也接受",
+    "type": "list",
+    "default": [
+      "08:30",
+      "12:30",
+      "19:30"
+    ],
+    "value": [
+      "08:30",
+      "12:30",
+      "19:30"
+    ]
+  },
+  "max_push_per_day": {
+    "title": "每日推送上限（条）",
+    "description": "一天最多标记多少条为已推送；实际每次窗口最多取 top_n 条，且不会超过本上限",
+    "type": "int",
+    "default": 3,
+    "value": 3
+  },
+  "top_n": {
+    "title": "每次窗口条数",
+    "description": "每个推送窗口取分数最高的前 N 条（默认 3）",
+    "type": "int",
+    "default": 3,
+    "value": 3
+  },
+  "max_items": {
+    "title": "候选池上限（条）",
+    "description": "rss-items.jsonl 里未推送条目最多保留多少条；超出时删最旧的。已推送的最近 20 条会额外保留，供 novelty 去重参考",
+    "type": "int",
+    "default": 400,
+    "value": 400
+  },
+  "hostUrl": {
+    "title": "宿主简报接口（可选）",
+    "description": "非空时，推送成功后向 {hostUrl}/rss/brief POST {at,picked,items}，供主控注入世界行；失败只记日志，不影响落盘。留空则不通知",
+    "type": "string",
+    "default": "",
+    "value": ""
+  }
+}

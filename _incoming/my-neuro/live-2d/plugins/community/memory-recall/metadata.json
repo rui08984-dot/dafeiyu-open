@@ -1,0 +1,8 @@
+{
+  "name": "memory-recall",
+  "displayName": "长期记忆检索",
+  "version": "1.0.0",
+  "description": "在对话历史、日记、记忆库里做本地检索；用户提到过去的事时自动把相关片段注入上下文，让她真的「记得」。",
+  "author": "pet-runtime",
+  "main": "index.js"
+}

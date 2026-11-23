@@ -1,0 +1,512 @@
+/* ============================================================================
+ * control-v2-frame.css —— 「古董画框」皮肤层（2026-11-16）
+ *
+ * 为什么是独立一层而不是改 control-v2.css：
+ *   原文件 49KB / 182 处变量引用，直接改会散、也回不了滚。这里用「重定义令牌 +
+ *   关键容器覆盖」做皮肤，control-v2.html 里在本文件之前加载原样式即可。
+ *   想回退：删掉那行 <link> 就回到深海蓝黑。
+ *
+ * 语言（用户拍板）：
+ *   外框＝木（深棕带木纹） → 中间＝黄铜浮雕双线 → 内衬＝绒布/羊皮纸
+ *   圆角 2–3px，禁止胶囊与毛玻璃；强调色只留火漆红；青蓝全部退场。
+ * ========================================================================= */
+
+:root {
+  /* ── 底色：木与绒布，不再有蓝 ── */
+  --bg:             #0d0906;
+  --surface:        rgba(24, 17, 11, 0.97);
+  --surface-card:   rgba(19, 28, 23, 0.94);
+  --surface-raised: rgba(33, 23, 15, 0.97);
+
+  /* ── 文字：羊皮纸米白 → 淡铜 → 暗褐 ── */
+  --ink:            #f2e6c8;
+  --ink-2:          #bfa87f;
+  --ink-3:          #7e6e52;
+
+  /* ── 线条：黄铜，不再是青光 ── */
+  --line:           rgba(232, 207, 138, 0.13);
+  --line-2:         rgba(232, 207, 138, 0.30);
+  --hover:          rgba(74, 53, 26, 0.42);
+  --active-soft:    rgba(232, 207, 138, 0.15);
+
+  /* ── 强调：全部指向黄铜（原变量名保留，避免逐处改引用）── */
+  --accent:         #d9bd72;
+  --accent-ice:     #f7ecc8;
+  --accent-gold:    #ecda9f;
+  --cyan:           #d9bd72;
+  --cyan-light:     #f7ecc8;
+  --ocean:          #8f7024;
+  --goldfish:       #ecda9f;
+
+  /* ── 状态色也换成暖系 ── */
+  --ok:             #8aa864;
+  --warn:           #d9a441;
+  --bad:            #b8473a;
+
+  --radius:         2px;
+
+  /* 画框专用（新增，供本层内部使用）*/
+  --fx-brass-100:   #f7ecc8;
+  --fx-brass-200:   #ecda9f;
+  --fx-brass-300:   #d9bd72;
+  --fx-brass-500:   #8f7024;
+  --fx-brass-700:   #5c4613;
+  --fx-brass-900:   #2e2309;
+  --fx-seal:        #9c3527;
+}
+
+/* ══ 窗口外壳：木框 + 铜浮雕双线 ═══════════════════════════════════════════ */
+.shell {
+  position: relative;
+  padding: 22px;                     /* 木框的厚度 */
+  border: 0;
+  border-radius: 3px;
+  background:
+    repeating-linear-gradient(92deg, rgba(255, 236, 200, 0.042) 0 1px, transparent 1px 5px),
+    repeating-linear-gradient(89deg, rgba(0, 0, 0, 0.42) 0 2px, transparent 2px 8px),
+    linear-gradient(160deg, #6b4d31, #3e2a1a 42%, #1d130a);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.9),
+    inset 0 2px 0 rgba(255, 240, 200, 0.13),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.8),
+    0 24px 64px rgba(0, 0, 0, 0.8);
+}
+/* 外层粗铜线（2026-11-16：border-image+conic 与 mask-composite 两版在
+   Electron 28 的 Chromium 上都不渲染，实测只有「实心 border + 三层 box-shadow」
+   稳定。金属感靠外暗线/内高光/内暗部三层叠出来，不靠渐变。）*/
+.shell::before {
+  content: ""; position: absolute; inset: 6px; z-index: 99990; pointer-events: none;
+  border: 8px solid #b8912f;
+  box-shadow:
+    0 0 0 1px #2e2309,
+    0 0 0 2px rgba(247, 236, 200, 0.22),
+    inset 0 0 0 1px rgba(255, 248, 220, 0.55),
+    inset 0 0 0 4px rgba(92, 70, 19, 0.7);
+}
+/* 内层细铜线 + 四角雕花 */
+.shell::after {
+  content: ""; position: absolute; inset: 30px; z-index: 99991; pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(247, 236, 200, 0.42), inset 0 0 16px rgba(0, 0, 0, 0.5);
+  /* 四角雕花：openclipart CC0（rebeccaread 281797），已做四向镜像变体，
+     见 assets/ornaments/CREDITS.md。2026-11-16 从手绘 SVG 换成开源素材。 */
+  background-image:
+    url("assets/ornaments/corner-tl.svg"),
+    url("assets/ornaments/corner-tr.svg"),
+    url("assets/ornaments/corner-bl.svg"),
+    url("assets/ornaments/corner-br.svg");
+  background-repeat: no-repeat;
+  background-position: 1px 1px, calc(100% - 1px) 1px, 1px calc(100% - 1px), calc(100% - 1px) calc(100% - 1px);
+  background-size: 62px 62px;
+  opacity: 0.9;
+}
+/* 四角花枝改成金枝玉叶（原来是青花，现在是雕花的一部分）*/
+.branch-stem, .branch-twig {
+  background: linear-gradient(180deg, var(--fx-brass-500), #3a2a08) !important;
+}
+.branch-bud {
+  background: radial-gradient(circle at 35% 30%, var(--fx-brass-100), var(--fx-brass-300)) !important;
+  box-shadow: 0 0 6px rgba(236, 218, 159, 0.35) !important;
+}
+.blossom-petal {
+  background: radial-gradient(circle at 40% 35%, var(--fx-brass-100), var(--fx-brass-300) 62%, var(--fx-brass-500)) !important;
+}
+.blossom-core { background: var(--fx-seal) !important; }
+
+/* ══ 标题栏：透出木纹，只留一条金线 ═══════════════════════════════════════ */
+.titlebar {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(232, 207, 138, 0.20) !important;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.6);
+}
+.brand { letter-spacing: 0.16em; }
+.brand, .brand * { font-family: Georgia, "Source Han Serif SC", "Noto Serif CJK SC", serif; }
+.brand .brand-title, .brand span { color: var(--fx-brass-200) !important; }
+/* 品牌右上角的小徽章（CONTROL）*/
+.brand-badge, .brand .tag, .titlebar .badge {
+  color: var(--fx-brass-300) !important;
+  border-color: rgba(232, 207, 138, 0.34) !important;
+  background: rgba(46, 35, 9, 0.6) !important;
+}
+
+/* ══ 侧栏：绒布底 + 选中金条 ══════════════════════════════════════════════ */
+.sidebar {
+  background:
+    radial-gradient(120% 60% at 50% 0%, rgba(255, 240, 200, 0.045), transparent 62%),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.012) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg, #182520, #0b1410) !important;
+  border-right: 1px solid rgba(232, 207, 138, 0.18) !important;
+}
+.nav {
+  border-radius: 2px;
+  color: var(--ink-2);
+  letter-spacing: 0.04em;
+}
+.nav:hover { background: rgba(74, 53, 26, 0.38) !important; color: var(--fx-brass-200) !important; }
+.nav.active, .nav[aria-current="page"] {
+  background: linear-gradient(90deg, rgba(232, 207, 138, 0.17), rgba(232, 207, 138, 0.03)) !important;
+  border-color: rgba(232, 207, 138, 0.32) !important;
+  color: var(--fx-brass-100) !important;
+  box-shadow: inset 2px 0 0 var(--fx-brass-300), inset 0 1px 0 rgba(255, 240, 200, 0.12);
+}
+.nav-icon { color: var(--fx-brass-300) !important; }
+.nav.active .nav-icon { color: var(--fx-brass-100) !important; }
+
+/* ══ 内容区：更深的绒布 ═════════════════════════════════════════════════════ */
+.content {
+  background:
+    radial-gradient(130% 70% at 50% -10%, rgba(255, 240, 200, 0.035), transparent 62%),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.010) 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.14) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg, #0d1611, #090f0c) !important;
+}
+.content::after {
+  background: linear-gradient(to bottom, transparent, #090f0c 82%) !important;
+}
+
+/* ══ 标题与分节：衬线 + 宽字距 ═════════════════════════════════════════════ */
+.page-head h1, .pages h1 {
+  font-family: Georgia, "Source Han Serif SC", "Noto Serif CJK SC", serif !important;
+  font-weight: 500 !important;
+  font-size: 19px !important;
+  letter-spacing: 0.16em !important;
+  color: var(--fx-brass-200) !important;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
+}
+.page-sub { color: var(--ink-3) !important; letter-spacing: 0.02em; }
+h2.sec {
+  font-family: Georgia, "Source Han Serif SC", "Noto Serif CJK SC", serif !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.30em !important;
+  text-transform: uppercase !important;
+  color: var(--fx-brass-300) !important;
+  display: flex; align-items: center; gap: 10px;
+}
+h2.sec::after {
+  content: ""; flex: 1; height: 1px;
+  background: linear-gradient(90deg, var(--fx-brass-700), transparent);
+}
+.hint { color: var(--ink-3) !important; font-size: 11.5px !important; }
+
+/* ══ 行：细金线分隔，不要卡片阴影 ═════════════════════════════════════════ */
+.rows { border-top: 1px solid rgba(232, 207, 138, 0.14) !important; }
+.row { border-bottom: 1px solid rgba(232, 207, 138, 0.07); }
+.row-label { color: var(--ink) !important; }
+.row .sub { color: var(--ink-3) !important; }
+.row-value { color: var(--fx-brass-300) !important; font-family: Georgia, ui-monospace, monospace; }
+
+/* ══ 开关：黄铜拨杆（方槽 + 铜钮）═════════════════════════════════════════ */
+.switch i,
+.switch .track {
+  background: linear-gradient(180deg, var(--fx-brass-900), #1a1209) !important;
+  border-radius: 2px !important;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.9), inset 0 -1px 0 rgba(232, 207, 138, 0.14) !important;
+}
+.switch input:checked + i,
+.switch input:checked + .track {
+  background: linear-gradient(150deg, var(--fx-brass-100), var(--fx-brass-300) 45%, var(--fx-brass-500)) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 250, 225, 0.72) !important;
+}
+/* 圆点如果存在（胶囊型开关）也做成铜钮 */
+.switch i::after, .switch .knob {
+  background: linear-gradient(150deg, #fff8e4, var(--fx-brass-300) 45%, var(--fx-brass-500)) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 250, 225, 0.8) !important;
+}
+
+/* ══ 按钮：铜牌，按下内陷 ══════════════════════════════════════════════════ */
+.btn {
+  border-radius: 2px !important;
+  border: 1px solid var(--fx-brass-700) !important;
+  background: linear-gradient(180deg, #2c2014, #170f09) !important;
+  color: var(--fx-brass-200) !important;
+  letter-spacing: 0.10em;
+  box-shadow: inset 0 1px 0 rgba(232, 207, 138, 0.14), 0 2px 4px rgba(0, 0, 0, 0.5) !important;
+}
+.btn:hover { background: linear-gradient(180deg, #3a2a18, #201509) !important; color: var(--fx-brass-100) !important; }
+.btn:active { transform: translateY(1px); box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.75) !important; }
+.btn.primary {
+  background: linear-gradient(180deg, var(--fx-brass-100), var(--fx-brass-300) 48%, var(--fx-brass-500)) !important;
+  color: #2b2014 !important;
+  border-color: var(--fx-brass-700) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 248, 220, 0.6), 0 2px 4px rgba(0, 0, 0, 0.55) !important;
+}
+.btn.stop, .btn.danger { background: linear-gradient(180deg, #a03a2c, #6f2318) !important; color: #ffe9d6 !important; border-color: #4e170f !important; }
+
+/* ══ 输入 / 下拉 / 文本域：内凹纸面 ════════════════════════════════════════ */
+input[type="text"], input[type="password"], input[type="number"], input[type="search"],
+select, textarea {
+  border-radius: 2px !important;
+  border: 1px solid var(--fx-brass-700) !important;
+  background: linear-gradient(180deg, #2a1f14, #1b130c) !important;
+  color: var(--ink) !important;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.8), 0 1px 0 rgba(255, 240, 200, 0.06) !important;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none !important;
+  border-color: var(--fx-brass-300) !important;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.8), 0 0 0 2px rgba(232, 207, 138, 0.16) !important;
+}
+input::placeholder, textarea::placeholder { color: var(--ink-3) !important; }
+option { background: #1b130c; color: var(--ink); }
+
+/* ══ 日志/代码块：羊皮纸 ═══════════════════════════════════════════════════ */
+.log-pane {
+  border-radius: 2px !important;
+  border: 1px solid rgba(232, 207, 138, 0.16) !important;
+  background: rgba(10, 14, 11, 0.86) !important;
+}
+.log-pane header {
+  background: linear-gradient(180deg, rgba(232, 207, 138, 0.08), transparent) !important;
+  border-bottom: 1px solid rgba(232, 207, 138, 0.14) !important;
+  color: var(--fx-brass-300) !important;
+  letter-spacing: 0.14em;
+}
+.log-pane pre, .mono { color: #cbb995 !important; }
+
+/* ══ 保存条：铜底 ═════════════════════════════════════════════════════════ */
+.savebar {
+  background: linear-gradient(180deg, rgba(46, 35, 9, 0.97), rgba(21, 15, 8, 0.98)) !important;
+  border-top: 1px solid rgba(232, 207, 138, 0.28) !important;
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.6) !important;
+}
+
+/* ══ 选中与滚动条 ═════════════════════════════════════════════════════════ */
+::selection { background: rgba(232, 207, 138, 0.32) !important; color: #fff8e4 !important; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--fx-brass-500), var(--fx-brass-700)) !important;
+  border-radius: 2px !important;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--fx-brass-300) !important; }
+::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.35) !important; }
+
+/* ══ 状态点：在线＝橄榄绿、告警＝铜黄、错误＝火漆红 ═══════════════════════ */
+.dot.ok, .status-dot.ok { background: var(--ok) !important; }
+.dot.bad, .status-dot.bad { background: var(--bad) !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   2026-11-16 第二批：停旧动效 / 去青花枝 / 补未覆盖的共用控件
+   依据：三路审计的结论——控制中心残留 6 个旧 keyframes、88 处青蓝色字面量、
+   知识库/技能/操控/记录四页几乎没被上一版皮肤覆盖。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── ① 旧动效全部停掉（画框语言只留过渡与「按下内陷」）── */
+.page, .page.active { animation: none !important; }
+.svc .dot, .status-dot { animation: none !important; }
+.pill.pulse-warn, .pulse-warn { animation: none !important; }
+.modal-card, .modal.open .modal-card { animation: none !important; }
+* { animation-iteration-count: 1 !important; }
+
+/* ── ② 青色花枝退场（80 个 petal 元素 + 5s 呼吸），四角改由本层的铜雕花承担 ── */
+.shell-corner-branches,
+.card-corner-branches,
+.branch-stem, .branch-twig, .branch-bud, .branch-blossom,
+.blossom-petal, .blossom-core { display: none !important; }
+
+/* ── ③ 壳/卡 hover 的青色外发光去掉，换成极轻的暖色提亮 ── */
+.shell:hover {
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.9),
+    inset 0 2px 0 rgba(255, 240, 200, 0.16),
+    0 26px 70px rgba(0, 0, 0, 0.82) !important;
+}
+.modal-card:hover { box-shadow: 0 24px 60px rgba(0, 0, 0, 0.8) !important; }
+
+/* ── ④ 侧栏 hover：不再平移/缩放/发光，只换底色与文字色 ── */
+.nav:hover, .nav.active { transform: none !important; }
+.nav-icon, .nav.active .nav-icon, .nav:hover .nav-icon { filter: none !important; }
+/* 图标内部写死的青色圆点 → 跟随文字色 */
+.nav svg [fill="#38bdf8"], .nav svg [fill="#7dd3fc"] { fill: currentColor !important; }
+.nav svg [stroke="#38bdf8"], .nav svg [stroke="#7dd3fc"] { stroke: currentColor !important; }
+
+/* ── ⑤ 通用按钮/卡片/chip：去掉位移与光晕，圆角统一 2px ── */
+.btn:hover, .btn:active { transform: none !important; }
+.btn:active { box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.75) !important; }
+.skill-card, .kb-card, .kn-card, .plugin-row, .history-item, .mem-card {
+  border-radius: 2px !important;
+  border: 1px solid rgba(232, 207, 138, 0.14) !important;
+  background: linear-gradient(180deg, rgba(24, 33, 26, 0.92), rgba(13, 20, 16, 0.95)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 240, 200, 0.05), 0 6px 18px rgba(0, 0, 0, 0.45) !important;
+}
+.skill-card:hover, .kb-card:hover, .plugin-row:hover {
+  transform: none !important;
+  border-color: rgba(232, 207, 138, 0.34) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 240, 200, 0.08), 0 8px 22px rgba(0, 0, 0, 0.5) !important;
+}
+.chip, .seg, .seg button, .tier, .pill, .tag, .badge {
+  border-radius: 2px !important;
+  transform: none !important;
+}
+.chip:hover, .seg button:hover { transform: none !important; }
+
+/* ── ⑥ 下拉菜单（上一次没覆盖，这里补）── */
+.dd-trigger {
+  border-radius: 2px !important;
+  border: 1px solid var(--fx-brass-700) !important;
+  background: linear-gradient(180deg, #2a1f14, #1b130c) !important;
+  color: var(--ink) !important;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.8) !important;
+}
+.dd-trigger::after { color: var(--fx-brass-300) !important; }
+.dd-menu {
+  border-radius: 2px !important;
+  border: 1px solid var(--fx-brass-700) !important;
+  background: linear-gradient(180deg, #221811, #140d08) !important;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 240, 200, 0.1) !important;
+}
+.dd-item { color: var(--ink-2) !important; }
+.dd-item:hover { background: rgba(232, 207, 138, 0.14) !important; color: var(--fx-brass-100) !important; }
+.dd-item.on, .dd-item.active { color: var(--fx-brass-100) !important; background: rgba(232, 207, 138, 0.2) !important; }
+
+/* ── ⑦ 弹层：去毛玻璃 + 去大圆角 + 去 scale 动画 ── */
+.modal { background: rgba(8, 5, 3, 0.72) !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+.modal-card, .modal-card.wide {
+  border-radius: 3px !important;
+  border: 1px solid var(--fx-brass-500) !important;
+  background: linear-gradient(170deg, #221811, #0f0a06 70%) !important;
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.85), inset 0 0 0 1px rgba(247, 236, 200, 0.18) !important;
+  backdrop-filter: none !important;
+}
+.modal-head, .modal-foot {
+  border-color: rgba(232, 207, 138, 0.18) !important;
+  background: transparent !important;
+}
+.modal-close { border-radius: 2px !important; color: var(--fx-brass-300) !important; }
+.modal-close:hover { background: rgba(232, 207, 138, 0.16) !important; color: var(--fx-brass-100) !important; }
+.modal-title { font-family: Georgia, "Source Han Serif SC", serif !important; letter-spacing: 0.14em !important; color: var(--fx-brass-200) !important; }
+
+/* ── ⑧ Toast：青边青光 → 铜边 ── */
+#toast, .toast {
+  border-radius: 2px !important;
+  border: 1px solid var(--fx-brass-500) !important;
+  background: linear-gradient(180deg, rgba(46, 35, 9, 0.98), rgba(20, 14, 8, 0.98)) !important;
+  color: var(--fx-brass-100) !important;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 240, 200, 0.16) !important;
+  letter-spacing: 0.04em;
+}
+
+/* ── ⑨ 状态色统一暖系（原来 tailwind 亮绿/亮黄/亮红）── */
+.kn-badge.fresh, .kn-badge.high, .pill.confirmed { background: rgba(138, 168, 100, 0.18) !important; color: #b6cc8a !important; border-color: rgba(138, 168, 100, 0.42) !important; }
+.kn-badge.aging, .pill.unverifiable { background: rgba(217, 164, 65, 0.16) !important; color: #e2be7a !important; border-color: rgba(217, 164, 65, 0.4) !important; }
+.kn-badge.stale, .pill.suspected_noop, .log-line.error { background: rgba(156, 53, 39, 0.18) !important; color: #e0918a !important; border-color: rgba(156, 53, 39, 0.45) !important; }
+
+/* ── ⑩ 表单里的分段控件 seg ── */
+.seg {
+  border: 1px solid var(--fx-brass-700) !important;
+  background: rgba(20, 13, 8, 0.9) !important;
+  overflow: hidden;
+}
+.seg button { color: var(--ink-2) !important; background: transparent !important; }
+.seg button.on, .seg button.active {
+  background: linear-gradient(180deg, var(--fx-brass-200), var(--fx-brass-500)) !important;
+  color: #2b2014 !important;
+}
+
+/* ── ⑪ 数字/等宽统一用衬线数字（更贴古董感）── */
+.mono, .row-value, .kn-stat-val, .big-num { font-family: Georgia, "Times New Roman", ui-monospace, monospace !important; letter-spacing: 0.02em; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   2026-11-16 第三批：字号阶梯收敛
+   现状是 11/11.5/12/12.5/13/13.5 六档混用（审计实测），读起来没有层次。
+   收敛成 4 档 + 2 个专用档，全部走变量，以后调一处全局变。
+   ══════════════════════════════════════════════════════════════════════════ */
+:root {
+  --fs-title: 19px;    /* 页面标题（衬线） */
+  --fs-section: 11px;  /* 分节标：大写 + 宽字距 */
+  --fs-body: 13px;     /* 正文、行标签 */
+  --fs-sub: 11.5px;    /* 副说明、hint */
+  --fs-btn: 12px;      /* 按钮文字 */
+  --fs-num: 12.5px;    /* 数字 / 等宽 */
+}
+
+.page-head h1, .pages h1 { font-size: var(--fs-title) !important; }
+h2.sec { font-size: var(--fs-section) !important; }
+.row-label { font-size: var(--fs-body) !important; }
+.row .sub, .hint, .page-sub { font-size: var(--fs-sub) !important; }
+.btn, .btn.small, .btn.tiny { font-size: var(--fs-btn) !important; }
+.row-value, .mono, .kn-stat-val, .big-num, #ov-memory { font-size: var(--fs-num) !important; }
+
+/* 行高：正文 1.55、副说明 1.5、标题 1.3 —— 统一，不再各处手写 */
+.row-label, .row .sub, .hint { line-height: 1.5; }
+.page-head h1 { line-height: 1.3; }
+
+/* 分节之间的呼吸：统一 22px，原来 12/16/20/24 混用 */
+h2.sec { margin: 22px 0 10px !important; }
+h2.sec:first-of-type { margin-top: 8px !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   2026-11-16 第四批：本地书法字体
+   本机装了「演示悠然小楷」「演示新手书」「华文楷体」「华文行楷」——
+   标题用书法体会比 Georgia 更贴古董画框（Georgia 是西文衬线，中文靠回退）。
+   注意：小楷在 11px 分节标上笔画会断，所以只用在 19px 以上的标题；
+   正文与分节标仍用系统无衬线 + 几何符号。
+   ══════════════════════════════════════════════════════════════════════════ */
+.page-head h1, .pages h1, .modal-title {
+  font-family: "演示悠然小楷", "华文楷体", "楷体", Georgia, "Source Han Serif SC", serif !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.10em !important;
+  /* 小楷笔画细：加 0.35px 描边补骨骼 + 两层光晕提亮（深底上才立得住） */
+  -webkit-text-stroke: 0.35px rgba(247, 236, 200, 0.42);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.95), 0 0 10px rgba(236, 218, 159, 0.30), 0 0 26px rgba(236, 218, 159, 0.16) !important;
+}
+/* 品牌名用「演示新手书」（比小楷更有笔锋，适合 logo 位） */
+.brand, .brand * { font-family: "演示新手书", "演示悠然小楷", Georgia, serif !important; letter-spacing: 0.12em !important; }
+/* 分节标：保持系统无衬线（小楷在 11px 会断笔），只留金色 + 字距 */
+h2.sec { font-family: "Microsoft YaHei", "Segoe UI", sans-serif !important; font-size: 11.5px !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   2026-11-16 第五批：逐页验收发现的问题（模型/对话/记忆/插件/皮套/外观/提示词广场）
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ① 开关：开/关对比拉满（用户明确抱怨「看起来不像开了还是关了」）
+      关 = 深黑内凹槽 + 钮在左；开 = 铜亮 + 外圈金光 + 内高光 + 钮在右 */
+.switch i, .switch .track {
+  border: 1px solid rgba(0, 0, 0, 0.78) !important;
+  box-shadow: inset 0 3px 7px rgba(0, 0, 0, 0.95), inset 0 -1px 0 rgba(232, 207, 138, 0.10) !important;
+}
+.switch input:checked + i, .switch input:checked + .track {
+  border-color: #bd9a3f !important;
+  box-shadow:
+    0 0 0 1px rgba(217, 189, 114, 0.40),
+    0 0 14px rgba(217, 189, 114, 0.50),
+    inset 0 1px 0 rgba(255, 250, 225, 0.85) !important;
+}
+.switch input:checked + i::after {
+  box-shadow: 0 0 9px rgba(255, 248, 220, 0.85), 0 1px 2px rgba(0, 0, 0, 0.85) !important;
+}
+/* 原生 checkbox（取景「看全身」等处）也统一成铜块 */
+input[type="checkbox"]:not(.switch input) {
+  accent-color: #d9bd72;
+}
+
+/* ② 记忆条目：加行分隔与悬停，别再是一整块文字 */
+#memory .mem-item {
+  border-bottom: 1px solid rgba(232, 207, 138, 0.09) !important;
+  padding: 9px 6px !important;
+}
+#memory .mem-item:hover { background: rgba(232, 207, 138, 0.06) !important; }
+#memory .mem-empty {
+  padding: 24px; text-align: center; color: var(--ink-3) !important;
+  border: 1px dashed rgba(232, 207, 138, 0.20); border-radius: 2px;
+}
+
+/* ③ 插件页：「配置」按钮被挤成竖排 → 不换行 + 右侧不参与压缩 */
+.plugin-row .btn, .plugin-actions .btn {
+  white-space: nowrap !important;
+  flex: none !important;
+}
+.plugin-actions {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  flex: none !important;
+}
+
+/* ④ 提示词广场 / 各类空态：给一个铜边虚线卡，而不是一行灰字 */
+#prompt-market .hint,
+#prompt-market > p,
+.mem-empty, .plugins-empty, .skills-empty {
+  padding: 18px; text-align: center;
+  border: 1px dashed rgba(232, 207, 138, 0.22); border-radius: 2px;
+  color: var(--ink-3);
+}

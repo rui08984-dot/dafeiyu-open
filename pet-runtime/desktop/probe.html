@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta charset="utf-8"><title>probe</title>
+<style>html,body{margin:0;height:100%;background:#101826;overflow:hidden}canvas{display:block}</style>
+<script>
+const rf = window.fetch.bind(window);
+function post(o){ try { rf('/__log', { method:'POST', body: JSON.stringify(o) }); } catch(e) {} }
+window.addEventListener('error', e => post({ stage:'window-error', msg:String(e.message||'') }));
+setTimeout(function(){ if (typeof window.__probe !== 'function') post({ stage:'no-probe-export' }); }, 15000);
+</script></head>
+<body><canvas id="model"></canvas>
+<script src="vendor/cubism/Core/live2dcubismcore.min.js"></script>
+<script type="module" src="build/probe.js"></script>
+<script>setTimeout(function(){ if (window.__probe) window.__probe().catch(e=>post({stage:'probe-fail',msg:String(e&&e.stack||e)})); }, 100);</script>
+</body></html>

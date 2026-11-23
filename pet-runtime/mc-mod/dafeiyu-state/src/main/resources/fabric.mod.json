@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "dafeiyu-state",
+  "version": "${version}",
+  "name": "Dafeiyu State Exporter",
+  "description": "只读状态导出：把玩家/实体/背包状态按 NDJSON 推到 127.0.0.1:8123，给桌面 AI 伴侣做「进程内观测」通道。只读、不注入、不发按键、只连本机回环。",
+  "authors": [
+    "dafeiyu"
+  ],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.dafeiyu.state.StateExporter"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

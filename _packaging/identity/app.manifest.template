@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  备用 SxS 应用清单（urn:schemas-microsoft-com:msix.v1）。
+
+  正常路径：make-identity-package.ps1 会先用 mt.exe 抽出 Electron 原有的
+  RT_MANIFEST（含 dpiAware / compatible GUID），把 <msix> 节点合并进去再写回，
+  这样不会丢 Electron 的 DPI 与兼容性声明。
+
+  只有在 exe 里抽不到清单时，才退回用这份模板整体替换。
+  publisher / packageName / applicationId 必须与 AppxManifest 完全一致，
+  否则注册报 0x80073D54 或运行期拿不到身份。
+-->
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="__EXECUTABLE__" />
+  <msix xmlns="urn:schemas-microsoft-com:msix.v1"
+        publisher="__PUBLISHER__"
+        packageName="__IDENTITY_NAME__"
+        applicationId="__APPLICATION_ID__" />
+</assembly>

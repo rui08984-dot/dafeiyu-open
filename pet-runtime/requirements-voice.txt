@@ -1,0 +1,15 @@
+# pet-runtime/venv-voice —— 声纹服务 8020 专用隔离环境
+#
+# 为什么隔离：resemblyzer 依赖 torch 与旧版 numpy，装进系统 Python 会威胁
+# MemOS/ASR 使用的 numpy 2.3.5（历史上出过 0xC0000005 段错误）。
+#
+# 安装：
+#   py -m venv pet-runtime/venv-voice
+#   pet-runtime/venv-voice/Scripts/python.exe -m pip install -r pet-runtime/requirements-voice.txt
+#
+# 说明：本机实测 Resemblyzer 0.1.4 + torch 2.x。torch 体积大（GB 级），
+# 只用 CPU 时建议装 CPU wheel（官网命令带 --index-url .../whl/cpu）。
+# 这一步是**可选能力**：不装只影响声纹识别（8020），其它服务照常。
+
+resemblyzer>=0.1.4
+torch>=2.0

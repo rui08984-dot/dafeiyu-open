@@ -1,0 +1,56 @@
+[package]
+name = "pet-core"
+version = "0.1.0"
+edition = "2021"
+description = "大肥鱼内核：窗口布局（移植自 AkaneCompanionLab，Apache-2.0）+ 知识检索 + Windows 原生能力"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# ── Windows 原生能力（2026-11-09 三十五轮：把 Python/PowerShell 的热路径搬到 Rust）──
+# 为什么搬：
+#   · screen-hash.py 实测 300-350ms（Python 启动 + Pillow 导入 + 截屏 + resize 全在里面），
+#     而它是每个验证动作都要跑的成本。Rust 版预期 <30ms。
+#   · uia-service.ps1 / send-input.ps1 是 PowerShell 常驻，`$ErrorActionPreference='SilentlyContinue'`
+#     会掩盖残骸（本轮就因此漏了一行死代码），而且 PowerShell 常驻本身脆弱。
+# 用 windows crate 直接 P/Invoke，零中间层。
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Accessibility",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Win32_System_SystemInformation",   # 2026-11-14 五十三轮：GetTickCount（算用户键鼠空闲时长）
+    "Win32_System_Variant",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Com_StructuredStorage",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_System_WinRT_Direct3D11",
+    # 2026-11-17 六十二轮：世界感知 —— 用 SMTC 读「在听/在看什么」
+    # （GlobalSystemMediaTransportControlsSessionManager 在 Media_Control 下）
+    "Media_Control",
+    "Foundation_Collections",
+] }
+# windows 0.62 把 IAsyncOperation 移到独立 crate，且**不再自带阻塞 get()**：
+# 要等 WinRT 异步完成得自己 SetCompleted + 等待（见 native.rs 的 smtc_block）。
+windows-future = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

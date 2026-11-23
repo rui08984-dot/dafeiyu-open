@@ -1,0 +1,64 @@
+{
+  "game": "原神",
+  "version": "5.x 默认键位",
+  "updatedAt": "2026-11-09",
+  "confidence": "medium",
+  "rules": [
+    {
+      "id": "no-native-api",
+      "kind": "method",
+      "text": "原神没有公开 API，只能靠键鼠模拟。属于「辅助输入」，仍有条款风险，默认不自动执行移动类动作"
+    },
+    {
+      "id": "element-system",
+      "kind": "mechanic",
+      "text": "七元素：火水风雷草冰岩。元素反应是核心战斗机制（蒸发/融化/超载/感电/冻结/扩散/结晶）"
+    },
+    {
+      "id": "team-4",
+      "kind": "mechanic",
+      "text": "队伍 4 人，数字键 1-4 切换角色。切换后下一个角色会继承位置"
+    },
+    {
+      "id": "stamina",
+      "kind": "mechanic",
+      "text": "冲刺和游泳消耗体力，体力空会强制停下。爬山爬到一半没体力会掉下来"
+    },
+    {
+      "id": "ui-menus",
+      "kind": "layout",
+      "text": "背包 B / 地图 M / 任务 J / 角色 C / 派蒙菜单 Esc。这些界面里 UIA 大概率读不到（Unity 自绘），要走 som_snapshot"
+    },
+    {
+      "id": "climb-swim",
+      "kind": "pitfall",
+      "text": "爬山/游泳需要连续按键 + 观察体力条。她做不到实时判断，这类任务要先说明清楚"
+    }
+  ],
+  "keys": {
+    "前进": "w",
+    "后退": "s",
+    "左移": "a",
+    "右移": "d",
+    "跳跃": "space",
+    "冲刺": "shift",
+    "攻击": "鼠标左",
+    "重击": "鼠标左长按",
+    "技能": "e",
+    "大招": "q",
+    "交互": "f",
+    "背包": "b",
+    "地图": "m",
+    "任务": "j",
+    "角色": "c",
+    "菜单": "esc"
+  },
+  "typicalActions": [
+    "semantic 前进,2 往前走",
+    "semantic 技能 放元素战技",
+    "semantic 大招 放元素爆发",
+    "semantic 交互 跟 NPC/机关交互",
+    "press_key 1..4 切换角色",
+    "som_snapshot 看画面（原神是 Unity 自绘，UIA 读不到）"
+  ]
+}

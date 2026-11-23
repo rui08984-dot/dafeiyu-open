@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "note": "输入注入的唯一按键策略源。JS(game-control.js)、pwsh(send-input.ps1) 直接读本文件；Rust(pet-core/src/native.rs) 仍内联同一张表，由 _probe/test-control-consistency.cjs 做集合相等比较。改这里必须同步 Rust 并跑门禁。语义：require 全部命中后，any 为空=直接拒；any 任一命中=拒。",
+  "rules": [
+    {
+      "require": [
+        "alt"
+      ],
+      "any": [
+        "f4",
+        "tab",
+        "space"
+      ]
+    },
+    {
+      "require": [
+        "ctrl",
+        "alt"
+      ],
+      "any": [
+        "del",
+        "delete"
+      ]
+    },
+    {
+      "require": [
+        "ctrl"
+      ],
+      "any": [
+        "esc",
+        "escape"
+      ]
+    },
+    {
+      "require": [
+        "win"
+      ],
+      "any": []
+    }
+  ],
+  "aliases": {
+    "control": "ctrl",
+    "escape": "esc",
+    "delete": "del",
+    "lctrl": "ctrl",
+    "rctrl": "ctrl",
+    "lalt": "alt",
+    "ralt": "alt",
+    "lshift": "shift",
+    "rshift": "shift",
+    "lwin": "win",
+    "rwin": "win"
+  }
+}
