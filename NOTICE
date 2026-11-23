@@ -1,0 +1,68 @@
+# NOTICE
+
+本仓库是「大肥鱼」桌面 AI 伴侣的**完整代码树**（不含模型、SDK、记忆数据与任何密钥）。
+自有代码按根目录 `LICENSE`（MIT）授权。下列第三方内容按各自许可使用（随仓或自备见下文）。
+
+## MyNeuro（宿主应用层）
+
+- 来源：MyNeuro / my-neuro 桌面 AI 伴侣宿主（作者 morettt 及社区贡献者）。
+- 本仓库的 `_incoming/my-neuro/` 是「大肥鱼」自建应用层代码；上游项目与其插件的版权归原作者。
+- 若上游对某文件另有许可声明，以该声明为准；本仓库保留原有署名与注释。
+
+## AkaneCompanionLab — Apache License 2.0
+
+- 作者：misaka-coder · https://github.com/misaka-coder/AkaneCompanionLab
+- 使用范围：`pet-core/src/geometry.rs`、`pet-core/src/placement.rs` 的窗口几何与布局算法
+  （移植自 `desktop_pet_next/src-tauri/src/pet_windows/{models,placement}.rs`）。
+- 修改说明：去掉 Tauri 类型依赖，改为纯数据 + 纯函数，并补充单元测试。
+- Apache-2.0 要求的版权与许可声明见上游仓库的 `LICENSE` 与源文件头。
+
+## jingyu（表演数据）
+
+- 工程内 `pet-runtime/desktop/choreo-*` 的 15 段全身表演轨迹由 jingyu 的编译产物转换而来
+  （`pet-runtime/tools/compile-performances.py`）。
+- 上游许可**尚未最终核实**：本仓库按「保留署名 + 可移除」处理；如权利人提出异议，
+  删除 `pet-runtime/desktop/choreo-performances.mjs` 并用自带表演数据重建即可。
+
+## LumenAct — CC BY 4.0（表演曲线）
+
+- 作者：B站 Lumen_流明_ · https://github.com/AaBb-coder/LumenAct
+- 使用范围：`pet-runtime/data/facs-clips/` 的 97 段 FACS 表演曲线（已重映射到本项目的 FACS 通道）。
+- 许可：Creative Commons Attribution 4.0 International（CC BY 4.0），须署名。
+- 本仓库**不包含** LumenAct 的参考脸（CC BY-NC 4.0）与语义模型权重（Apache-2.0，需自行下载）。
+- 详见 `pet-runtime/data/facs-clips/NOTICE.md`。
+
+## Live2D Cubism SDK / Cubism Core — 专有许可，按 "Redistributable Code" 随仓分发
+
+- `live-2d/libs/live2dcubismcore*.js`、`live-2d/vendor/cubism/**`、`pet-runtime/desktop/vendor/cubism/**`
+  为 Live2D Cubism Core / Framework；其文件头明确写明属于许可协议中的 **Redistributable Code**。
+- 许可全文见 `pet-runtime/desktop/vendor/cubism/Framework/LICENSE.md` 与
+  <https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_en.html>。
+- 仅排除了 Cubism 2 时代、无许可头的 `live2d.min.js`（来源/许可不明）。
+- 除上述授权范围外，本项目不授予任何 Live2D 相关权利。
+
+## 模型与角色资产 — 经作者授权随仓分发
+
+- 模型：**DeepSeek-chan（大肥鱼）** — 原画及拆分：神宫凉子；Live2D 建模：霓虹猫_NeonNeko。
+- 随仓范围：`_incoming/my-neuro/live-2d/assets/petbody/**` 与 `pet-runtime/desktop/assets/jellyfish/**`
+  （`*.moc3`、纹理、`*.model3.json`、动作/表情/物理）。
+- 使用边界（沿用作者公皮说明）：允许个人直播/录播/视频创作及平台收益、社交平台展示、参数调整、
+  二次创作（注明来源）；**禁止二次销售模型文件、冒充原作者**。
+- 本项目随仓分发已获作者/权利人许可；如你是权利人且认为分发不当，请提 issue，我们会立即移除。
+
+## MemOS — Apache License 2.0，随仓分发
+
+- `_incoming/my-neuro/plugins-dlc/memos/**` 源自 MemTensor / MemOS（Apache-2.0），
+  完整许可见该目录 `LICENSE`，修改说明见 `NOTICE`。
+- 运行所需的 Python 依赖、Qdrant/嵌入模型由使用者自行安装；本仓库不含真实记忆数据与密钥。
+
+## AAAAGENT
+
+- 本仓库**不包含** AAAAGENT 的任何代码。原 `pet-core/src/recall.rs` 已整体移除，
+  `lib.rs` 不再声明该模块。
+
+## 其他素材
+
+- `live-2d/assets/ornaments/**`：openclipart.org，CC0 / Public Domain（见同目录 `CREDITS.md`）。
+- `live-2d/libs/pixi.min.js`、`pixi-live2d-display*.min.js`：MIT License。
+- `live-2d/js/lib/THREE-MMD-*`：遵循同目录的 LICENSE / NOTICE。

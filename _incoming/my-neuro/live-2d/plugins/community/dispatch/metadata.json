@@ -1,0 +1,96 @@
+{
+  "name": "dispatch",
+  "displayName": "派活给执行器",
+  "version": "1.0.0",
+  "author": "pet-runtime",
+  "description": "把写代码/查资料/跑命令/操作电脑这类活派给后台执行器（DSH headless），异步执行，跑完回执",
+  "framework_version": ">=1.0.0",
+  "main": "index.js",
+  "lang": "js",
+  "tools": {
+    "act": {
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": false,
+      "openWorld": true
+    },
+    "game": {
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": false,
+      "openWorld": true
+    },
+    "app": {
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": false,
+      "openWorld": true
+    },
+    "file": {
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": false,
+      "openWorld": false
+    },
+    "clipboard": {
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "openWorld": false
+    },
+    "batch": {
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": false,
+      "openWorld": true
+    },
+    "dispatch_to_dsh": {
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": false,
+      "openWorld": true
+    },
+    "dispatch_cancel": {
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": true,
+      "openWorld": false
+    },
+    "hand_action": {
+      "readOnly": false,
+      "destructive": true,
+      "idempotent": false,
+      "openWorld": true
+    },
+    "knowledge": {
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "openWorld": false
+    },
+    "skill": {
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "openWorld": false
+    },
+    "appearance": {
+      "readOnly": false,
+      "destructive": false,
+      "idempotent": true,
+      "openWorld": false
+    },
+    "see": {
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "openWorld": false
+    },
+    "check_dispatch": {
+      "readOnly": true,
+      "destructive": false,
+      "idempotent": true,
+      "openWorld": false
+    }
+  }
+}

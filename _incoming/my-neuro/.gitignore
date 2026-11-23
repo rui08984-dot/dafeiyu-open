@@ -1,0 +1,46 @@
+# ── 依赖 / 构建产物 ──
+node_modules/
+dist/
+*.exe
+*.dll
+pet-core/target/
+
+# ── 隐私与密钥（绝不入档）──
+data/
+live-2d/config.json
+live-2d/llm_providers.json
+plugins-dlc/memos/memos_system/config/memos_config.json
+# MemOS 运行时数据：graph_store.json 是她的记忆图谱（含真实人物/地点/关系）——
+# 隐私，明文不进主分支。备份走主仓库 scripts/backup-data.mjs（加密 → data-backup 孤儿分支）。
+plugins-dlc/memos/memos_system/data/graph_store.json
+plugins-dlc/memos/memos_system/data/evolution_state.json
+plugins-dlc/memos/memos_system/data/images/originals/
+*.key
+*.pem
+*.token
+
+# ── 运行产物 ──
+*.log
+logs/
+__pycache__/
+*.pyc
+**/data/qdrant/
+.vscode/
+.DS_Store
+
+# ── 渲染层看门狗 / 崩溃转储（2026-11-15 五十八轮）──
+# 看门狗日志是运行期产物；crash-dumps 里是进程内存快照（可能含聊天内容），一律不入档
+live-2d/render-watchdog.log
+live-2d/render-watchdog.log.1
+live-2d/crash-dumps/
+
+# 改配置时的一次性备份（留证据但不入档）
+live-2d/plugins/*.bak-*
+
+# writeJsonVerified 的滚动备份（2026-11-16）
+live-2d/config.json.bak
+live-2d/llm_providers.json.*
+
+# 运行产物 / 本地状态（2026-11-23）
+live-2d/runtime.log*
+.sessionrelay/

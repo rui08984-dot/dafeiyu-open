@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+      user-select: none;
+    }
+    body {
+      display: grid;
+      place-items: center;
+    }
+    .orca-loader-wrap {
+      position: relative;
+      width: 64px;
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      filter: drop-shadow(0 0 14px rgba(217, 189, 114, 0.4)) drop-shadow(0 0 8px rgba(249, 115, 22, 0.35));
+    }
+    /* Outer Orca-Cyan Fin Ring */
+    .orca-ring {
+      position: absolute;
+      width: 54px;
+      height: 54px;
+      border-radius: 50%;
+      border: 3px solid transparent;
+      border-top-color: #d9bd72;
+      border-right-color: #8f7024;
+      animation: orca-spin 0.85s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    }
+    /* Inner Goldfish Flame Ring */
+    .goldfish-ring {
+      position: absolute;
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      border: 2.5px solid transparent;
+      border-bottom-color: #b8473a;
+      border-left-color: #fb923c;
+      animation: goldfish-spin 0.65s linear infinite reverse;
+    }
+    /* Center Pearl/Fin Spark */
+    .center-fin {
+      width: 14px;
+      height: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      line-height: 1;
+      animation: fin-pulse 1.4s ease-in-out infinite;
+      filter: drop-shadow(0 0 4px #fb923c);
+    }
+    @keyframes orca-spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    @keyframes goldfish-spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    @keyframes fin-pulse {
+      0%, 100% { transform: scale(0.9); opacity: 0.85; }
+      50% { transform: scale(1.18); opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="orca-loader-wrap" aria-label="正在唤醒桌宠...">
+    <div class="orca-ring"></div>
+    <div class="goldfish-ring"></div>
+    <div class="center-fin">🐟</div>
+  </div>
+</body>
+</html>

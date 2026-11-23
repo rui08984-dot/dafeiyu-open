@@ -1,0 +1,96 @@
+{
+  "control_port": {
+    "title": "控制口端口",
+    "description": "petbridge 的 HTTP 控制口端口（/dispatch 在这里）",
+    "type": "int",
+    "default": 8103,
+    "value": 8103
+  },
+  "verify_default_on": {
+    "title": "允许验收命令（verify）",
+    "description": "开着时：派活可以带一条 verify 命令（如 node --test），服务端跑它并用退出码判「通过/失败」。关掉 = 插件不再透传 verify（传了明确报错，不静默忽略）。真正的「完成」判定只在服务端做，插件永不执行命令。",
+    "type": "bool",
+    "default": true,
+    "value": true
+  },
+  "verify_timeout_ms": {
+    "title": "验收命令超时（毫秒）",
+    "description": "单条 verify 最多跑多久；超时判 timeout（未证实），不返工、不算失败。",
+    "type": "int",
+    "default": 60000,
+    "value": 60000
+  },
+  "rework_max": {
+    "title": "验收失败返工轮次",
+    "description": "仅当 verify 判定 fail 时，最多再派几轮去修（新会话 + 注入失败输出与改动文件，只修不推倒）。0=不返工，上限 3；broken/timeout 永不返工。",
+    "type": "int",
+    "default": 1,
+    "value": 1
+  },
+  "cancel_grace_ms": {
+    "title": "取消宽限（毫秒）",
+    "description": "taskkill /T /F 之后最多等多久确认进程树消失；超时则回 cancel_failed 并把任务退回 running（不假装停成功）。",
+    "type": "int",
+    "default": 2000,
+    "value": 2000
+  },
+  "timeout_seconds": {
+    "title": "单个任务超时（秒）",
+    "description": "超过这个时间就把任务判为超时",
+    "type": "int",
+    "default": 900,
+    "value": 900
+  },
+  "auto_receipt": {
+    "title": "跑完主动回执",
+    "description": "任务结束后由她主动说一句结果（而不是等用户问）",
+    "type": "bool",
+    "default": true,
+    "value": true
+  },
+  "max_concurrent": {
+    "title": "同时最多几个任务",
+    "description": "防止一次派十个把机器跑满",
+    "type": "int",
+    "default": 2,
+    "value": 2
+  },
+  "route_experience": {
+    "title": "经验路由（按 app 成功率重排 UIA→OCR→坐标）",
+    "description": "开着时：按进程名的历史成功率调整「先试哪条通道」（样本 <3 不排序；同一 app 同一通道连续 3 次失败自动回默认）。只改建议顺序，不改任何动作的执行与校验。关掉 = 永远用静态默认顺序。",
+    "type": "bool",
+    "default": true,
+    "value": true
+  },
+  "mc_cfg": {
+    "title": "Minecraft RCON 配置",
+    "description": "零注入陪玩：填服务端 server.properties 里的 rcon.port / rcon.password（需先开 enable-rcon=true）。留空则用环境变量 MC_RCON_*",
+    "type": "json",
+    "default": {
+      "host": "127.0.0.1",
+      "port": 25575,
+      "password": "",
+      "allow_world_modify": false
+    },
+    "value": {
+      "host": "127.0.0.1",
+      "port": 25575,
+      "password": "",
+      "allow_world_modify": false
+    }
+  },
+  "apps": {
+    "title": "可启动的应用白名单",
+    "description": "launch_app 只允许启动这里列出的 exe（名字 → 完整路径）。加一项她就能「打开 XXX」，且用 detached 方式启动、不会被后台任务连带关掉。",
+    "type": "object",
+    "fields": {
+      "PCL": {
+        "title": "Minecraft 启动器 PCL",
+        "description": "Plain Craft Launcher 的 exe 完整路径（留空则使用自动探测/环境变量）。",
+        "type": "string",
+        "default": "",
+        "value": ""
+      }
+    }
+  }
+}

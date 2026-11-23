@@ -1,0 +1,8 @@
+{
+  "name": "game-actions",
+  "displayName": "游戏动作注册",
+  "version": "1.0.0",
+  "author": "community",
+  "description": "把游戏 profile 里声明的 actions 注册成 LLM 工具（换游戏只改数据，不改代码）；默认零行为变化",
+  "main": "index.js"
+}

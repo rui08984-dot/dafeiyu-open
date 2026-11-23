@@ -1,0 +1,44 @@
+{
+  "auto_inject": {
+    "title": "自动注入相关记忆",
+    "description": "用户说话前，先检索过去相关的对话/日记，命中就注入。关掉的话只能靠她主动调工具。",
+    "type": "bool",
+    "default": false,
+    "value": false
+  },
+  "auto_inject_min_score": {
+    "title": "自动注入的最低相关度",
+    "description": "每 term 平均分下限（分数按 token 累加，绝对值不可跨查询比较：单 term 7~9、十 term 25~75；实测 3.0 能召回「猫/出差/代码」，同时挡掉「在吗」这类空查询）",
+    "type": "number",
+    "default": 3.5,
+    "value": 3.5
+  },
+  "auto_inject_limit": {
+    "title": "自动注入条数",
+    "description": "每次最多注入几条记忆片段。",
+    "type": "int",
+    "default": 3,
+    "value": 3
+  },
+  "max_docs": {
+    "title": "索引条数上限",
+    "description": "最多索引多少条历史（越新越优先）。太大启动会慢。",
+    "type": "int",
+    "default": 4000,
+    "value": 4000
+  },
+  "rebuild_seconds": {
+    "title": "索引刷新间隔（秒）",
+    "description": "对话历史在增长，定期重建索引。",
+    "type": "int",
+    "default": 90,
+    "value": 90
+  },
+  "auto_inject_min_ratio": {
+    "title": "相对顶部比例",
+    "description": "只保留 ≥ 这批沾边命中顶部分数的 50%，避免弱相关陪跑一起进 prompt",
+    "type": "float",
+    "default": 0.35,
+    "value": 0.35
+  }
+}

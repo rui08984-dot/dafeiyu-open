@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<link rel="stylesheet" href="css/tokens.css">
+<title>大肥鱼 · 字幕</title>
+<style>
+  /* 字幕独立窗（决策 2026-11-01：字幕不许画在皮套窗口里）。
+     本页只做一件事：把主进程转来的 subtitle:show 画成底部居中的一条字幕。 */
+  html, body { margin: 0; padding: 0; background: transparent !important; overflow: hidden; width: 100%; height: 100%; }
+  #stage {
+    position: fixed; inset: 0;
+    display: flex; align-items: flex-end; justify-content: center;
+    padding: 0 20px 14px;
+    box-sizing: border-box;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  #pill {
+    position: relative;
+    width: fit-content;
+    max-width: 100%;
+    /* 窄版侧位窗 320×88：pill 限高 72px（88 - 底部 padding 14 ≈ 74，留 2px 余量），
+       超高按 3 行截断（15px × 1.55 行高 ≈ 23.25px/行），长句前几行不再被卷走（§10.2#7）。
+       宽版（641×176）不受影响：134px 上限保留，够放 5 行。 */
+    max-height: 134px;
+    overflow-y: auto;
+    box-sizing: border-box;
+    padding: 10px 24px;
+    border-radius: 3px;
+    background: linear-gradient(180deg, rgba(26, 18, 11, 0.88) 0%, rgba(13, 9, 6, 0.86) 100%);
+    border: 1px solid rgba(217, 189, 114, 0.34);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.62), 0 2px 6px rgba(0, 0, 0, 0.4), inset 0 1px 0 0 rgba(255, 240, 200, 0.18);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    color: #f2e6c8;
+    font-size: 14.5px;
+    font-weight: 450;
+    letter-spacing: 0.3px;
+    line-height: 1.55;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+    white-space: pre-wrap;
+    word-break: break-word;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity .24s ease, transform .24s ease;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(217, 189, 114, .35) transparent;
+  }
+  #pill::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 24px; right: 24px; height: 1px;
+    background: linear-gradient(90deg,
+      transparent 0%,
+      rgba(217, 189, 114, 0.14) 15%,
+      rgba(247, 236, 200, 0.55) 50%,
+      rgba(217, 189, 114, 0.14) 85%,
+      transparent 100%
+    );
+    border-radius: 3px;
+    pointer-events: none;
+  }
+  #pill.show { opacity: 1; transform: translateY(0); }
+  #pill:empty { display: none; }
+  #pill::-webkit-scrollbar { width: 4px; }
+  #pill::-webkit-scrollbar-thumb { background: rgba(217, 189, 114, .25); border-radius: 2px; }
+  @media (max-width: 360px) {
+    #pill { max-height: 72px; line-clamp: 3; -webkit-line-clamp: 3; padding: 8px 18px; border-radius: 3px; }
+    #pill::before { left: 16px; right: 16px; }
+  }
+  /* 调整模式（P1 手动摆放）：顶部长条 = 原生拖拽区；按钮 no-drag 可点。
+     主进程进入时先解除鼠标穿透，这里只负责显示与收尾三连。 */
+  #adjustbar {
+    display: none;
+    position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
+    z-index: 10;
+    align-items: center; gap: 6px;
+    padding: 6px 12px;
+    border-radius: 3px;
+    background: rgba(8, 14, 26, 0.88);
+    border: 1px solid rgba(217, 189, 114, 0.25);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    color: #f2e6c8; font-size: 12px; line-height: 1;
+    -webkit-app-region: drag;
+    user-select: none;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  }
+  body.adjusting #adjustbar { display: flex; }
+  #adjustbar .grip { letter-spacing: 2px; opacity: .85; color: #d9bd72; }
+  #adjustbar button {
+    -webkit-app-region: no-drag;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.06);
+    color: #f2e6c8; font-size: 12px; line-height: 1;
+    padding: 4px 10px; border-radius: 3px; cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  #adjustbar button:hover { background: rgba(217, 189, 114, 0.18); border-color: rgba(217, 189, 114, 0.5); }
+  #adjustbar button.primary { background: linear-gradient(135deg, rgba(143, 112, 36, 0.9), rgba(217, 189, 114, 0.8)); border-color: rgba(217, 189, 114, 0.7); color: #f2e6c8; }
+</style>
+</head>
+<body>
+<div id="stage"><div id="pill"></div></div>
+<div id="adjustbar">
+  <span class="grip">⠿ 拖动此条移动字幕</span>
+  <button id="adjust-done" class="primary">✓ 完成</button>
+  <button id="adjust-reset">↺ 还原自动</button>
+  <button id="adjust-cancel">✕ 取消</button>
+</div>
+<script>
+// 听四件事：subtitle:show {text,duration} / subtitle:hide / subtitle:adjust-mode {on}。
+// duration>0 自动隐藏；0/null 常驻（例如 ASR 中间态「你：……」）。
+const { ipcRenderer } = require('electron');
+const pill = document.getElementById('pill');
+let hideTimer = null;
+
+function show(text, duration) {
+  const displayText = String(text || '');
+  if (!displayText) return;
+  if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+  pill.textContent = displayText;
+  pill.classList.add('show');
+  pill.scrollTop = pill.scrollHeight;
+  // 窄版侧位窗（320 宽）限高 72px + 3 行截断：长句前几行不被卷走（§10.2#7）。
+  // 宽版窗保持 CSS 默认 134px。窄版判定按窗口实际宽，resize 后下一句自动跟随。
+  const narrow = window.innerWidth <= 360;
+  pill.style.maxHeight = narrow ? '72px' : '';
+  pill.style.display = '-webkit-box';
+  pill.style.webkitBoxOrient = 'vertical';
+  pill.style.webkitLineClamp = narrow ? '3' : '';
+  const ms = Number(duration) || 0;
+  if (ms > 0) hideTimer = setTimeout(hide, ms);
+}
+
+function hide() {
+  if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+  pill.classList.remove('show');
+}
+
+ipcRenderer.on('subtitle:show', (_e, payload) => show(payload && payload.text, payload && payload.duration));
+ipcRenderer.on('subtitle:hide', hide);
+
+// 调整模式：主进程已解除鼠标穿透；拖动交给 -webkit-app-region，这里只接三个按钮
+ipcRenderer.on('subtitle:adjust-mode', (_e, payload) => {
+  const on = !!(payload && payload.on);
+  document.body.classList.toggle('adjusting', on);
+  console.log('[subtitle-window] adjust-mode', on);
+});
+document.getElementById('adjust-done').addEventListener('click', () => ipcRenderer.send('subtitle:adjust-done'));
+document.getElementById('adjust-reset').addEventListener('click', () => ipcRenderer.send('subtitle:adjust-reset'));
+document.getElementById('adjust-cancel').addEventListener('click', () => ipcRenderer.send('subtitle:adjust-cancel'));
+
+console.log('[subtitle-window] ready');
+</script>
+</body>
+</html>

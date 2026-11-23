@@ -1,0 +1,31 @@
+{
+  "idle_time": {
+    "title": "空闲触发时间（秒）",
+    "description": "用户多久没动静才主动开口。太短会很吵（30 秒会像客服），建议 180~360 秒。",
+    "type": "int",
+    "default": 240,
+    "value": 240
+  },
+  "prompt": {
+    "title": "触发提示词",
+    "description": "主动开口时附加给模型的指令。写清人设和边界，避免她每次都说同一句。",
+    "type": "text",
+    "default": "",
+    "value": ""
+  },
+  "quiet_hours": {
+    "title": "静音时段",
+    "description": "这个时间段内几乎不主动开口（间隔放大）。start=开始小时，end=结束小时，multiplier=间隔倍数。",
+    "type": "object",
+    "default": {
+      "start": 1,
+      "end": 7,
+      "multiplier": 4
+    },
+    "value": {
+      "start": 1,
+      "end": 7,
+      "multiplier": 4
+    }
+  }
+}

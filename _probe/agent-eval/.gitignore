@@ -1,0 +1,3 @@
+# 运行产物（基线以 README 为准，last-run.json 每次覆盖）
+.tmp/
+last-run.json

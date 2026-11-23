@@ -1,0 +1,10 @@
+{
+  "name": "persona-guard",
+  "displayName": "人设漂移哨兵",
+  "version": "1.0.0",
+  "author": "pet-runtime",
+  "description": "零模型调用的硬事实守卫：检测她是否「越聊越不像她」（客服腔回归/自称AI/句长超标），并把漂移变成可看的数字",
+  "framework_version": ">=1.0.0",
+  "main": "index.js",
+  "lang": "js"
+}

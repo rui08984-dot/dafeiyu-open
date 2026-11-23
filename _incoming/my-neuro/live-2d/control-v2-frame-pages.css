@@ -1,0 +1,1029 @@
+/* ============================================================================
+ * control-v2-frame-pages.css —— 「古董画框」第二层皮肤 · 四页补全（2026-11-16）
+ *
+ * 定位：control-v2-frame.css 管外壳、标题栏、侧栏、按钮、弹层这些全局件；
+ *       本文件只补它还盖不到的四页：
+ *         · 知识库   #knowledge（游戏域切换、状态带、规则/键位/动作、live、经验时间线）
+ *         · 技能库   #skills   （技能卡网格、可靠度条、步骤行、统计带）
+ *         · 操控日志 #actions  （筛选 chip、时间线卡、tier/effect 徽标）
+ *         · 记录     #history  （对话条目、工具调用行、截图、空态、分页）
+ *       加载顺序在 control-v2.css 与 control-v2-frame.css 之后，全部覆盖带
+ *       !important，确保压过原文件。
+ *
+ * 手法：不引入新色相。所有颜色/圆角/字号都来自 frame.css 的
+ *       --fx-brass-100/200/300/500/700/900、--fx-seal、--ink/--ink-2/--ink-3、
+ *       --line/--line-2、--ok/--warn/--bad、--fs-* ；本文件只在 :root 里定义
+ *       由它们派生的若干「纸面/铜面/状态墨色」令牌，方便以后整体调。
+ *       圆角 2–3px；不用毛玻璃；不做位移/脉冲/呼吸，只保留按下内陷。
+ *
+ * 回退：删掉 control-v2.html 里引用本文件的那一行 <link> 即可，
+ *       其余文件（html/js/css）都不用动。
+ * ========================================================================= */
+
+:root {
+  /* ── 衬线字族（标题、数字、键帽统一用）── */
+  --pg-serif: Georgia, "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", serif;
+
+  /* ── 状态墨色：把状态色向羊皮纸提亮，暗底上可读 ── */
+  --pg-ok-ink:   color-mix(in srgb, var(--ok) 72%, var(--ink));
+  --pg-warn-ink: color-mix(in srgb, var(--warn) 74%, var(--ink));
+  --pg-bad-ink:  color-mix(in srgb, var(--bad) 70%, var(--ink));
+  --pg-seal-ink: color-mix(in srgb, var(--fx-seal) 62%, var(--ink));
+
+  /* ── 状态底/边：低透明度，像旧账本上的记号 ── */
+  --pg-ok-wash:   color-mix(in srgb, var(--ok) 15%, transparent);
+  --pg-warn-wash: color-mix(in srgb, var(--warn) 14%, transparent);
+  --pg-bad-wash:  color-mix(in srgb, var(--bad) 16%, transparent);
+  --pg-seal-wash: color-mix(in srgb, var(--fx-seal) 16%, transparent);
+  --pg-ok-line:   color-mix(in srgb, var(--ok) 45%, transparent);
+  --pg-warn-line: color-mix(in srgb, var(--warn) 42%, transparent);
+  --pg-seal-line: color-mix(in srgb, var(--fx-seal) 55%, transparent);
+
+  /* ── 铜面：高光、铜牌（选中态/键帽）、铜牌投影 ── */
+  --pg-hi:      color-mix(in srgb, var(--fx-brass-100) 55%, transparent);
+  --pg-hi-soft: color-mix(in srgb, var(--fx-brass-100) 26%, transparent);
+  --pg-plaque:  linear-gradient(180deg, var(--fx-brass-200), var(--fx-brass-500));
+  --pg-plaque-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--fx-brass-100) 65%, transparent),
+    0 1px 3px color-mix(in srgb, var(--bg) 72%, transparent);
+
+  /* ── 纸面/凹槽：绒布卡与内凹的小凹槽 ── */
+  --pg-panel: linear-gradient(180deg, var(--surface-card), var(--surface));
+  --pg-inset: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg) 62%, transparent),
+    color-mix(in srgb, var(--bg) 26%, transparent)
+  );
+  --pg-inset-shadow: inset 0 2px 6px color-mix(in srgb, var(--bg) 82%, transparent);
+
+  /* ── 投影/刻痕 ── */
+  --pg-shadow-soft: 0 4px 12px color-mix(in srgb, var(--bg) 55%, transparent);
+  --pg-shadow-deep: 0 8px 22px color-mix(in srgb, var(--bg) 72%, transparent);
+  --pg-shadow-lift: 0 10px 26px color-mix(in srgb, var(--bg) 78%, transparent);
+  --pg-engrave: 0 1px 0 color-mix(in srgb, var(--bg) 90%, transparent);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   四页共用：焦点环、副说明
+   ══════════════════════════════════════════════════════════════════════════ */
+
+#knowledge :focus-visible,
+#skills :focus-visible,
+#actions :focus-visible,
+#history :focus-visible {
+  outline: 2px solid var(--fx-brass-300) !important;
+  outline-offset: 1px !important;
+}
+
+#knowledge .sub,
+#skills .sub,
+#actions .sub,
+#history .sub {
+  color: var(--ink-3) !important;
+  font-size: var(--fs-sub) !important;
+  letter-spacing: .03em !important;
+}
+#knowledge .sub.mono,
+#skills .sub.mono,
+#actions .sub.mono,
+#history .sub.mono {
+  font-family: var(--pg-serif) !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ① 知识库 #knowledge
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 知识域选择条：铜线木牌 ── */
+#knowledge .game-selector-bar {
+  padding: 9px 14px !important;
+  border: 1px solid var(--line-2) !important;
+  border-radius: 2px !important;
+  background: var(--pg-panel) !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft), var(--pg-shadow-soft) !important;
+}
+#knowledge .game-sel-label {
+  color: var(--fx-brass-200) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-section) !important;
+  font-weight: 500 !important;
+  letter-spacing: .20em !important;
+  text-transform: uppercase !important;
+}
+#knowledge .game-tab {
+  padding: 4px 12px !important;
+  border: 1px solid var(--fx-brass-700) !important;
+  border-radius: 2px !important;
+  background: var(--pg-inset) !important;
+  color: var(--ink-2) !important;
+  font-size: var(--fs-sub) !important;
+  letter-spacing: .04em !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft) !important;
+  transition: background .18s ease, color .18s ease, border-color .18s ease !important;
+}
+#knowledge .game-tab:hover {
+  transform: none !important;
+  border-color: var(--fx-brass-500) !important;
+  background: var(--hover) !important;
+  color: var(--fx-brass-100) !important;
+}
+#knowledge .game-tab.active {
+  border-color: var(--fx-brass-700) !important;
+  background: var(--pg-plaque) !important;
+  color: var(--fx-brass-900) !important;
+  font-weight: 600 !important;
+  box-shadow: var(--pg-plaque-shadow) !important;
+}
+
+/* ── 状态带：四只小铜牌抽屉 ── */
+#knowledge .kn-stat-item,
+#skills .kn-stat-item {
+  padding: 10px 14px !important;
+  border: 1px solid var(--line-2) !important;
+  border-top: 2px solid var(--fx-brass-700) !important;
+  border-radius: 2px !important;
+  background: var(--pg-panel) !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft), var(--pg-shadow-soft) !important;
+}
+#knowledge .kn-stat-label,
+#skills .kn-stat-label {
+  color: var(--ink-3) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-section) !important;
+  font-weight: 500 !important;
+  letter-spacing: .16em !important;
+  text-transform: uppercase !important;
+}
+#knowledge .kn-stat-val,
+#skills .kn-stat-val {
+  color: var(--fx-brass-100) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-title) !important;
+  font-weight: 500 !important;
+  letter-spacing: .04em !important;
+  text-shadow: var(--pg-engrave) !important;
+}
+
+/* ── 状态徽标：铜框小签，状态色只染字与细边 ── */
+#knowledge .kn-badge,
+#skills .kn-badge {
+  display: inline-block !important;
+  width: fit-content !important;
+  padding: 2px 9px !important;
+  border: 1px solid var(--line-2) !important;
+  border-radius: 2px !important;
+  background: var(--line) !important;
+  color: var(--fx-brass-200) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-sub) !important;
+  font-weight: 500 !important;
+  letter-spacing: .10em !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft) !important;
+}
+#knowledge .kn-badge.fresh,
+#knowledge .kn-badge.high,
+#skills .kn-badge.fresh,
+#skills .kn-badge.high {
+  border-color: var(--pg-ok-line) !important;
+  background: var(--pg-ok-wash) !important;
+  color: var(--pg-ok-ink) !important;
+}
+#knowledge .kn-badge.aging,
+#knowledge .kn-badge.med,
+#skills .kn-badge.aging,
+#skills .kn-badge.med {
+  border-color: var(--pg-warn-line) !important;
+  background: var(--pg-warn-wash) !important;
+  color: var(--pg-warn-ink) !important;
+}
+#knowledge .kn-badge.stale,
+#skills .kn-badge.stale {
+  border-color: var(--pg-seal-line) !important;
+  background: var(--pg-seal-wash) !important;
+  color: var(--pg-bad-ink) !important;
+}
+
+/* ── 知识卡：绒布底 + 铜双线（外框 1px、内衬 1px）── */
+#knowledge .kn-card {
+  position: relative !important;
+  padding: 16px 18px !important;
+  border: 1px solid var(--line-2) !important;
+  border-radius: 3px !important;
+  background:
+    linear-gradient(180deg, var(--line), transparent 64px),
+    var(--pg-panel) !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft), var(--pg-shadow-deep) !important;
+}
+#knowledge .kn-card::before,
+#skills .skill-card::before {
+  content: "" !important;
+  position: absolute !important;
+  inset: 5px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 1px !important;
+  pointer-events: none !important;
+}
+
+/* ── 卡头：衬线小标 + 铜线分隔 ── */
+#knowledge .kn-card-head {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+  margin-bottom: 12px !important;
+  padding-bottom: 8px !important;
+  border-bottom: 1px solid var(--line) !important;
+}
+#knowledge .kn-card-head h2 {
+  margin: 0 !important;
+  color: var(--fx-brass-200) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-body) !important;
+  font-weight: 500 !important;
+  letter-spacing: .10em !important;
+  text-shadow: var(--pg-engrave) !important;
+}
+#knowledge .kn-card-head .sub {
+  color: var(--ink-2) !important;
+  font-size: var(--fs-sub) !important;
+  letter-spacing: .03em !important;
+}
+
+/* ── 稳定规则卡 ── */
+#knowledge .kn-rule-item {
+  padding: 9px 12px !important;
+  border: 1px solid var(--line) !important;
+  border-left: 2px solid var(--fx-brass-500) !important;
+  border-radius: 0 2px 2px 0 !important;
+  background:
+    linear-gradient(90deg, var(--line), transparent 72%),
+    var(--pg-inset) !important;
+  color: var(--ink) !important;
+  font-size: var(--fs-body) !important;
+  line-height: 1.55 !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft) !important;
+}
+#knowledge .kn-rule-tag {
+  display: inline-block !important;
+  margin-right: 8px !important;
+  padding: 1px 6px !important;
+  border: 1px solid var(--fx-brass-700) !important;
+  border-radius: 2px !important;
+  background: var(--line-2) !important;
+  color: var(--fx-brass-200) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-sub) !important;
+  font-weight: 500 !important;
+  letter-spacing: .08em !important;
+}
+
+/* ── 键位 chip：名字淡铜、键帽是实心铜牌 ── */
+#knowledge .kn-key-chip {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 3px 8px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 2px !important;
+  background: var(--pg-inset) !important;
+  font-size: var(--fs-sub) !important;
+}
+#knowledge .kn-key-name {
+  color: var(--ink-2) !important;
+  letter-spacing: .04em !important;
+}
+#knowledge .kn-key-val {
+  padding: 1px 7px !important;
+  border: 1px solid var(--fx-brass-700) !important;
+  border-radius: 2px !important;
+  background: var(--pg-plaque) !important;
+  color: var(--fx-brass-900) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-num) !important;
+  font-weight: 600 !important;
+  letter-spacing: .02em !important;
+  box-shadow: var(--pg-plaque-shadow) !important;
+}
+
+/* ── 常用动作 chip ── */
+#knowledge .kn-act-chip {
+  display: inline-block !important;
+  padding: 3px 9px !important;
+  border: 1px solid var(--line-2) !important;
+  border-radius: 2px !important;
+  background: var(--line) !important;
+  color: var(--ink-2) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-sub) !important;
+  letter-spacing: .03em !important;
+}
+
+/* ── 动态 RAG 卡（内凹纸面）── */
+#knowledge .kn-live-body {
+  padding: 12px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 2px !important;
+  background: var(--pg-inset) !important;
+  color: var(--ink) !important;
+  font-size: var(--fs-body) !important;
+  line-height: 1.6 !important;
+  box-shadow: var(--pg-inset-shadow) !important;
+}
+#knowledge .kn-live-body strong {
+  color: var(--fx-brass-200) !important;
+  font-weight: 500 !important;
+}
+
+/* ── 经验时间线 ── */
+#knowledge .kn-timeline {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 9px !important;
+  max-height: 520px !important;
+  overflow-y: auto !important;
+  padding: 2px 4px 2px 2px !important;
+}
+#knowledge .kn-exp-card {
+  position: relative !important;
+  padding: 10px 12px !important;
+  border: 1px solid var(--line) !important;
+  border-left: 3px solid var(--fx-brass-700) !important;
+  border-radius: 2px !important;
+  background: var(--pg-inset) !important;
+  font-size: var(--fs-sub) !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft) !important;
+  transition: box-shadow .18s ease !important;
+}
+#knowledge .kn-exp-card.success {
+  border-left-color: var(--ok) !important;
+  background:
+    linear-gradient(90deg, var(--pg-ok-wash), transparent 58%),
+    var(--pg-inset) !important;
+}
+#knowledge .kn-exp-card.failure {
+  border-left-color: var(--bad) !important;
+  background:
+    linear-gradient(90deg, var(--pg-bad-wash), transparent 58%),
+    var(--pg-inset) !important;
+}
+#knowledge .kn-exp-card:hover {
+  box-shadow: inset 0 0 0 1px var(--line-2), var(--pg-shadow-soft) !important;
+}
+#knowledge .kn-exp-head {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  margin-bottom: 6px !important;
+}
+#knowledge .kn-exp-badge {
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-sub) !important;
+  font-weight: 500 !important;
+  letter-spacing: .10em !important;
+}
+#knowledge .kn-exp-badge.success { color: var(--pg-ok-ink) !important; }
+#knowledge .kn-exp-badge.failure { color: var(--pg-bad-ink) !important; }
+#knowledge .kn-exp-action {
+  margin-bottom: 4px !important;
+  color: var(--fx-brass-100) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-body) !important;
+  font-weight: 500 !important;
+  letter-spacing: .03em !important;
+  text-shadow: var(--pg-engrave) !important;
+}
+#knowledge .kn-exp-evidence {
+  color: var(--ink-2) !important;
+  font-size: var(--fs-sub) !important;
+  line-height: 1.55 !important;
+}
+#knowledge .kn-exp-evidence strong {
+  color: var(--fx-brass-300) !important;
+  font-weight: 500 !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ② 技能库 #skills
+   ══════════════════════════════════════════════════════════════════════════ */
+
+#skills .skills-card-grid {
+  gap: 14px !important;
+  align-items: start !important;
+}
+#skills .skill-card {
+  position: relative !important;
+  padding: 16px 18px !important;
+  border: 1px solid var(--line-2) !important;
+  border-radius: 3px !important;
+  background:
+    linear-gradient(180deg, var(--line), transparent 56px),
+    var(--pg-panel) !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft), var(--pg-shadow-deep) !important;
+  transition: border-color .18s ease, box-shadow .18s ease !important;
+}
+#skills .skill-card:hover {
+  transform: none !important;
+  border-color: var(--fx-brass-500) !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft), var(--pg-shadow-lift) !important;
+}
+#skills .skill-card.deleted {
+  opacity: .62 !important;
+  border-color: var(--line) !important;
+}
+#skills .skill-head {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+  margin-bottom: 8px !important;
+}
+#skills .skill-title {
+  margin: 0 !important;
+  color: var(--fx-brass-100) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-body) !important;
+  font-weight: 500 !important;
+  letter-spacing: .08em !important;
+  text-shadow: var(--pg-engrave) !important;
+}
+#skills .skill-desc {
+  margin: 0 0 10px !important;
+  color: var(--ink-2) !important;
+  font-size: var(--fs-body) !important;
+  line-height: 1.55 !important;
+}
+
+/* ── 可靠度：内凹槽 + 铜条 ── */
+#skills .skill-rel-box {
+  margin: 12px 0 !important;
+  padding: 10px 12px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 2px !important;
+  background: var(--pg-inset) !important;
+  box-shadow: var(--pg-inset-shadow) !important;
+}
+#skills .skill-rel-meta {
+  margin-bottom: 6px !important;
+  color: var(--ink-2) !important;
+  font-size: var(--fs-sub) !important;
+  letter-spacing: .03em !important;
+}
+#skills .skill-rel-meta strong {
+  color: var(--fx-brass-200) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-num) !important;
+  font-weight: 600 !important;
+}
+#skills .skill-rel-track {
+  height: 6px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 2px !important;
+  background: var(--pg-inset) !important;
+  box-shadow: var(--pg-inset-shadow) !important;
+  overflow: hidden !important;
+}
+#skills .skill-rel-bar {
+  height: 100% !important;
+  border-radius: 0 !important;
+  background: linear-gradient(
+    90deg,
+    var(--fx-brass-700),
+    var(--fx-brass-300) 58%,
+    var(--fx-brass-100)
+  ) !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi) !important;
+  transition: width .3s ease !important;
+}
+
+/* ── 动作序列 ── */
+#skills .skill-steps-title {
+  margin: 10px 0 6px !important;
+  color: var(--fx-brass-300) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-section) !important;
+  font-weight: 500 !important;
+  letter-spacing: .18em !important;
+  text-transform: uppercase !important;
+}
+#skills .skill-steps-list {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 4px !important;
+  margin-bottom: 12px !important;
+}
+#skills .skill-step-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 5px 9px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 2px !important;
+  background: var(--pg-inset) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-sub) !important;
+}
+#skills .skill-step-num {
+  color: var(--fx-brass-500) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-num) !important;
+  font-weight: 600 !important;
+}
+#skills .skill-step-act {
+  color: var(--fx-brass-200) !important;
+  font-weight: 500 !important;
+  letter-spacing: .04em !important;
+}
+#skills .skill-step-arg {
+  color: var(--ink-2) !important;
+  font-style: italic !important;
+}
+#skills .skill-actions-bar {
+  padding-top: 10px !important;
+  border-top: 1px solid var(--line) !important;
+  gap: 8px !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ③ 操控日志 #actions
+   ══════════════════════════════════════════════════════════════════════════ */
+
+#actions .act-filter-bar {
+  padding: 9px 14px !important;
+  border: 1px solid var(--line-2) !important;
+  border-radius: 2px !important;
+  background: var(--pg-panel) !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft), var(--pg-shadow-soft) !important;
+}
+#actions .filter-group {
+  gap: 6px !important;
+}
+#actions .chip {
+  padding: 4px 11px !important;
+  border: 1px solid var(--fx-brass-700) !important;
+  border-radius: 2px !important;
+  background: var(--pg-inset) !important;
+  color: var(--ink-2) !important;
+  font-size: var(--fs-sub) !important;
+  letter-spacing: .04em !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft) !important;
+  transition: background .18s ease, color .18s ease,
+              border-color .18s ease, box-shadow .18s ease !important;
+}
+#actions .chip:hover {
+  transform: none !important;
+  border-color: var(--fx-brass-500) !important;
+  background: var(--hover) !important;
+  color: var(--fx-brass-100) !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft), var(--pg-shadow-soft) !important;
+}
+#actions .chip:active {
+  transform: none !important;
+  box-shadow: var(--pg-inset-shadow) !important;
+}
+#actions .chip.active {
+  border-color: var(--fx-brass-700) !important;
+  background: var(--pg-plaque) !important;
+  color: var(--fx-brass-900) !important;
+  font-weight: 600 !important;
+  box-shadow: var(--pg-plaque-shadow) !important;
+}
+/* 「疑似空操作」始终带一点火漆红，提醒这是重点 */
+#actions .chip.warn {
+  border-color: var(--pg-seal-line) !important;
+  color: var(--pg-seal-ink) !important;
+}
+#actions .chip.warn.active {
+  border-color: color-mix(in srgb, var(--fx-seal) 72%, var(--bg)) !important;
+  background: linear-gradient(
+    180deg,
+    var(--fx-seal),
+    color-mix(in srgb, var(--fx-seal) 58%, var(--bg))
+  ) !important;
+  color: var(--ink) !important;
+  box-shadow:
+    inset 0 1px 0 var(--pg-hi-soft),
+    0 1px 3px color-mix(in srgb, var(--bg) 75%, transparent) !important;
+}
+#actions .chip.warn:hover {
+  color: var(--fx-brass-100) !important;
+}
+
+/* ── 时间线卡片 ── */
+#actions .actions-log-timeline {
+  gap: 8px !important;
+}
+#actions .act-log-card {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  flex-wrap: wrap !important;
+  gap: 10px 14px !important;
+  padding: 9px 14px !important;
+  border: 1px solid var(--line) !important;
+  border-left: 2px solid var(--fx-brass-700) !important;
+  border-radius: 2px !important;
+  background: var(--pg-panel) !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft), var(--pg-shadow-soft) !important;
+  transition: border-color .18s ease, box-shadow .18s ease !important;
+}
+#actions .act-log-card:hover {
+  border-color: var(--line-2) !important;
+  box-shadow: inset 0 0 0 1px var(--line-2), var(--pg-shadow-soft) !important;
+}
+#actions .act-log-card.suspected_noop {
+  border-color: var(--pg-seal-line) !important;
+  border-left-color: var(--fx-seal) !important;
+  background:
+    linear-gradient(90deg, var(--pg-seal-wash), transparent 62%),
+    var(--pg-panel) !important;
+  box-shadow:
+    inset 0 0 0 1px var(--pg-seal-wash),
+    var(--pg-shadow-soft) !important;
+}
+/* 旧皮肤里的告警脉冲在这里彻底关掉（画框语言不做呼吸） */
+#actions .act-log-card.suspected_noop .act-effect-pill {
+  animation: none !important;
+}
+#actions .act-left-info {
+  display: flex !important;
+  align-items: center !important;
+  flex-wrap: wrap !important;
+  gap: 10px !important;
+  min-width: 0 !important;
+}
+#actions .act-time {
+  min-width: 58px !important;
+  color: var(--fx-brass-300) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-sub) !important;
+  letter-spacing: .04em !important;
+}
+#actions .act-command {
+  color: var(--fx-brass-100) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-body) !important;
+  font-weight: 500 !important;
+  letter-spacing: .02em !important;
+  text-shadow: var(--pg-engrave) !important;
+}
+#actions .act-detail {
+  color: var(--ink-2) !important;
+  font-size: var(--fs-sub) !important;
+  line-height: 1.5 !important;
+}
+#actions .act-right-meta {
+  display: flex !important;
+  align-items: center !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+}
+
+/* ── tier / effect 徽标 ── */
+#actions .act-tier-pill {
+  padding: 1px 7px !important;
+  border: 1px solid var(--fx-brass-700) !important;
+  border-radius: 2px !important;
+  background: var(--pg-inset) !important;
+  color: var(--fx-brass-300) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-sub) !important;
+  letter-spacing: .06em !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft) !important;
+}
+#actions .act-effect-pill {
+  padding: 2px 8px !important;
+  border: 1px solid var(--line-2) !important;
+  border-radius: 2px !important;
+  background: var(--line) !important;
+  color: var(--ink-2) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-sub) !important;
+  font-weight: 600 !important;
+  letter-spacing: .08em !important;
+}
+#actions .act-effect-pill.confirmed {
+  border-color: var(--pg-ok-line) !important;
+  background: var(--pg-ok-wash) !important;
+  color: var(--pg-ok-ink) !important;
+}
+#actions .act-effect-pill.confirmed_idempotent {
+  border-color: var(--line-2) !important;
+  background: var(--line) !important;
+  color: var(--fx-brass-200) !important;
+}
+#actions .act-effect-pill.suspected_noop {
+  border-color: var(--pg-seal-line) !important;
+  background: var(--pg-seal-wash) !important;
+  color: var(--pg-bad-ink) !important;
+}
+#actions .act-effect-pill.unverifiable {
+  border-color: var(--pg-warn-line) !important;
+  background: var(--pg-warn-wash) !important;
+  color: var(--pg-warn-ink) !important;
+}
+#actions .act-effect-pill.not_sent {
+  border-color: var(--line) !important;
+  background: var(--pg-inset) !important;
+  color: var(--ink-3) !important;
+}
+#actions .act-cost {
+  color: var(--ink-3) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-sub) !important;
+  letter-spacing: .02em !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ④ 记录 #history（从零补：原文件几乎没写这页）
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* 列表容器本身是 .rows，去掉原表格式顶线与内边距，改成纵向账页 */
+#history #history-list,
+#history-list.rows {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 10px !important;
+  padding: 4px 0 0 !important;
+  border-top: 0 !important;
+}
+
+/* ── 单条对话：一页账纸 ── */
+#history .history-item {
+  position: relative !important;
+  padding: 10px 14px 11px !important;
+  border: 1px solid var(--line) !important;
+  border-left: 3px solid var(--fx-brass-700) !important;
+  border-radius: 2px !important;
+  background: var(--pg-panel) !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft), var(--pg-shadow-soft) !important;
+}
+#history .history-item.user {
+  border-left-color: var(--fx-seal) !important;
+  background:
+    linear-gradient(90deg, var(--pg-seal-wash), transparent 38%),
+    var(--pg-panel) !important;
+}
+#history .history-item.assistant {
+  border-left-color: var(--fx-brass-500) !important;
+  background:
+    linear-gradient(90deg, var(--line), transparent 38%),
+    var(--pg-panel) !important;
+}
+#history .history-item.other {
+  border-left-color: var(--ink-3) !important;
+}
+
+/* 角色名：衬线小标 + 底部发丝铜线 */
+#history .history-item > header {
+  margin: 0 0 6px !important;
+  padding: 0 0 5px !important;
+  border-bottom: 1px solid var(--line) !important;
+  color: var(--fx-brass-300) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-section) !important;
+  font-weight: 500 !important;
+  letter-spacing: .18em !important;
+  text-transform: uppercase !important;
+}
+#history .history-item.user > header { color: var(--pg-seal-ink) !important; }
+#history .history-item.assistant > header { color: var(--fx-brass-200) !important; }
+#history .history-item.other > header { color: var(--ink-2) !important; }
+
+/* 正文 */
+#history .history-content {
+  color: var(--ink) !important;
+  font-size: var(--fs-body) !important;
+  line-height: 1.62 !important;
+  letter-spacing: .01em !important;
+  overflow-wrap: anywhere !important;
+  user-select: text !important;
+}
+#history .history-content p {
+  margin: 0 0 6px !important;
+  white-space: pre-wrap !important;
+}
+#history .history-content p:last-child {
+  margin-bottom: 0 !important;
+}
+#history .history-content .emotion-tag {
+  color: var(--fx-brass-300) !important;
+  font-style: italic !important;
+  letter-spacing: .02em !important;
+}
+
+/* 工具调用行：像账页里夹的一张便签 */
+#history .history-meta {
+  margin-top: 8px !important;
+  padding: 5px 10px !important;
+  border: 1px solid var(--line) !important;
+  border-left: 2px solid var(--fx-brass-700) !important;
+  border-radius: 0 2px 2px 0 !important;
+  background: var(--pg-inset) !important;
+  color: var(--ink-3) !important;
+  font-size: var(--fs-sub) !important;
+  font-style: italic !important;
+  line-height: 1.45 !important;
+}
+
+/* 截图：装进一只小铜相框 */
+#history .history-image {
+  display: block !important;
+  max-width: min(420px, 100%) !important;
+  max-height: 320px !important;
+  margin: 10px 0 !important;
+  padding: 3px !important;
+  border: 1px solid var(--fx-brass-700) !important;
+  border-radius: 2px !important;
+  background: var(--fx-brass-900) !important;
+  object-fit: contain !important;
+  cursor: zoom-in !important;
+  box-shadow: inset 0 0 0 1px var(--pg-hi-soft), var(--pg-shadow-soft) !important;
+  transition: border-color .18s ease, box-shadow .18s ease !important;
+}
+#history .history-image:hover {
+  transform: none !important;
+  border-color: var(--fx-brass-500) !important;
+  box-shadow: inset 0 0 0 1px var(--pg-hi), var(--pg-shadow-lift) !important;
+}
+
+/* 空态 */
+#history .history-empty {
+  display: grid !important;
+  place-items: center !important;
+  min-height: 240px !important;
+  padding: 20px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 2px !important;
+  background: var(--pg-inset) !important;
+  color: var(--ink-3) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-body) !important;
+  letter-spacing: .14em !important;
+  text-align: center !important;
+}
+
+/* ── 分页：一条铜牌页码带 ── */
+#history .pager[hidden] {
+  display: none !important;
+}
+#history .pager {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+  margin: 18px 0 6px !important;
+  padding: 10px 12px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 2px !important;
+  background: var(--pg-panel) !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft), var(--pg-shadow-soft) !important;
+}
+#history .pager button {
+  min-width: 30px !important;
+  height: 28px !important;
+  padding: 0 9px !important;
+  border: 1px solid var(--fx-brass-700) !important;
+  border-radius: 2px !important;
+  background: var(--pg-inset) !important;
+  color: var(--ink-2) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-num) !important;
+  font-variant-numeric: tabular-nums !important;
+  letter-spacing: .02em !important;
+  cursor: pointer !important;
+  box-shadow: inset 0 1px 0 var(--pg-hi-soft) !important;
+  transition: background .18s ease, color .18s ease,
+              border-color .18s ease, box-shadow .18s ease !important;
+}
+#history .pager button:hover {
+  border-color: var(--fx-brass-500) !important;
+  background: var(--hover) !important;
+  color: var(--fx-brass-100) !important;
+}
+#history .pager button.active,
+#history .pager button[aria-current="page"] {
+  border-color: var(--fx-brass-700) !important;
+  background: var(--pg-plaque) !important;
+  color: var(--fx-brass-900) !important;
+  font-weight: 600 !important;
+  box-shadow: var(--pg-plaque-shadow) !important;
+}
+#history .pager button:active {
+  box-shadow: var(--pg-inset-shadow) !important;
+}
+#history .pager .gap {
+  min-width: 20px !important;
+  color: var(--ink-3) !important;
+  font-family: var(--pg-serif) !important;
+  font-size: var(--fs-num) !important;
+  text-align: center !important;
+  letter-spacing: .10em !important;
+  user-select: none !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   2026-11-16 记录页气泡化
+   现状是「全宽交替底色的列表」，读起来像日志不像对话。改成聊天气泡：
+   用户靠右（铜纸）、她靠左（绒布），角色名做成小铭牌。
+   纯 CSS：结构是 article.history-item.{user|assistant|other} > header + .history-content
+   ══════════════════════════════════════════════════════════════════════════ */
+#history .history-item {
+  display: flex !important;
+  flex-direction: column !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 7px 0 !important;
+}
+#history .history-item > header {
+  display: block !important;
+  width: fit-content;
+  margin-bottom: 5px;
+  padding: 2px 9px;
+  border: 1px solid rgba(232, 207, 138, 0.22);
+  border-radius: 2px;
+  background: rgba(20, 14, 8, 0.72);
+  font: 500 10.5px/1.5 Georgia, "Source Han Serif SC", serif !important;
+  letter-spacing: 0.18em !important;
+  text-transform: uppercase;
+}
+#history .history-content {
+  max-width: 78%;
+  padding: 10px 14px;
+  border-radius: 3px;
+  border: 1px solid rgba(232, 207, 138, 0.16);
+  background: linear-gradient(180deg, rgba(24, 33, 26, 0.92), rgba(13, 20, 16, 0.95));
+  box-shadow: inset 0 1px 0 rgba(255, 240, 200, 0.05), 0 6px 16px rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+  line-height: 1.62;
+  color: var(--ink);
+}
+/* 用户：靠右 + 铜纸（像她收到的一张纸条） */
+#history .history-item.user { align-items: flex-end; }
+#history .history-item.user .history-content {
+  background: linear-gradient(180deg, rgba(58, 43, 24, 0.92), rgba(36, 26, 15, 0.95));
+  border-color: rgba(217, 189, 114, 0.36);
+}
+#history .history-item.user > header { border-color: rgba(217, 189, 114, 0.34); }
+/* 她：靠左 + 绒布 */
+#history .history-item.assistant { align-items: flex-start; }
+/* 系统/其他：居中窄条 */
+#history .history-item.other { align-items: center; }
+#history .history-item.other .history-content {
+  max-width: 64%;
+  background: rgba(16, 12, 8, 0.9);
+  border-style: dashed;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+/* 图片附件在气泡里也不超出 */
+#history .history-content .history-image { max-width: 100%; border-radius: 2px; }
+
+/* 记录页：清掉条目级残留底（代理写的 `#history .history-item.user` 带背景，
+   特异性 1ID+2class 压过了 `#history .history-item` 的 transparent，会出现一大块空底） */
+#history .history-item.user,
+#history .history-item.assistant,
+#history .history-item.other {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  min-height: 0 !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   设置页 · 能力注册表（2026-11-16 P1）
+   行由 js/core/capabilities.js 生成；这里只管画框语言（2px 角/铜标签/衬线组名）
+   ═══════════════════════════════════════════════════════════════════════ */
+.cap-group { display: flex; flex-direction: column; gap: 2px; }
+.cap-group + .cap-group { margin-top: 10px; }
+.cap-group-head {
+  font: 500 11px/1.7 Georgia, "Source Han Serif SC", serif;
+  letter-spacing: .18em; color: var(--fx-brass-200, #ecda9f);
+  opacity: .85; padding: 8px 2px 2px;
+  border-bottom: 1px solid rgba(232, 207, 138, 0.12);
+}
+.cap-row { align-items: center; }
+.cap-row .row-label .sub { display: block; margin-top: 2px; max-width: 560px; line-height: 1.5; }
+.cap-side { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+.cap-badge {
+  font-size: 10px; line-height: 1; padding: 3px 6px;
+  border: 1px solid rgba(232, 207, 138, 0.35); border-radius: 2px;
+  color: var(--ink-2, #bfa87f); background: rgba(20, 14, 8, 0.6);
+  letter-spacing: .08em; white-space: nowrap;
+}
+.cap-badge.hot { color: var(--fx-brass-300, #d9bd72); border-color: rgba(232, 207, 138, 0.5); }
+.cap-badge.cold { color: var(--ink-2, #bfa87f); }
+.cap-badge.soft { color: var(--fx-brass-500, #8f7024); border-style: dashed; }
+.cap-readonly {
+  font: 11px/1.4 Consolas, "Cascadia Mono", monospace;
+  color: var(--ink-2, #bfa87f); letter-spacing: .04em;
+}
+.cap-select {
+  width: 110px; padding: 5px 8px;
+  border: 1px solid var(--fx-brass-700, #5c4613); border-radius: 2px;
+  background: linear-gradient(180deg, #2a1f14, #1b130c);
+  color: var(--ink, #f2e6c8); font-size: 12px;
+}

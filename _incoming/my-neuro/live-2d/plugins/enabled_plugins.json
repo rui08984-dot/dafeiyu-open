@@ -1,0 +1,30 @@
+{
+  "plugins": [
+    "built-in/web-search",
+    "community/dawn-dusk-line",
+    "community/watch-screen",
+    "built-in/note",
+    "built-in/diary",
+    "built-in/ai-log",
+    "community/user-profile",
+    "built-in/sfx",
+    "built-in/schedule",
+    "built-in/context-compressor",
+    "built-in/auto-chat",
+    "community/memory-recall",
+    "built-in/memos",
+    "built-in/code-executor",
+    "community/dispatch",
+    "community/inner-state",
+    "community/memory-evolve",
+    "community/persona-guard",
+    "community/companion-health",
+    "community/live-dock",
+    "community/alive-state",
+    "community/game-actions",
+    "community/world-sense",
+    "community/world-extras",
+    "community/rss-brief",
+    "community/mind-kernel"
+  ]
+}

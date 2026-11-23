@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>大肥鱼 · 浏览器 tab 上报</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { width: 280px; margin: 0; padding: 14px; font: 13px/1.5 system-ui, "Microsoft YaHei", sans-serif; }
+    h1 { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
+    label { display: block; margin: 8px 0; }
+    .row { display: flex; align-items: center; gap: 6px; }
+    input[type="password"] { width: 100%; box-sizing: border-box; padding: 5px 7px; margin-top: 4px;
+      border: 1px solid #8888; border-radius: 6px; background: transparent; color: inherit; }
+    button { width: 100%; margin-top: 6px; padding: 6px; border: 0; border-radius: 6px;
+      background: #4a7dff; color: #fff; font-size: 13px; cursor: pointer; }
+    button:active { opacity: .8; }
+    #status { margin: 10px 0 0; padding: 7px 8px; border-radius: 6px; background: #8881; word-break: break-all; }
+    #status.ok { background: #2ea04322; color: #2ea043; }
+    #status.err { background: #f8514922; color: #f85149; }
+    .hint { margin: 10px 0 0; font-size: 11px; opacity: .7; }
+  </style>
+</head>
+<body>
+  <h1>大肥鱼 · 浏览器感知</h1>
+  <label class="row"><input type="checkbox" id="enabled"> 启用上报</label>
+  <label>本机令牌
+    <input type="password" id="token" placeholder="config.json 的 browser_ext_token" autocomplete="off">
+  </label>
+  <button id="save">保存</button>
+  <p id="status">读取中…</p>
+  <p class="hint">只报「当前活动标签页」的域名与标题（不含路径/参数/地址栏）；无痕窗口只报「隐私」，域名不着盘。</p>
+  <script src="popup.js"></script>
+</body>
+</html>

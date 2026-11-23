@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "大肥鱼 · 浏览器 tab 上报",
+  "version": "1.0.0",
+  "description": "把当前活动标签页的域名与标题上报到本机 127.0.0.1:8103（只报活动 tab，不报路径/参数，无痕只报“隐私”）",
+  "permissions": [
+    "tabs",
+    "alarms",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8103/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "大肥鱼 · 浏览器 tab 上报",
+    "default_popup": "popup.html"
+  }
+}

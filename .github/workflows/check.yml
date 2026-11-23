@@ -1,0 +1,27 @@
+name: check
+
+# 每次 push / PR 跑一遍「主仓库自己能验的部分」。
+#
+# 为什么只跑这些（2026-11-14）：完整的 `_probe/check-all.mjs` 里，语法扫描和 3 个单测
+# 依赖 `_incoming/my-neuro/live-2d`（她在另一个**私有**仓库，CI 默认拿不到）。
+# 与其让它永远红着（然后所有人都学会忽略红色），不如跑真正能验的：
+#   · pet-runtime 下 83 个 .mjs/.cjs 的语法
+#   · 5 组不依赖她的单测（perf 引擎 87 / 编译器 17 / 情绪契约 26 / 抖动 23 / 两段提交 21）
+# Rust 与 Python 的检查留给本机（CI runner 装那一套太重，且本机才是真实运行环境）。
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  main-repo:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 主仓库自检（语法 + 5 组单测）
+        run: node _probe/check-ci.mjs

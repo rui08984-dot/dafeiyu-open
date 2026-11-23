@@ -1,0 +1,10 @@
+{
+  "name": "mind-kernel",
+  "displayName": "认知内核（目标栈）",
+  "version": "0.1.0",
+  "author": "pet-runtime",
+  "description": "目标栈 + 计划 + 30s 纯规则 arbiter；只做状态迁移与计划差分注入，不新增进程/端口/工具",
+  "framework_version": ">=1.0.0",
+  "main": "index.js",
+  "lang": "js"
+}

@@ -1,0 +1,36 @@
+{
+  "name": "选项袋",
+  "template_path": "<project-root>\\pet-runtime\\knowledge\\templates\\选项袋.png",
+  "pixel_size": [
+    90,
+    110
+  ],
+  "source_window_size": [
+    1642,
+    956
+  ],
+  "source_window_size_note": "存模板时的窗框物理尺寸（GetWindowRect）。匹配时按当前窗口/此值等比缩放模板。",
+  "source_client_size": [
+    1620,
+    900
+  ],
+  "source_client_size_note": "存模板时的客户区物理尺寸；匹配优先用它算缩放比例（UI 内容随客户区缩放）。",
+  "region_window_relative": [
+    1125,
+    795,
+    90,
+    110
+  ],
+  "region_note": "窗口内相对物理像素，窗框左上角=0,0",
+  "window_title": "植物大战僵尸杂交版",
+  "captured_at": "2026-11-10T02:27:55",
+  "capture_via": "wgc",
+  "client_only": false,
+  "screen_rect": [
+    1584,
+    1100,
+    90,
+    110
+  ],
+  "description": "由 visual_locate.py --save-region 生成；改窗口大小后仍可匹配（按 source_window_size 归一化）"
+}

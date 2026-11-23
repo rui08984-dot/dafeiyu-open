@@ -1,0 +1,4188 @@
+{
+  "game": "我的世界",
+  "version": "Java 版（1.20+ 默认键位）",
+  "updatedAt": "2026-11-10",
+  "confidence": "high",
+  "rules": [
+    {
+      "id": "rcon-zero-risk",
+      "kind": "method",
+      "text": "我的世界服务端**原生支持 RCON 协议**，走 `mc` 动作零注入、零反作弊风险。前提：server.properties 里 enable-rcon=true + rcon.password"
+    },
+    {
+      "id": "rcon-safe-cmds",
+      "kind": "method",
+      "text": "RCON 安全命令：list（在线玩家）/ pos（位置）/ say（说话）/ time（时间）/ weather（天气）。改世界（fill/setblock）需显式 allowWorldModify"
+    },
+    {
+      "id": "rcon-dangerous",
+      "kind": "pitfall",
+      "text": "RCON 拒绝执行的：op/deop/ban/kick/stop/kill @a/fill ... air。这些能毁掉存档或踢人"
+    },
+    {
+      "id": "mouse-relative",
+      "kind": "method",
+      "text": "视角控制必须用鼠标**相对位移**（MOUSEEVENTF_MOVE + dx,dy），不能绝对定位。且精度受系统指针加速影响，要按游戏实测标定"
+    },
+    {
+      "id": "raw-input",
+      "kind": "pitfall",
+      "text": "我的世界用 Raw Input 读键盘，PostMessage 完全无效（RIDEV_NOLEGACY 下不生成 WM_KEYDOWN）。必须 SendInput + KEYEVENTF_SCANCODE"
+    },
+    {
+      "id": "inventory-slots",
+      "kind": "mechanic",
+      "text": "快捷栏 9 格用数字键 1-9 选。背包按 E 打开，鼠标拖拽物品"
+    },
+    {
+      "id": "survival-priority",
+      "kind": "mechanic",
+      "text": "生存模式优先级：木头→工作台→工具→食物→火把→挖矿。白天 10 分钟一个循环"
+    },
+    {
+      "id": "screenshot-chat",
+      "kind": "pitfall",
+      "text": "按 T 打开聊天框后，所有按键都进聊天而不是游戏。发完消息必须按回车关闭聊天框"
+    },
+    {
+      "id": "recipe-oak_planks",
+      "kind": "recipe",
+      "text": "橡木木板：把橡木原木无序放进合成格，得到 4 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "橡木木板"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-spruce_planks",
+      "kind": "recipe",
+      "text": "云杉木板：把云杉原木无序放进合成格，得到 4 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "云杉木板"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-birch_planks",
+      "kind": "recipe",
+      "text": "白桦木板：把白桦原木无序放进合成格，得到 4 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "白桦木板"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-stick",
+      "kind": "recipe",
+      "text": "木棍：在合成格里按 第1行「樱花木板」、第2行「樱花木板」 摆放（物品栏 2x2 就能做），得到 4 个（材料可替换，共 13 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "木棍"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-crafting_table",
+      "kind": "recipe",
+      "text": "工作台：在合成格里按 第1行「樱花木板 樱花木板」、第2行「樱花木板 樱花木板」 摆放（物品栏 2x2 就能做），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "工作台"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-furnace",
+      "kind": "recipe",
+      "text": "熔炉：在合成格里按 第1行「深板岩圆石 深板岩圆石 深板岩圆石」、第2行「深板岩圆石 空 深板岩圆石」、第3行「深板岩圆石 深板岩圆石 深板岩圆石」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 3 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "熔炉"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-chest",
+      "kind": "recipe",
+      "text": "箱子：在合成格里按 第1行「樱花木板 樱花木板 樱花木板」、第2行「樱花木板 空 樱花木板」、第3行「樱花木板 樱花木板 樱花木板」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "箱子"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-torch",
+      "kind": "recipe",
+      "text": "火把：在合成格里按 第1行「木炭」、第2行「木棍」 摆放（物品栏 2x2 就能做），得到 4 个（材料可替换，共 2 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "火把"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-ladder",
+      "kind": "recipe",
+      "text": "梯子：在合成格里按 第1行「木棍 空 木棍」、第2行「木棍 木棍 木棍」、第3行「木棍 空 木棍」 摆放（要用 3x3 合成格），得到 3 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "梯子"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-oak_fence",
+      "kind": "recipe",
+      "text": "橡木栅栏：在合成格里按 第1行「橡木木板 木棍 橡木木板」、第2行「橡木木板 木棍 橡木木板」 摆放（要用 3x3 合成格），得到 3 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "橡木栅栏"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-oak_door",
+      "kind": "recipe",
+      "text": "橡木门：在合成格里按 第1行「橡木木板 橡木木板」、第2行「橡木木板 橡木木板」、第3行「橡木木板 橡木木板」 摆放（要用 3x3 合成格），得到 3 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "橡木门"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-oak_trapdoor",
+      "kind": "recipe",
+      "text": "橡木活板门：在合成格里按 第1行「橡木木板 橡木木板 橡木木板」、第2行「橡木木板 橡木木板 橡木木板」 摆放（要用 3x3 合成格），得到 2 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "橡木活板门"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-oak_slab",
+      "kind": "recipe",
+      "text": "橡木台阶：在合成格里按 第1行「橡木木板 橡木木板 橡木木板」 摆放（要用 3x3 合成格），得到 6 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "橡木台阶"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-oak_stairs",
+      "kind": "recipe",
+      "text": "橡木楼梯：在合成格里按 第1行「橡木木板 空 空」、第2行「橡木木板 橡木木板 空」、第3行「橡木木板 橡木木板 橡木木板」 摆放（要用 3x3 合成格），得到 4 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "橡木楼梯"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-oak_sign",
+      "kind": "recipe",
+      "text": "橡木告示牌：在合成格里按 第1行「橡木木板 橡木木板 橡木木板」、第2行「橡木木板 橡木木板 橡木木板」、第3行「空 木棍 空」 摆放（要用 3x3 合成格），得到 3 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "橡木告示牌"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-oak_boat",
+      "kind": "recipe",
+      "text": "橡木船：在合成格里按 第1行「橡木木板 空 橡木木板」、第2行「橡木木板 橡木木板 橡木木板」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "橡木船"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-bowl",
+      "kind": "recipe",
+      "text": "碗：在合成格里按 第1行「樱花木板 空 樱花木板」、第2行「空 樱花木板 空」 摆放（要用 3x3 合成格），得到 4 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "碗"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-bucket",
+      "kind": "recipe",
+      "text": "铁桶：在合成格里按 第1行「铁锭 空 铁锭」、第2行「空 铁锭 空」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "铁桶"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-bread",
+      "kind": "recipe",
+      "text": "面包：在合成格里按 第1行「小麦 小麦 小麦」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "面包"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-cookie",
+      "kind": "recipe",
+      "text": "曲奇：在合成格里按 第1行「小麦 可可豆 小麦」 摆放（要用 3x3 合成格），得到 8 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "曲奇"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-cake",
+      "kind": "recipe",
+      "text": "蛋糕：在合成格里按 第1行「奶桶 奶桶 奶桶」、第2行「糖 棕色鸡蛋 糖」、第3行「小麦 小麦 小麦」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 3 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "蛋糕"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-pumpkin_pie",
+      "kind": "recipe",
+      "text": "南瓜派：把南瓜、糖、鸡蛋无序放进合成格，得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "南瓜派"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-mushroom_stew",
+      "kind": "recipe",
+      "text": "蘑菇煲：把棕色蘑菇、碗、红色蘑菇无序放进合成格，得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "蘑菇煲"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-beetroot_soup",
+      "kind": "recipe",
+      "text": "甜菜汤：把甜菜根、碗无序放进合成格，得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "甜菜汤"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-rabbit_stew",
+      "kind": "recipe",
+      "text": "兔肉煲：把棕色蘑菇、烤马铃薯、熟兔肉、碗、胡萝卜无序放进合成格，得到 1 个（材料可替换，共 2 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "兔肉煲"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-golden_apple",
+      "kind": "recipe",
+      "text": "金苹果：在合成格里按 第1行「金锭 金锭 金锭」、第2行「金锭 苹果 金锭」、第3行「金锭 金锭 金锭」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "金苹果"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-wooden_pickaxe",
+      "kind": "recipe",
+      "text": "木镐：在合成格里按 第1行「樱花木板 樱花木板 樱花木板」、第2行「空 木棍 空」、第3行「空 木棍 空」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "木镐"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-stone_pickaxe",
+      "kind": "recipe",
+      "text": "石镐：在合成格里按 第1行「深板岩圆石 深板岩圆石 深板岩圆石」、第2行「空 木棍 空」、第3行「空 木棍 空」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 3 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "石镐"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-iron_pickaxe",
+      "kind": "recipe",
+      "text": "铁镐：在合成格里按 第1行「铁锭 铁锭 铁锭」、第2行「空 木棍 空」、第3行「空 木棍 空」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "铁镐"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-golden_pickaxe",
+      "kind": "recipe",
+      "text": "金镐：在合成格里按 第1行「金锭 金锭 金锭」、第2行「空 木棍 空」、第3行「空 木棍 空」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "金镐"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-diamond_pickaxe",
+      "kind": "recipe",
+      "text": "钻石镐：在合成格里按 第1行「钻石 钻石 钻石」、第2行「空 木棍 空」、第3行「空 木棍 空」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "钻石镐"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-wooden_axe",
+      "kind": "recipe",
+      "text": "木斧：在合成格里按 第1行「樱花木板 樱花木板」、第2行「樱花木板 木棍」、第3行「空 木棍」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "木斧"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-stone_axe",
+      "kind": "recipe",
+      "text": "石斧：在合成格里按 第1行「深板岩圆石 深板岩圆石」、第2行「深板岩圆石 木棍」、第3行「空 木棍」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 3 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "石斧"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-iron_axe",
+      "kind": "recipe",
+      "text": "铁斧：在合成格里按 第1行「铁锭 铁锭」、第2行「铁锭 木棍」、第3行「空 木棍」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "铁斧"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-diamond_axe",
+      "kind": "recipe",
+      "text": "钻石斧：在合成格里按 第1行「钻石 钻石」、第2行「钻石 木棍」、第3行「空 木棍」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "钻石斧"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-wooden_shovel",
+      "kind": "recipe",
+      "text": "木锹：在合成格里按 第1行「樱花木板」、第2行「木棍」、第3行「木棍」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "木锹"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-stone_shovel",
+      "kind": "recipe",
+      "text": "石锹：在合成格里按 第1行「深板岩圆石」、第2行「木棍」、第3行「木棍」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 3 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "石锹"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-iron_shovel",
+      "kind": "recipe",
+      "text": "铁锹：在合成格里按 第1行「铁锭」、第2行「木棍」、第3行「木棍」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "铁锹"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-diamond_shovel",
+      "kind": "recipe",
+      "text": "钻石锹：在合成格里按 第1行「钻石」、第2行「木棍」、第3行「木棍」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "钻石锹"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-wooden_sword",
+      "kind": "recipe",
+      "text": "木剑：在合成格里按 第1行「樱花木板」、第2行「樱花木板」、第3行「木棍」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "木剑"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-stone_sword",
+      "kind": "recipe",
+      "text": "石剑：在合成格里按 第1行「深板岩圆石」、第2行「深板岩圆石」、第3行「木棍」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 3 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "石剑"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-iron_sword",
+      "kind": "recipe",
+      "text": "铁剑：在合成格里按 第1行「铁锭」、第2行「铁锭」、第3行「木棍」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "铁剑"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-diamond_sword",
+      "kind": "recipe",
+      "text": "钻石剑：在合成格里按 第1行「钻石」、第2行「钻石」、第3行「木棍」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "钻石剑"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-wooden_hoe",
+      "kind": "recipe",
+      "text": "木锄：在合成格里按 第1行「樱花木板 樱花木板」、第2行「空 木棍」、第3行「空 木棍」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "木锄"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-stone_hoe",
+      "kind": "recipe",
+      "text": "石锄：在合成格里按 第1行「深板岩圆石 深板岩圆石」、第2行「空 木棍」、第3行「空 木棍」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 3 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "石锄"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-iron_hoe",
+      "kind": "recipe",
+      "text": "铁锄：在合成格里按 第1行「铁锭 铁锭」、第2行「空 木棍」、第3行「空 木棍」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "铁锄"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-diamond_hoe",
+      "kind": "recipe",
+      "text": "钻石锄：在合成格里按 第1行「钻石 钻石」、第2行「空 木棍」、第3行「空 木棍」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "钻石锄"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-bow",
+      "kind": "recipe",
+      "text": "弓：在合成格里按 第1行「空 木棍 线」、第2行「木棍 空 线」、第3行「空 木棍 线」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "弓"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-arrow",
+      "kind": "recipe",
+      "text": "箭：在合成格里按 第1行「燧石」、第2行「木棍」、第3行「羽毛」 摆放（要用 3x3 合成格），得到 4 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "箭"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-shield",
+      "kind": "recipe",
+      "text": "盾牌：在合成格里按 第1行「樱花木板 铁锭 樱花木板」、第2行「樱花木板 樱花木板 樱花木板」、第3行「空 樱花木板 空」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "盾牌"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-fishing_rod",
+      "kind": "recipe",
+      "text": "钓鱼竿：在合成格里按 第1行「空 空 木棍」、第2行「空 木棍 线」、第3行「木棍 空 线」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "钓鱼竿"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-flint_and_steel",
+      "kind": "recipe",
+      "text": "打火石：把燧石、铁锭无序放进合成格，得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "打火石"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-shears",
+      "kind": "recipe",
+      "text": "剪刀：在合成格里按 第1行「空 铁锭」、第2行「铁锭 空」 摆放（物品栏 2x2 就能做），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "剪刀"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-compass",
+      "kind": "recipe",
+      "text": "指南针：在合成格里按 第1行「空 铁锭 空」、第2行「铁锭 红石粉 铁锭」、第3行「空 铁锭 空」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "指南针"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-clock",
+      "kind": "recipe",
+      "text": "时钟：在合成格里按 第1行「空 金锭 空」、第2行「金锭 红石粉 金锭」、第3行「空 金锭 空」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "时钟"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-spyglass",
+      "kind": "recipe",
+      "text": "望远镜：在合成格里按 第1行「紫水晶碎片」、第2行「铜锭」、第3行「铜锭」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "望远镜"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-brush",
+      "kind": "recipe",
+      "text": "刷子：在合成格里按 第1行「羽毛」、第2行「铜锭」、第3行「木棍」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "刷子"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-glass_pane",
+      "kind": "recipe",
+      "text": "玻璃板：在合成格里按 第1行「玻璃 玻璃 玻璃」、第2行「玻璃 玻璃 玻璃」 摆放（要用 3x3 合成格），得到 16 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "玻璃板"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-bricks",
+      "kind": "recipe",
+      "text": "红砖块：在合成格里按 第1行「红砖 红砖」、第2行「红砖 红砖」 摆放（物品栏 2x2 就能做），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "红砖块"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-stone_bricks",
+      "kind": "recipe",
+      "text": "石砖：在合成格里按 第1行「石头 石头」、第2行「石头 石头」 摆放（物品栏 2x2 就能做），得到 4 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "石砖"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-sandstone",
+      "kind": "recipe",
+      "text": "砂岩：在合成格里按 第1行「沙子 沙子」、第2行「沙子 沙子」 摆放（物品栏 2x2 就能做），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "砂岩"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-iron_block",
+      "kind": "recipe",
+      "text": "铁块：在合成格里按 第1行「铁锭 铁锭 铁锭」、第2行「铁锭 铁锭 铁锭」、第3行「铁锭 铁锭 铁锭」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "铁块"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-gold_block",
+      "kind": "recipe",
+      "text": "金块：在合成格里按 第1行「金锭 金锭 金锭」、第2行「金锭 金锭 金锭」、第3行「金锭 金锭 金锭」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "金块"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-diamond_block",
+      "kind": "recipe",
+      "text": "钻石块：在合成格里按 第1行「钻石 钻石 钻石」、第2行「钻石 钻石 钻石」、第3行「钻石 钻石 钻石」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "钻石块"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-coal_block",
+      "kind": "recipe",
+      "text": "煤炭块：在合成格里按 第1行「煤炭 煤炭 煤炭」、第2行「煤炭 煤炭 煤炭」、第3行「煤炭 煤炭 煤炭」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "煤炭块"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-redstone_block",
+      "kind": "recipe",
+      "text": "红石块：在合成格里按 第1行「红石粉 红石粉 红石粉」、第2行「红石粉 红石粉 红石粉」、第3行「红石粉 红石粉 红石粉」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "红石块"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-lapis_block",
+      "kind": "recipe",
+      "text": "青金石块：在合成格里按 第1行「青金石 青金石 青金石」、第2行「青金石 青金石 青金石」、第3行「青金石 青金石 青金石」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "青金石块"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-emerald_block",
+      "kind": "recipe",
+      "text": "绿宝石块：在合成格里按 第1行「绿宝石 绿宝石 绿宝石」、第2行「绿宝石 绿宝石 绿宝石」、第3行「绿宝石 绿宝石 绿宝石」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "绿宝石块"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-quartz_block",
+      "kind": "recipe",
+      "text": "石英块：在合成格里按 第1行「下界石英 下界石英」、第2行「下界石英 下界石英」 摆放（物品栏 2x2 就能做），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "石英块"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-bookshelf",
+      "kind": "recipe",
+      "text": "书架：在合成格里按 第1行「樱花木板 樱花木板 樱花木板」、第2行「书 书 书」、第3行「樱花木板 樱花木板 樱花木板」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "书架"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-enchanting_table",
+      "kind": "recipe",
+      "text": "附魔台：在合成格里按 第1行「空 书 空」、第2行「钻石 黑曜石 钻石」、第3行「黑曜石 黑曜石 黑曜石」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "附魔台"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-anvil",
+      "kind": "recipe",
+      "text": "铁砧：在合成格里按 第1行「铁块 铁块 铁块」、第2行「空 铁锭 空」、第3行「铁锭 铁锭 铁锭」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "铁砧"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-brewing_stand",
+      "kind": "recipe",
+      "text": "酿造台：在合成格里按 第1行「空 烈焰棒 空」、第2行「深板岩圆石 深板岩圆石 深板岩圆石」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 3 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "酿造台"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-cauldron",
+      "kind": "recipe",
+      "text": "炼药锅：在合成格里按 第1行「铁锭 空 铁锭」、第2行「铁锭 空 铁锭」、第3行「铁锭 铁锭 铁锭」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "炼药锅"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-beacon",
+      "kind": "recipe",
+      "text": "信标：在合成格里按 第1行「玻璃 玻璃 玻璃」、第2行「玻璃 下界之星 玻璃」、第3行「黑曜石 黑曜石 黑曜石」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "信标"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-conduit",
+      "kind": "recipe",
+      "text": "潮涌核心：在合成格里按 第1行「鹦鹉螺壳 鹦鹉螺壳 鹦鹉螺壳」、第2行「鹦鹉螺壳 海洋之心 鹦鹉螺壳」、第3行「鹦鹉螺壳 鹦鹉螺壳 鹦鹉螺壳」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "潮涌核心"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-barrel",
+      "kind": "recipe",
+      "text": "木桶：在合成格里按 第1行「樱花木板 樱花木台阶 樱花木板」、第2行「樱花木板 空 樱花木板」、第3行「樱花木板 樱花木台阶 樱花木板」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "木桶"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-composter",
+      "kind": "recipe",
+      "text": "堆肥桶：在合成格里按 第1行「樱花木台阶 空 樱花木台阶」、第2行「樱花木台阶 空 樱花木台阶」、第3行「樱花木台阶 樱花木台阶 樱花木台阶」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "堆肥桶"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-smoker",
+      "kind": "recipe",
+      "text": "烟熏炉：在合成格里按 第1行「空 去皮诡异菌核 空」、第2行「去皮诡异菌核 熔炉 去皮诡异菌核」、第3行「空 去皮诡异菌核 空」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 44 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "烟熏炉"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-blast_furnace",
+      "kind": "recipe",
+      "text": "高炉：在合成格里按 第1行「铁锭 铁锭 铁锭」、第2行「铁锭 熔炉 铁锭」、第3行「平滑石头 平滑石头 平滑石头」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "高炉"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-stonecutter",
+      "kind": "recipe",
+      "text": "切石机：在合成格里按 第1行「空 铁锭 空」、第2行「石头 石头 石头」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "切石机"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-cartography_table",
+      "kind": "recipe",
+      "text": "制图台：在合成格里按 第1行「纸 纸」、第2行「樱花木板 樱花木板」、第3行「樱花木板 樱花木板」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "制图台"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-fletching_table",
+      "kind": "recipe",
+      "text": "制箭台：在合成格里按 第1行「燧石 燧石」、第2行「樱花木板 樱花木板」、第3行「樱花木板 樱花木板」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "制箭台"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-smithing_table",
+      "kind": "recipe",
+      "text": "锻造台：在合成格里按 第1行「铁锭 铁锭」、第2行「樱花木板 樱花木板」、第3行「樱花木板 樱花木板」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "锻造台"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-loom",
+      "kind": "recipe",
+      "text": "织布机：在合成格里按 第1行「线 线」、第2行「樱花木板 樱花木板」 摆放（物品栏 2x2 就能做），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "织布机"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-grindstone",
+      "kind": "recipe",
+      "text": "砂轮：在合成格里按 第1行「木棍 石头台阶 木棍」、第2行「樱花木板 空 樱花木板」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "砂轮"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-lectern",
+      "kind": "recipe",
+      "text": "讲台：在合成格里按 第1行「樱花木台阶 樱花木台阶 樱花木台阶」、第2行「空 书架 空」、第3行「空 樱花木台阶 空」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "讲台"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-lantern",
+      "kind": "recipe",
+      "text": "灯笼：在合成格里按 第1行「铁粒 铁粒 铁粒」、第2行「铁粒 火把 铁粒」、第3行「铁粒 铁粒 铁粒」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "灯笼"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-soul_lantern",
+      "kind": "recipe",
+      "text": "灵魂灯笼：在合成格里按 第1行「铁粒 铁粒 铁粒」、第2行「铁粒 灵魂火把 铁粒」、第3行「铁粒 铁粒 铁粒」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "灵魂灯笼"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-iron_bars",
+      "kind": "recipe",
+      "text": "铁栏杆：在合成格里按 第1行「铁锭 铁锭 铁锭」、第2行「铁锭 铁锭 铁锭」 摆放（要用 3x3 合成格），得到 16 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "铁栏杆"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-iron_door",
+      "kind": "recipe",
+      "text": "铁门：在合成格里按 第1行「铁锭 铁锭」、第2行「铁锭 铁锭」、第3行「铁锭 铁锭」 摆放（要用 3x3 合成格），得到 3 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "铁门"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-iron_trapdoor",
+      "kind": "recipe",
+      "text": "铁活板门：在合成格里按 第1行「铁锭 铁锭」、第2行「铁锭 铁锭」 摆放（物品栏 2x2 就能做），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "铁活板门"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-piston",
+      "kind": "recipe",
+      "text": "活塞：在合成格里按 第1行「樱花木板 樱花木板 樱花木板」、第2行「圆石 铁锭 圆石」、第3行「圆石 红石粉 圆石」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "活塞"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-sticky_piston",
+      "kind": "recipe",
+      "text": "黏性活塞：在合成格里按 第1行「黏液球」、第2行「活塞」 摆放（物品栏 2x2 就能做），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "黏性活塞"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-observer",
+      "kind": "recipe",
+      "text": "侦测器：在合成格里按 第1行「圆石 圆石 圆石」、第2行「红石粉 红石粉 下界石英」、第3行「圆石 圆石 圆石」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "侦测器"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-redstone_torch",
+      "kind": "recipe",
+      "text": "红石火把：在合成格里按 第1行「红石粉」、第2行「木棍」 摆放（物品栏 2x2 就能做），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "红石火把"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-repeater",
+      "kind": "recipe",
+      "text": "红石中继器：在合成格里按 第1行「红石火把 红石粉 红石火把」、第2行「石头 石头 石头」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "红石中继器"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-comparator",
+      "kind": "recipe",
+      "text": "红石比较器：在合成格里按 第1行「空 红石火把 空」、第2行「红石火把 下界石英 红石火把」、第3行「石头 石头 石头」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "红石比较器"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-daylight_detector",
+      "kind": "recipe",
+      "text": "阳光探测器：在合成格里按 第1行「玻璃 玻璃 玻璃」、第2行「下界石英 下界石英 下界石英」、第3行「樱花木台阶 樱花木台阶 樱花木台阶」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "阳光探测器"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-hopper",
+      "kind": "recipe",
+      "text": "漏斗：在合成格里按 第1行「铁锭 空 铁锭」、第2行「铁锭 箱子 铁锭」、第3行「空 铁锭 空」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "漏斗"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-dropper",
+      "kind": "recipe",
+      "text": "投掷器：在合成格里按 第1行「圆石 圆石 圆石」、第2行「圆石 空 圆石」、第3行「圆石 红石粉 圆石」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "投掷器"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-dispenser",
+      "kind": "recipe",
+      "text": "发射器：在合成格里按 第1行「圆石 圆石 圆石」、第2行「圆石 弓 圆石」、第3行「圆石 红石粉 圆石」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "发射器"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-minecart",
+      "kind": "recipe",
+      "text": "矿车：在合成格里按 第1行「铁锭 空 铁锭」、第2行「铁锭 铁锭 铁锭」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "矿车"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-rail",
+      "kind": "recipe",
+      "text": "铁轨：在合成格里按 第1行「铁锭 空 铁锭」、第2行「铁锭 木棍 铁锭」、第3行「铁锭 空 铁锭」 摆放（要用 3x3 合成格），得到 16 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "铁轨"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-powered_rail",
+      "kind": "recipe",
+      "text": "动力铁轨：在合成格里按 第1行「金锭 空 金锭」、第2行「金锭 木棍 金锭」、第3行「金锭 红石粉 金锭」 摆放（要用 3x3 合成格），得到 6 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "动力铁轨"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-detector_rail",
+      "kind": "recipe",
+      "text": "探测铁轨：在合成格里按 第1行「铁锭 空 铁锭」、第2行「铁锭 石头压力板 铁锭」、第3行「铁锭 红石粉 铁锭」 摆放（要用 3x3 合成格），得到 6 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "探测铁轨"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-activator_rail",
+      "kind": "recipe",
+      "text": "激活铁轨：在合成格里按 第1行「铁锭 木棍 铁锭」、第2行「铁锭 红石火把 铁锭」、第3行「铁锭 木棍 铁锭」 摆放（要用 3x3 合成格），得到 6 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "激活铁轨"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-tnt",
+      "kind": "recipe",
+      "text": "TNT：在合成格里按 第1行「火药 红沙 火药」、第2行「红沙 火药 红沙」、第3行「火药 红沙 火药」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 2 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "TNT"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-target",
+      "kind": "recipe",
+      "text": "标靶：在合成格里按 第1行「空 红石粉 空」、第2行「红石粉 干草捆 红石粉」、第3行「空 红石粉 空」 摆放（要用 3x3 合成格），得到 1 个。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "标靶"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "recipe-note_block",
+      "kind": "recipe",
+      "text": "音符盒：在合成格里按 第1行「樱花木板 樱花木板 樱花木板」、第2行「樱花木板 红石粉 樱花木板」、第3行「樱花木板 樱花木板 樱花木板」 摆放（要用 3x3 合成格），得到 1 个（材料可替换，共 12 种等价做法）。",
+      "tags": [
+        "我的世界",
+        "合成",
+        "配方",
+        "音符盒"
+      ],
+      "source": "minecraft-data recipes"
+    },
+    {
+      "id": "block-stone",
+      "kind": "block",
+      "text": "石头：硬度 1.5，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "石头"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-cobblestone",
+      "kind": "block",
+      "text": "圆石：硬度 2.0，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "圆石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-dirt",
+      "kind": "block",
+      "text": "泥土：硬度 0.5，用锹类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "泥土"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-grass_block",
+      "kind": "block",
+      "text": "草方块：硬度 0.6，用锹类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "草方块"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-sand",
+      "kind": "block",
+      "text": "沙子：硬度 0.5，用锹类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "沙子"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-gravel",
+      "kind": "block",
+      "text": "沙砾：硬度 0.6，用锹类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "沙砾"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-clay",
+      "kind": "block",
+      "text": "黏土：硬度 0.6，用锹类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "黏土"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-oak_log",
+      "kind": "block",
+      "text": "橡木原木：硬度 2.0，用斧类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "橡木原木"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-oak_leaves",
+      "kind": "block",
+      "text": "橡树树叶：硬度 0.2，用锄类工具挖更快，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "橡树树叶"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-bedrock",
+      "kind": "block",
+      "text": "基岩：硬度无限，生存模式挖不掉。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "基岩"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-obsidian",
+      "kind": "block",
+      "text": "黑曜石：硬度 50.0，至少要用钻石镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "黑曜石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-coal_ore",
+      "kind": "block",
+      "text": "煤矿石：硬度 3.0，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "煤矿石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-iron_ore",
+      "kind": "block",
+      "text": "铁矿石：硬度 3.0，至少要用石镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "铁矿石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-copper_ore",
+      "kind": "block",
+      "text": "铜矿石：硬度 3.0，至少要用石镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "铜矿石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-gold_ore",
+      "kind": "block",
+      "text": "金矿石：硬度 3.0，至少要用铁镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "金矿石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-redstone_ore",
+      "kind": "block",
+      "text": "红石矿石：硬度 3.0，至少要用铁镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "红石矿石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-lapis_ore",
+      "kind": "block",
+      "text": "青金石矿石：硬度 3.0，至少要用石镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "青金石矿石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-diamond_ore",
+      "kind": "block",
+      "text": "钻石矿石：硬度 3.0，至少要用铁镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "钻石矿石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-emerald_ore",
+      "kind": "block",
+      "text": "绿宝石矿石：硬度 3.0，至少要用铁镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "绿宝石矿石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-deepslate",
+      "kind": "block",
+      "text": "深板岩：硬度 3.0，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "深板岩"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-cobbled_deepslate",
+      "kind": "block",
+      "text": "深板岩圆石：硬度 3.5，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "深板岩圆石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-tuff",
+      "kind": "block",
+      "text": "凝灰岩：硬度 1.5，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "凝灰岩"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-calcite",
+      "kind": "block",
+      "text": "方解石：硬度 0.75，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "方解石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-dripstone_block",
+      "kind": "block",
+      "text": "滴水石块：硬度 1.5，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "滴水石块"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-netherrack",
+      "kind": "block",
+      "text": "下界岩：硬度 0.4，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "下界岩"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-soul_sand",
+      "kind": "block",
+      "text": "灵魂沙：硬度 0.5，用锹类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "灵魂沙"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-soul_soil",
+      "kind": "block",
+      "text": "灵魂土：硬度 0.5，用锹类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "灵魂土"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-glowstone",
+      "kind": "block",
+      "text": "荧石：硬度 0.3，徒手就能挖，会发光，亮度 15。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "荧石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-basalt",
+      "kind": "block",
+      "text": "玄武岩：硬度 1.25，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "玄武岩"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-blackstone",
+      "kind": "block",
+      "text": "黑石：硬度 1.5，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "黑石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-nether_quartz_ore",
+      "kind": "block",
+      "text": "下界石英矿石：硬度 3.0，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "下界石英矿石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-ancient_debris",
+      "kind": "block",
+      "text": "远古残骸：硬度 30.0，至少要用钻石镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "远古残骸"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-end_stone",
+      "kind": "block",
+      "text": "末地石：硬度 3.0，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "末地石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-crying_obsidian",
+      "kind": "block",
+      "text": "哭泣的黑曜石：硬度 50.0，至少要用钻石镐才能挖出掉落物，会发光，亮度 10。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "哭泣的黑曜石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-red_sandstone",
+      "kind": "block",
+      "text": "红砂岩：硬度 0.8，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "红砂岩"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-ice",
+      "kind": "block",
+      "text": "冰：硬度 0.5，用镐类工具挖更快，直接挖不会掉落，要精准采集附魔才掉本体，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "冰"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-packed_ice",
+      "kind": "block",
+      "text": "浮冰：硬度 0.5，用镐类工具挖更快，直接挖不会掉落，要精准采集附魔才掉本体。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "浮冰"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-blue_ice",
+      "kind": "block",
+      "text": "蓝冰：硬度 2.8，用镐类工具挖更快，直接挖不会掉落，要精准采集附魔才掉本体。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "蓝冰"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-snow_block",
+      "kind": "block",
+      "text": "雪块：硬度 0.2，至少要用木锹才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "雪块"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-pumpkin",
+      "kind": "block",
+      "text": "南瓜：硬度 1.0，用斧类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "南瓜"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-melon",
+      "kind": "block",
+      "text": "西瓜：硬度 1.0，用斧类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "西瓜"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-cactus",
+      "kind": "block",
+      "text": "仙人掌：硬度 0.4，徒手就能挖。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "仙人掌"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-sugar_cane",
+      "kind": "block",
+      "text": "甘蔗：硬度 0.0，徒手就能挖，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "甘蔗"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-bamboo",
+      "kind": "block",
+      "text": "竹子：硬度 1.0，徒手就能挖，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "竹子"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-oak_sapling",
+      "kind": "block",
+      "text": "橡树树苗：硬度 0.0，徒手就能挖，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "橡树树苗"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-wheat",
+      "kind": "block",
+      "text": "小麦：硬度 0.0，徒手就能挖，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "小麦"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-short_grass",
+      "kind": "block",
+      "text": "矮草丛：硬度 0.0，徒手就能挖，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "矮草丛"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-spawner",
+      "kind": "block",
+      "text": "刷怪笼：硬度 5.0，至少要用木镐才能挖出掉落物，直接挖不会掉落，要精准采集附魔才掉本体，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "刷怪笼"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-water",
+      "kind": "block",
+      "text": "水是液体方块，不能挖，只能用桶舀。落在水里可以缓冲落地伤害，水流能推动实体、把农作物冲掉，2x2 的水坑中间是无限水源。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "水"
+      ],
+      "source": "minecraft-data blocks + manual"
+    },
+    {
+      "id": "block-lava",
+      "kind": "block",
+      "text": "岩浆是液体方块，碰到会持续燃烧掉血，用桶能装成岩浆桶。岩浆旁边放水会生成黑曜石/圆石，是刷石机的原理。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "熔岩"
+      ],
+      "source": "minecraft-data blocks + manual"
+    },
+    {
+      "id": "block-moss_block",
+      "kind": "block",
+      "text": "苔藓块：硬度 0.1，用锄类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "苔藓块"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-sculk",
+      "kind": "block",
+      "text": "幽匿块：硬度 0.2，用锄类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "幽匿块"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-sculk_catalyst",
+      "kind": "block",
+      "text": "幽匿催发体：硬度 3.0，用锄类工具挖更快，会发光，亮度 6。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "幽匿催发体"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-amethyst_block",
+      "kind": "block",
+      "text": "紫水晶块：硬度 1.5，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "紫水晶块"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-copper_block",
+      "kind": "block",
+      "text": "铜块：硬度 3.0，至少要用石镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "铜块"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-netherite_block",
+      "kind": "block",
+      "text": "下界合金块：硬度 50.0，至少要用钻石镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "下界合金块"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-granite",
+      "kind": "block",
+      "text": "花岗岩：硬度 1.5，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "花岗岩"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-diorite",
+      "kind": "block",
+      "text": "闪长岩：硬度 1.5，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "闪长岩"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-andesite",
+      "kind": "block",
+      "text": "安山岩：硬度 1.5，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "安山岩"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-terracotta",
+      "kind": "block",
+      "text": "陶瓦：硬度 1.25，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "陶瓦"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-mossy_cobblestone",
+      "kind": "block",
+      "text": "苔石：硬度 2.0，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "苔石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-podzol",
+      "kind": "block",
+      "text": "灰化土：硬度 0.5，用锹类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "灰化土"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-mycelium",
+      "kind": "block",
+      "text": "菌丝体：硬度 0.6，用锹类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "菌丝体"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-red_sand",
+      "kind": "block",
+      "text": "红沙：硬度 0.5，用锹类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "红沙"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-vine",
+      "kind": "block",
+      "text": "藤蔓：硬度 0.2，用斧类工具挖更快，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "藤蔓"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-lily_pad",
+      "kind": "block",
+      "text": "睡莲：硬度 0.0，徒手就能挖，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "睡莲"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-farmland",
+      "kind": "block",
+      "text": "耕地：硬度 0.6，用锹类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "耕地"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-hay_block",
+      "kind": "block",
+      "text": "干草捆：硬度 0.5，用锄类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "干草捆"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-sponge",
+      "kind": "block",
+      "text": "海绵：硬度 0.6，用锄类工具挖更快。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "海绵"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-sea_lantern",
+      "kind": "block",
+      "text": "海晶灯：硬度 0.3，徒手就能挖，会发光，亮度 15。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "海晶灯"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-prismarine",
+      "kind": "block",
+      "text": "海晶石：硬度 1.5，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "海晶石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-dark_prismarine",
+      "kind": "block",
+      "text": "暗海晶石：硬度 1.5，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "暗海晶石"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-purpur_block",
+      "kind": "block",
+      "text": "紫珀块：硬度 1.5，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "紫珀块"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-end_stone_bricks",
+      "kind": "block",
+      "text": "末地石砖：硬度 3.0，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "末地石砖"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-shroomlight",
+      "kind": "block",
+      "text": "菌光体：硬度 1.0，用锄类工具挖更快，会发光，亮度 15。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "菌光体"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-crimson_nylium",
+      "kind": "block",
+      "text": "绯红菌岩：硬度 0.4，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "绯红菌岩"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-warped_nylium",
+      "kind": "block",
+      "text": "诡异菌岩：硬度 0.4，至少要用木镐才能挖出掉落物。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "诡异菌岩"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-honey_block",
+      "kind": "block",
+      "text": "蜂蜜块：硬度 0.0，徒手就能挖，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "蜂蜜块"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-slime_block",
+      "kind": "block",
+      "text": "黏液块：硬度 0.0，徒手就能挖，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "黏液块"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-scaffolding",
+      "kind": "block",
+      "text": "脚手架：硬度 0.0，徒手就能挖，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "脚手架"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-amethyst_cluster",
+      "kind": "block",
+      "text": "紫水晶簇：硬度 1.5，用镐类工具挖更快，会发光，亮度 5，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "紫水晶簇"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-pointed_dripstone",
+      "kind": "block",
+      "text": "滴水石锥：硬度 1.5，用镐类工具挖更快，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "滴水石锥"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-cobweb",
+      "kind": "block",
+      "text": "蜘蛛网：硬度 4.0，至少要用木剑才能挖出掉落物，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "蜘蛛网"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "block-dead_bush",
+      "kind": "block",
+      "text": "枯萎的灌木：硬度 0.0，徒手就能挖，可以透光。",
+      "tags": [
+        "我的世界",
+        "方块",
+        "枯萎的灌木"
+      ],
+      "source": "minecraft-data blocks"
+    },
+    {
+      "id": "mob-allay",
+      "kind": "mob",
+      "text": "悦灵是中立/NPC 生物，碰撞体积宽 0.35 格、高 0.60 格，平时不主动攻击，被打或激怒后才会反击。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "中立/NPC 生物",
+        "悦灵"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-armadillo",
+      "kind": "mob",
+      "text": "犰狳是被动动物，碰撞体积宽 0.70 格、高 0.65 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "犰狳"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-axolotl",
+      "kind": "mob",
+      "text": "美西螈是被动动物，碰撞体积宽 0.75 格、高 0.42 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "美西螈"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-bat",
+      "kind": "mob",
+      "text": "蝙蝠是环境生物，碰撞体积宽 0.50 格、高 0.90 格，不参与战斗，只是环境氛围。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "环境生物",
+        "蝙蝠"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-bee",
+      "kind": "mob",
+      "text": "蜜蜂是被动动物，碰撞体积宽 0.70 格、高 0.60 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "蜜蜂"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-blaze",
+      "kind": "mob",
+      "text": "烈焰人是敌对生物，碰撞体积宽 0.60 格、高 1.80 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "烈焰人"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-bogged",
+      "kind": "mob",
+      "text": "沼骸是敌对生物，碰撞体积宽 0.60 格、高 1.99 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "沼骸"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-breeze",
+      "kind": "mob",
+      "text": "旋风人是敌对生物，碰撞体积宽 0.60 格、高 1.77 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "旋风人"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-camel",
+      "kind": "mob",
+      "text": "骆驼是被动动物，碰撞体积宽 1.70 格、高 2.38 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "骆驼"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-cat",
+      "kind": "mob",
+      "text": "猫是被动动物，碰撞体积宽 0.60 格、高 0.70 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "猫"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-cave_spider",
+      "kind": "mob",
+      "text": "洞穴蜘蛛是敌对生物，碰撞体积宽 0.70 格、高 0.50 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "洞穴蜘蛛"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-chicken",
+      "kind": "mob",
+      "text": "生鸡肉是被动动物，碰撞体积宽 0.40 格、高 0.70 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "生鸡肉"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-cod",
+      "kind": "mob",
+      "text": "生鳕鱼是水生生物，碰撞体积宽 0.50 格、高 0.30 格，生活在水里，多数离开水会窒息或行动迟缓。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "水生生物",
+        "生鳕鱼"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-cow",
+      "kind": "mob",
+      "text": "牛是被动动物，碰撞体积宽 0.90 格、高 1.40 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "牛"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-creaking",
+      "kind": "mob",
+      "text": "嘎枝是敌对生物，碰撞体积宽 0.90 格、高 2.70 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "嘎枝"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-creeper",
+      "kind": "mob",
+      "text": "苦力怕是敌对生物，碰撞体积宽 0.60 格、高 1.70 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "苦力怕"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-dolphin",
+      "kind": "mob",
+      "text": "海豚是被动生物，碰撞体积宽 0.90 格、高 0.60 格，不会主动攻击，打死有掉落物。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动生物",
+        "海豚"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-donkey",
+      "kind": "mob",
+      "text": "驴是被动动物，碰撞体积宽 1.40 格、高 1.50 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "驴"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-drowned",
+      "kind": "mob",
+      "text": "溺尸是敌对生物，碰撞体积宽 0.60 格、高 1.95 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "溺尸"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-elder_guardian",
+      "kind": "mob",
+      "text": "远古守卫者是敌对生物，碰撞体积宽 2.00 格、高 2.00 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "远古守卫者"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-enderman",
+      "kind": "mob",
+      "text": "末影人是敌对生物，碰撞体积宽 0.60 格、高 2.90 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "末影人"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-endermite",
+      "kind": "mob",
+      "text": "末影螨是敌对生物，碰撞体积宽 0.40 格、高 0.30 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "末影螨"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-ender_dragon",
+      "kind": "mob",
+      "text": "末影龙是中立/NPC 生物，碰撞体积宽 16.00 格、高 8.00 格，平时不主动攻击，被打或激怒后才会反击。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "中立/NPC 生物",
+        "末影龙"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-evoker",
+      "kind": "mob",
+      "text": "唤魔者是敌对生物，碰撞体积宽 0.60 格、高 1.95 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "唤魔者"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-fox",
+      "kind": "mob",
+      "text": "狐狸是被动动物，碰撞体积宽 0.60 格、高 0.70 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "狐狸"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-frog",
+      "kind": "mob",
+      "text": "青蛙是被动动物，碰撞体积宽 0.50 格、高 0.50 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "青蛙"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-ghast",
+      "kind": "mob",
+      "text": "恶魂是中立/NPC 生物，碰撞体积宽 4.00 格、高 4.00 格，平时不主动攻击，被打或激怒后才会反击。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "中立/NPC 生物",
+        "恶魂"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-happy_ghast",
+      "kind": "mob",
+      "text": "快乐恶魂是被动动物，碰撞体积宽 4.00 格、高 4.00 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "快乐恶魂"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-giant",
+      "kind": "mob",
+      "text": "巨人是敌对生物，碰撞体积宽 3.60 格、高 12.00 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "巨人"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-glow_squid",
+      "kind": "mob",
+      "text": "发光鱿鱼是被动生物，碰撞体积宽 0.80 格、高 0.80 格，不会主动攻击，打死有掉落物。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动生物",
+        "发光鱿鱼"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-goat",
+      "kind": "mob",
+      "text": "山羊是被动动物，碰撞体积宽 0.90 格、高 1.30 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "山羊"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-guardian",
+      "kind": "mob",
+      "text": "守卫者是敌对生物，碰撞体积宽 0.85 格、高 0.85 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "守卫者"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-hoglin",
+      "kind": "mob",
+      "text": "疣猪兽是被动动物，碰撞体积宽 1.40 格、高 1.40 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "疣猪兽"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-horse",
+      "kind": "mob",
+      "text": "马是被动动物，碰撞体积宽 1.40 格、高 1.60 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "马"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-husk",
+      "kind": "mob",
+      "text": "尸壳是敌对生物，碰撞体积宽 0.60 格、高 1.95 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "尸壳"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-illusioner",
+      "kind": "mob",
+      "text": "幻术师是敌对生物，碰撞体积宽 0.60 格、高 1.95 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "幻术师"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-iron_golem",
+      "kind": "mob",
+      "text": "铁傀儡是中立/NPC 生物，碰撞体积宽 1.40 格、高 2.70 格，平时不主动攻击，被打或激怒后才会反击。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "中立/NPC 生物",
+        "铁傀儡"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-llama",
+      "kind": "mob",
+      "text": "羊驼是被动动物，碰撞体积宽 0.90 格、高 1.87 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "羊驼"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-magma_cube",
+      "kind": "mob",
+      "text": "岩浆怪是中立/NPC 生物，碰撞体积宽 0.52 格、高 0.52 格，平时不主动攻击，被打或激怒后才会反击。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "中立/NPC 生物",
+        "岩浆怪"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-mooshroom",
+      "kind": "mob",
+      "text": "哞菇是被动动物，碰撞体积宽 0.90 格、高 1.40 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "哞菇"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-mule",
+      "kind": "mob",
+      "text": "骡是被动动物，碰撞体积宽 1.40 格、高 1.60 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "骡"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-ocelot",
+      "kind": "mob",
+      "text": "豹猫是被动动物，碰撞体积宽 0.60 格、高 0.70 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "豹猫"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-panda",
+      "kind": "mob",
+      "text": "熊猫是被动动物，碰撞体积宽 1.30 格、高 1.25 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "熊猫"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-parrot",
+      "kind": "mob",
+      "text": "鹦鹉是被动动物，碰撞体积宽 0.50 格、高 0.90 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "鹦鹉"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-phantom",
+      "kind": "mob",
+      "text": "幻翼是中立/NPC 生物，碰撞体积宽 0.90 格、高 0.50 格，平时不主动攻击，被打或激怒后才会反击。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "中立/NPC 生物",
+        "幻翼"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-pig",
+      "kind": "mob",
+      "text": "猪是被动动物，碰撞体积宽 0.90 格、高 0.90 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "猪"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-piglin",
+      "kind": "mob",
+      "text": "猪灵是敌对生物，碰撞体积宽 0.60 格、高 1.95 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "猪灵"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-piglin_brute",
+      "kind": "mob",
+      "text": "猪灵蛮兵是敌对生物，碰撞体积宽 0.60 格、高 1.95 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "猪灵蛮兵"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-pillager",
+      "kind": "mob",
+      "text": "掠夺者是敌对生物，碰撞体积宽 0.60 格、高 1.95 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "掠夺者"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-polar_bear",
+      "kind": "mob",
+      "text": "北极熊是被动动物，碰撞体积宽 1.40 格、高 1.40 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "北极熊"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-pufferfish",
+      "kind": "mob",
+      "text": "河豚是水生生物，碰撞体积宽 0.70 格、高 0.70 格，生活在水里，多数离开水会窒息或行动迟缓。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "水生生物",
+        "河豚"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-rabbit",
+      "kind": "mob",
+      "text": "生兔肉是被动动物，碰撞体积宽 0.40 格、高 0.50 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "生兔肉"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-ravager",
+      "kind": "mob",
+      "text": "劫掠兽是敌对生物，碰撞体积宽 1.95 格、高 2.20 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "劫掠兽"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-salmon",
+      "kind": "mob",
+      "text": "生鲑鱼是水生生物，碰撞体积宽 0.70 格、高 0.40 格，生活在水里，多数离开水会窒息或行动迟缓。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "水生生物",
+        "生鲑鱼"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-sheep",
+      "kind": "mob",
+      "text": "绵羊是被动动物，碰撞体积宽 0.90 格、高 1.30 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "绵羊"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-shulker",
+      "kind": "mob",
+      "text": "潜影贝是中立/NPC 生物，碰撞体积宽 1.00 格、高 1.00 格，平时不主动攻击，被打或激怒后才会反击。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "中立/NPC 生物",
+        "潜影贝"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-silverfish",
+      "kind": "mob",
+      "text": "蠹虫是敌对生物，碰撞体积宽 0.40 格、高 0.30 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "蠹虫"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-skeleton",
+      "kind": "mob",
+      "text": "骷髅是敌对生物，碰撞体积宽 0.60 格、高 1.99 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "骷髅"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-skeleton_horse",
+      "kind": "mob",
+      "text": "骷髅马是被动动物，碰撞体积宽 1.40 格、高 1.60 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "骷髅马"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-slime",
+      "kind": "mob",
+      "text": "史莱姆是中立/NPC 生物，碰撞体积宽 0.52 格、高 0.52 格，平时不主动攻击，被打或激怒后才会反击。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "中立/NPC 生物",
+        "史莱姆"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-sniffer",
+      "kind": "mob",
+      "text": "嗅探兽是被动动物，碰撞体积宽 1.90 格、高 1.75 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "嗅探兽"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-snow_golem",
+      "kind": "mob",
+      "text": "雪傀儡是中立/NPC 生物，碰撞体积宽 0.70 格、高 1.90 格，平时不主动攻击，被打或激怒后才会反击。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "中立/NPC 生物",
+        "雪傀儡"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-spider",
+      "kind": "mob",
+      "text": "蜘蛛是敌对生物，碰撞体积宽 1.40 格、高 0.90 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "蜘蛛"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-squid",
+      "kind": "mob",
+      "text": "鱿鱼是被动生物，碰撞体积宽 0.80 格、高 0.80 格，不会主动攻击，打死有掉落物。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动生物",
+        "鱿鱼"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-stray",
+      "kind": "mob",
+      "text": "流浪者是敌对生物，碰撞体积宽 0.60 格、高 1.99 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "流浪者"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-strider",
+      "kind": "mob",
+      "text": "炽足兽是被动动物，碰撞体积宽 0.90 格、高 1.70 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "炽足兽"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-tadpole",
+      "kind": "mob",
+      "text": "蝌蚪是水生生物，碰撞体积宽 0.40 格、高 0.30 格，生活在水里，多数离开水会窒息或行动迟缓。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "水生生物",
+        "蝌蚪"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-trader_llama",
+      "kind": "mob",
+      "text": "行商羊驼是被动动物，碰撞体积宽 0.90 格、高 1.87 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "行商羊驼"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-tropical_fish",
+      "kind": "mob",
+      "text": "热带鱼是水生生物，碰撞体积宽 0.50 格、高 0.40 格，生活在水里，多数离开水会窒息或行动迟缓。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "水生生物",
+        "热带鱼"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-turtle",
+      "kind": "mob",
+      "text": "海龟是被动动物，碰撞体积宽 1.20 格、高 0.40 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "海龟"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-vex",
+      "kind": "mob",
+      "text": "恼鬼是敌对生物，碰撞体积宽 0.40 格、高 0.80 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "恼鬼"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-villager",
+      "kind": "mob",
+      "text": "村民是被动生物，碰撞体积宽 0.60 格、高 1.95 格，不会主动攻击，打死有掉落物。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动生物",
+        "村民"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-vindicator",
+      "kind": "mob",
+      "text": "卫道士是敌对生物，碰撞体积宽 0.60 格、高 1.95 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "卫道士"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-wandering_trader",
+      "kind": "mob",
+      "text": "流浪商人是被动生物，碰撞体积宽 0.60 格、高 1.95 格，不会主动攻击，打死有掉落物。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动生物",
+        "流浪商人"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-warden",
+      "kind": "mob",
+      "text": "监守者是敌对生物，碰撞体积宽 0.90 格、高 2.90 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "监守者"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-witch",
+      "kind": "mob",
+      "text": "女巫是敌对生物，碰撞体积宽 0.60 格、高 1.95 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "女巫"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-wither",
+      "kind": "mob",
+      "text": "凋灵是敌对生物，碰撞体积宽 0.90 格、高 3.50 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "凋灵"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-wither_skeleton",
+      "kind": "mob",
+      "text": "凋灵骷髅是敌对生物，碰撞体积宽 0.70 格、高 2.40 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "凋灵骷髅"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-wolf",
+      "kind": "mob",
+      "text": "狼是被动动物，碰撞体积宽 0.60 格、高 0.85 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "狼"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-zoglin",
+      "kind": "mob",
+      "text": "僵尸疣猪兽是敌对生物，碰撞体积宽 1.40 格、高 1.40 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "僵尸疣猪兽"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-zombie",
+      "kind": "mob",
+      "text": "僵尸是敌对生物，碰撞体积宽 0.60 格、高 1.95 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "僵尸"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-zombie_horse",
+      "kind": "mob",
+      "text": "僵尸马是被动动物，碰撞体积宽 1.40 格、高 1.60 格，击杀有掉落物，能用对应食物喂两只来繁殖。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "被动动物",
+        "僵尸马"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-zombie_villager",
+      "kind": "mob",
+      "text": "僵尸村民是敌对生物，碰撞体积宽 0.60 格、高 1.95 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "僵尸村民"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "mob-zombified_piglin",
+      "kind": "mob",
+      "text": "僵尸猪灵是敌对生物，碰撞体积宽 0.60 格、高 1.95 格，会主动攻击玩家，多在光照等级 0 的黑暗处生成。",
+      "tags": [
+        "我的世界",
+        "生物",
+        "敌对生物",
+        "僵尸猪灵"
+      ],
+      "source": "minecraft-data entities"
+    },
+    {
+      "id": "enchant-aqua_affinity",
+      "kind": "enchant",
+      "text": "水下速掘：最高 1 级，适用于头盔，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "水下速掘"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-bane_of_arthropods",
+      "kind": "enchant",
+      "text": "节肢杀手：最高 5 级，适用于武器，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "节肢杀手"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-binding_curse",
+      "kind": "enchant",
+      "text": "绑定诅咒：最高 1 级，适用于可装备物品，是诅咒附魔，附上就洗不掉。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "绑定诅咒"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-blast_protection",
+      "kind": "enchant",
+      "text": "爆炸保护：最高 4 级，适用于盔甲，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "爆炸保护"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-breach",
+      "kind": "enchant",
+      "text": "破甲：最高 4 级，适用于重锤，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "破甲"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-channeling",
+      "kind": "enchant",
+      "text": "引雷：最高 1 级，适用于三叉戟，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "引雷"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-density",
+      "kind": "enchant",
+      "text": "致密：最高 5 级，适用于重锤，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "致密"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-depth_strider",
+      "kind": "enchant",
+      "text": "深海探索者：最高 3 级，适用于靴子，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "深海探索者"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-efficiency",
+      "kind": "enchant",
+      "text": "效率：最高 5 级，适用于挖掘工具，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "效率"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-feather_falling",
+      "kind": "enchant",
+      "text": "摔落缓冲：最高 4 级，适用于靴子，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "摔落缓冲"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-fire_aspect",
+      "kind": "enchant",
+      "text": "火焰附加：最高 2 级，适用于近战武器，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "火焰附加"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-fire_protection",
+      "kind": "enchant",
+      "text": "火焰保护：最高 4 级，适用于盔甲，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "火焰保护"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-flame",
+      "kind": "enchant",
+      "text": "火矢：最高 1 级，适用于弓，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "火矢"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-fortune",
+      "kind": "enchant",
+      "text": "时运：最高 3 级，适用于挖掘掉落，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "时运"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-frost_walker",
+      "kind": "enchant",
+      "text": "冰霜行者：最高 2 级，适用于靴子，是宝藏附魔，附魔台刷不出来，只能靠箱子/钓鱼/交易。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "冰霜行者"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-impaling",
+      "kind": "enchant",
+      "text": "穿刺：最高 5 级，适用于三叉戟，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "穿刺"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-infinity",
+      "kind": "enchant",
+      "text": "无限：最高 1 级，适用于弓，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "无限"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-knockback",
+      "kind": "enchant",
+      "text": "击退：最高 2 级，适用于剑，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "击退"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-looting",
+      "kind": "enchant",
+      "text": "抢夺：最高 3 级，适用于剑，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "抢夺"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-loyalty",
+      "kind": "enchant",
+      "text": "忠诚：最高 3 级，适用于三叉戟，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "忠诚"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-luck_of_the_sea",
+      "kind": "enchant",
+      "text": "海之眷顾：最高 3 级，适用于钓鱼竿，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "海之眷顾"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-lure",
+      "kind": "enchant",
+      "text": "饵钓：最高 3 级，适用于钓鱼竿，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "饵钓"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-mending",
+      "kind": "enchant",
+      "text": "经验修补：最高 1 级，适用于耐久类物品，是宝藏附魔，附魔台刷不出来，只能靠箱子/钓鱼/交易。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "经验修补"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-multishot",
+      "kind": "enchant",
+      "text": "多重射击：最高 1 级，适用于弩，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "多重射击"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-piercing",
+      "kind": "enchant",
+      "text": "穿透：最高 4 级，适用于弩，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "穿透"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-power",
+      "kind": "enchant",
+      "text": "力量：最高 5 级，适用于弓，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "力量"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-projectile_protection",
+      "kind": "enchant",
+      "text": "弹射物保护：最高 4 级，适用于盔甲，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "弹射物保护"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-protection",
+      "kind": "enchant",
+      "text": "保护：最高 4 级，适用于盔甲，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "保护"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-punch",
+      "kind": "enchant",
+      "text": "冲击：最高 2 级，适用于弓，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "冲击"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-quick_charge",
+      "kind": "enchant",
+      "text": "快速装填：最高 3 级，适用于弩，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "快速装填"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-respiration",
+      "kind": "enchant",
+      "text": "水下呼吸：最高 3 级，适用于头盔，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "水下呼吸"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-riptide",
+      "kind": "enchant",
+      "text": "激流：最高 3 级，适用于三叉戟，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "激流"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-sharpness",
+      "kind": "enchant",
+      "text": "锋利：最高 5 级，适用于近战武器，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "锋利"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-silk_touch",
+      "kind": "enchant",
+      "text": "精准采集：最高 1 级，适用于挖掘掉落，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "精准采集"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-smite",
+      "kind": "enchant",
+      "text": "亡灵杀手：最高 5 级，适用于武器，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "亡灵杀手"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-soul_speed",
+      "kind": "enchant",
+      "text": "灵魂疾行：最高 3 级，适用于靴子，是宝藏附魔，附魔台刷不出来，只能靠箱子/钓鱼/交易，村民不交易。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "灵魂疾行"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-sweeping_edge",
+      "kind": "enchant",
+      "text": "横扫之刃：最高 3 级，适用于剑，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "横扫之刃"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-swift_sneak",
+      "kind": "enchant",
+      "text": "迅捷潜行：最高 3 级，适用于护腿，是宝藏附魔，附魔台刷不出来，只能靠箱子/钓鱼/交易，村民不交易。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "迅捷潜行"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-thorns",
+      "kind": "enchant",
+      "text": "荆棘：最高 3 级，适用于盔甲，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "荆棘"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-unbreaking",
+      "kind": "enchant",
+      "text": "耐久：最高 3 级，适用于耐久类物品，附魔台可以刷出。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "耐久"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-vanishing_curse",
+      "kind": "enchant",
+      "text": "消失诅咒：最高 1 级，适用于可消失物品，是诅咒附魔，附上就洗不掉。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "消失诅咒"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "enchant-wind_burst",
+      "kind": "enchant",
+      "text": "风爆：最高 3 级，适用于重锤，是宝藏附魔，附魔台刷不出来，只能靠箱子/钓鱼/交易，村民不交易。",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "风爆"
+      ],
+      "source": "minecraft-data enchantments"
+    },
+    {
+      "id": "food-apple",
+      "kind": "food",
+      "text": "苹果：恢复 4.0 点饥饿值、9.6 点饱和度。饱和度是隐藏的第二层，先消耗它，饱和度高就更抗饿。",
+      "tags": [
+        "我的世界",
+        "食物",
+        "苹果"
+      ],
+      "source": "minecraft-data foods"
+    },
+    {
+      "id": "food-mushroom_stew",
+      "kind": "food",
+      "text": "蘑菇煲：恢复 6.0 点饥饿值、43.2 点饱和度。饱和度是隐藏的第二层，先消耗它，饱和度高就更抗饿。",
+      "tags": [
+        "我的世界",
+        "食物",
+        "蘑菇煲"
+      ],
+      "source": "minecraft-data foods"
+    },
+    {
+      "id": "food-bread",
+      "kind": "food",
+      "text": "面包：恢复 5.0 点饥饿值、30.0 点饱和度。饱和度是隐藏的第二层，先消耗它，饱和度高就更抗饿。",
+      "tags": [
+        "我的世界",
+        "食物",
+        "面包"
+      ],
+      "source": "minecraft-data foods"
+    },
+    {
+      "id": "food-porkchop",
+      "kind": "food",
+      "text": "生猪排：恢复 3.0 点饥饿值、5.4 点饱和度。饱和度是隐藏的第二层，先消耗它，饱和度高就更抗饿。",
+      "tags": [
+        "我的世界",
+        "食物",
+        "生猪排"
+      ],
+      "source": "minecraft-data foods"
+    },
+    {
+      "id": "food-cooked_porkchop",
+      "kind": "food",
+      "text": "熟猪排：恢复 8.0 点饥饿值、102.4 点饱和度。饱和度是隐藏的第二层，先消耗它，饱和度高就更抗饿。",
+      "tags": [
+        "我的世界",
+        "食物",
+        "熟猪排"
+      ],
+      "source": "minecraft-data foods"
+    },
+    {
+      "id": "food-golden_apple",
+      "kind": "food",
+      "text": "金苹果：恢复 4.0 点饥饿值、38.4 点饱和度。饱和度是隐藏的第二层，先消耗它，饱和度高就更抗饿。",
+      "tags": [
+        "我的世界",
+        "食物",
+        "金苹果"
+      ],
+      "source": "minecraft-data foods"
+    },
+    {
+      "id": "food-enchanted_golden_apple",
+      "kind": "food",
+      "text": "附魔金苹果：恢复 4.0 点饥饿值、38.4 点饱和度。饱和度是隐藏的第二层，先消耗它，饱和度高就更抗饿。",
+      "tags": [
+        "我的世界",
+        "食物",
+        "附魔金苹果"
+      ],
+      "source": "minecraft-data foods"
+    },
+    {
+      "id": "food-cod",
+      "kind": "food",
+      "text": "生鳕鱼：恢复 2.0 点饥饿值、0.8 点饱和度。饱和度是隐藏的第二层，先消耗它，饱和度高就更抗饿。",
+      "tags": [
+        "我的世界",
+        "食物",
+        "生鳕鱼"
+      ],
+      "source": "minecraft-data foods"
+    },
+    {
+      "id": "food-salmon",
+      "kind": "food",
+      "text": "生鲑鱼：恢复 2.0 点饥饿值、0.8 点饱和度。饱和度是隐藏的第二层，先消耗它，饱和度高就更抗饿。",
+      "tags": [
+        "我的世界",
+        "食物",
+        "生鲑鱼"
+      ],
+      "source": "minecraft-data foods"
+    },
+    {
+      "id": "food-tropical_fish",
+      "kind": "food",
+      "text": "热带鱼：恢复 1.0 点饥饿值、0.2 点饱和度。饱和度是隐藏的第二层，先消耗它，饱和度高就更抗饿。",
+      "tags": [
+        "我的世界",
+        "食物",
+        "热带鱼"
+      ],
+      "source": "minecraft-data foods"
+    },
+    {
+      "id": "food-pufferfish",
+      "kind": "food",
+      "text": "河豚：恢复 1.0 点饥饿值、0.2 点饱和度。饱和度是隐藏的第二层，先消耗它，饱和度高就更抗饿。",
+      "tags": [
+        "我的世界",
+        "食物",
+        "河豚"
+      ],
+      "source": "minecraft-data foods"
+    },
+    {
+      "id": "food-cooked_cod",
+      "kind": "food",
+      "text": "熟鳕鱼：恢复 5.0 点饥饿值、30.0 点饱和度。饱和度是隐藏的第二层，先消耗它，饱和度高就更抗饿。",
+      "tags": [
+        "我的世界",
+        "食物",
+        "熟鳕鱼"
+      ],
+      "source": "minecraft-data foods"
+    },
+    {
+      "id": "food-cooked_salmon",
+      "kind": "food",
+      "text": "熟鲑鱼：恢复 6.0 点饥饿值、57.6 点饱和度。饱和度是隐藏的第二层，先消耗它，饱和度高就更抗饿。",
+      "tags": [
+        "我的世界",
+        "食物",
+        "熟鲑鱼"
+      ],
+      "source": "minecraft-data foods"
+    },
+    {
+      "id": "food-cookie",
+      "kind": "food",
+      "text": "曲奇：恢复 2.0 点饥饿值、0.8 点饱和度。饱和度是隐藏的第二层，先消耗它，饱和度高就更抗饿。",
+      "tags": [
+        "我的世界",
+        "食物",
+        "曲奇"
+      ],
+      "source": "minecraft-data foods"
+    },
+    {
+      "id": "mc-redstone-basics",
+      "kind": "mechanic",
+      "text": "红石基础元件：红石粉当导线（最远传 15 格，超过要用中继器续），红石火把是常亮电源，拉杆和按钮是开关，中继器能延时 1-4 刻并单向传输，比较器能比较信号强度或做减法。所有红石信号强度 0-15",
+      "tags": [
+        "我的世界",
+        "红石",
+        "基础"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-piston",
+      "kind": "mechanic",
+      "text": "活塞能推动最多 12 个方块，粘性活塞能把方块拉回来。活塞不能推黑曜石、基岩、附魔台这类方块，也不能推带内容的箱子/熔炉（会被破坏掉落）",
+      "tags": [
+        "我的世界",
+        "红石",
+        "活塞"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-observer",
+      "kind": "mechanic",
+      "text": "侦测器检测正前方的方块变化，变化时从背面输出 1 刻红石脉冲。做自动农场、自动门、甘蔗机都用它当触发器",
+      "tags": [
+        "我的世界",
+        "红石",
+        "侦测器"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-commands-basic",
+      "kind": "command",
+      "text": "常用指令：/gamemode creative 切创造、/gamemode survival 切生存、/tp <玩家> <x> <y> <z> 传送、/give <玩家> <物品> <数量> 给物品、/time set day 改白天、/weather clear 停雨、/seed 看种子、/locate structure village 找村庄。需要开作弊或管理员权限",
+      "tags": [
+        "我的世界",
+        "指令",
+        "命令"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-command-gamerule",
+      "kind": "command",
+      "text": "保命 gamerule：/gamerule keepInventory true 死后不掉落物品、/gamerule doDaylightCycle false 停止昼夜、/gamerule mobGriefing false 防止苦力怕炸地形、/gamerule doFireTick false 防止火蔓延。改完立刻生效",
+      "tags": [
+        "我的世界",
+        "指令",
+        "gamerule",
+        "规则"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-command-coords",
+      "kind": "command",
+      "text": "坐标怎么看：按 F3 打开调试界面，XYZ 就是坐标，F3+G 显示区块边界。Java 版里 X 向东、Z 向南、Y 是高度（海平面约 63，钻石在 -59 附近最多）",
+      "tags": [
+        "我的世界",
+        "指令",
+        "坐标",
+        "F3"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-survival-flow",
+      "kind": "mechanic",
+      "text": "第一天的顺序：撸树拿木头 → 做工作台 → 木镐 → 挖石头做石镐石剑 → 找羊做床 → 天黑前睡觉跳过夜晚。跳过第一晚会大幅降低难度，因为夜里刷怪且没有装备",
+      "tags": [
+        "我的世界",
+        "生存",
+        "开局"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-hunger",
+      "kind": "mechanic",
+      "text": "饥饿值（鸡腿图标）低于 18 就不能自然回血，低于 6 不能疾跑。吃东西能回饥饿值和饱和度，饱和度是隐藏的第二层，先消耗饱和度再掉饥饿值。腐肉会附加饥饿效果",
+      "tags": [
+        "我的世界",
+        "饥饿",
+        "食物",
+        "回血"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-xp",
+      "kind": "mechanic",
+      "text": "经验等级用来附魔和修装备。挖矿、烧炼、打怪、钓鱼都给经验。30 级是附魔台的最高档，死亡会掉一部分经验（用 keepInventory 不掉物品但仍掉经验）",
+      "tags": [
+        "我的世界",
+        "经验",
+        "等级",
+        "附魔"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-enchant-table",
+      "kind": "mechanic",
+      "text": "附魔台最高 30 级附魔，需要周围摆 15 个书架（离附魔台 2 格，中间隔空气）才能出 30 级选项。附魔是随机的，用低等级物品「洗」选项可以刷新结果",
+      "tags": [
+        "我的世界",
+        "附魔",
+        "附魔台",
+        "书架"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-nether-portal",
+      "kind": "mechanic",
+      "text": "下界传送门用 10 个黑曜石搭 4x5 的框（四角可省），用打火石点燃。进下界 1 格 = 主世界 8 格，所以下界赶路快 8 倍。下界顶部基岩层上方可以走「下界高速公路」",
+      "tags": [
+        "我的世界",
+        "下界",
+        "传送门",
+        "黑曜石"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-diamond-level",
+      "kind": "mechanic",
+      "text": "1.18 之后钻石在 Y=-59 附近最密集，深层slate 区域。挖矿建议 Y=-59 做鱼骨挖矿（主巷道每 3 格开一条支巷）。带水桶防火 lava、带火把、带食物",
+      "tags": [
+        "我的世界",
+        "挖矿",
+        "钻石",
+        "Y坐标"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-ancient-debris",
+      "kind": "mechanic",
+      "text": "远古残骸（下界合金原料）在 Y=8-22 最好挖，每个区块最多 2 个，用床炸或 TNT 炸效率最高。4 个残骸 + 4 个金锭 = 1 个下界合金锭",
+      "tags": [
+        "我的世界",
+        "下界合金",
+        "远古残骸"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-villager-trade",
+      "kind": "mechanic",
+      "text": "村民交易：给村民职业方块（讲台=图书管理员、高炉=盔甲匠、酿造台=牧师）就能锁定职业。图书管理员卖附魔书（经验修补/耐久最值），盔甲匠卖钻石装备。反复交易能升级到大师级",
+      "tags": [
+        "我的世界",
+        "村民",
+        "交易",
+        "附魔书"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-bed",
+      "kind": "mechanic",
+      "text": "床可以跳过夜晚并设置重生点，但在下界和末地睡觉会爆炸。多人服务器里床还能当武器炸末影龙和猪灵",
+      "tags": [
+        "我的世界",
+        "床",
+        "重生点"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-creeper",
+      "kind": "mechanic",
+      "text": "苦力怕靠近会发出嘶嘶声然后爆炸，爆炸会破坏地形。用盾牌格挡可以完全免伤，猫和豹猫能把它吓跑。引它到水里爆炸不会破坏方块（只掉血）",
+      "tags": [
+        "我的世界",
+        "苦力怕",
+        "爆炸",
+        "盾牌"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-ender-dragon",
+      "kind": "mechanic",
+      "text": "末影龙打法：先打掉末地水晶（用弓或雪球，别靠近会爆炸），等龙俯冲到中间的祭坛时用剑砍头。龙血条在屏幕顶部，打死后掉龙蛋和大量经验",
+      "tags": [
+        "我的世界",
+        "末影龙",
+        "末地",
+        "Boss"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-tools-durability",
+      "kind": "mechanic",
+      "text": "工具耐久：木 59、石 131、铁 250、钻石 1561、下界合金 2031 次。附「耐久 III」能大幅延长，附「经验修补」可以用经验自动修。工具快坏了在铁砧上用同类材料修",
+      "tags": [
+        "我的世界",
+        "工具",
+        "耐久",
+        "修理"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-shield",
+      "kind": "mechanic",
+      "text": "盾牌能格挡正面大部分伤害（包括箭、爆炸、近战），举盾时移动变慢。斧头能破盾（让盾牌短暂失效）。盾牌用 6 个木板 + 1 个铁锭合成",
+      "tags": [
+        "我的世界",
+        "盾牌",
+        "防御"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-water-bucket",
+      "kind": "mechanic",
+      "text": "水桶是最重要的生存工具：落地缓冲（高处倒水再跳下去不掉血）、灭火、造无限水源（2x2 水坑）、推怪、爬墙。岩浆桶能当武器但会烧掉掉落物",
+      "tags": [
+        "我的世界",
+        "水桶",
+        "生存技巧"
+      ],
+      "source": "manual"
+    },
+    {
+      "id": "mc-spawn-mechanics",
+      "kind": "mechanic",
+      "text": "怪物在光照等级 0 的方块上生成（1.18 后是「光照 0」），所以插火把能防刷怪。床周围 3 格内不能有怪才能睡。村庄附近会刷铁傀儡保护",
+      "tags": [
+        "我的世界",
+        "刷怪",
+        "光照",
+        "火把"
+      ],
+      "source": "manual"
+    }
+  ],
+  "keys": {
+    "前进": "w",
+    "后退": "s",
+    "左移": "a",
+    "右移": "d",
+    "跳跃": "space",
+    "潜行": "shift",
+    "冲刺": "ctrl",
+    "攻击": "鼠标左",
+    "使用": "鼠标右",
+    "丢弃": "q",
+    "背包": "e",
+    "聊天": "t",
+    "快捷栏1": "1",
+    "快捷栏2": "2",
+    "快捷栏3": "3"
+  },
+  "typicalActions": [
+    "mc list 看在线的玩家",
+    "mc pos <玩家名> 查坐标",
+    "mc say <话> 在游戏里说话",
+    "mc raw time set day 改成白天",
+    "semantic 前进,2 往前走两秒",
+    "hold_key w,2 按住 W 两秒"
+  ],
+  "sources": [
+    "minecraft-data 1.21.8 (recipes/blocks/entities/enchantments/foods) + mcmeta assets zh_cn 语言文件"
+  ],
+  "entryCount": 363
+}

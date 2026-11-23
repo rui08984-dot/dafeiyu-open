@@ -1,0 +1,697 @@
+const __silentAudit = require('../core/silent-audit.js');
+const { ipcRenderer } = require('electron');
+
+// VRM视口参数
+const VRM_VIEWPORT_ASPECT = 1.5;   // 视口高宽比（height / width）
+// 以下常量将VRM视口坐标映射到与Live2D相同的保存格式（基于实测校准）
+const VRM_SCALE_FACTOR = 0.896;    // saved_scale * factor = viewport_width / innerWidth
+const VRM_PADDING_X = 0.104;       // 模型左边缘在视口中的水平偏移（占视口宽度比例）
+const VRM_PADDING_Y = 0.282;       // 模型顶部在视口中的垂直偏移（占视口高度比例）
+// 模型可见区域的垂直中心占视口高度的比例（上 VRM_PADDING_Y、下 0.96 之间的中点），用于跨屏中心判定
+const VRM_CENTER_Y_FRAC = (VRM_PADDING_Y + 0.96) / 2;
+
+// VRM模型交互控制器
+class VRMInteractionController {
+    constructor() {
+        this.model = null;
+        this.app = null;
+        this.isDragging = false;
+        this.dragOffset = { x: 0, y: 0 };
+        this.config = null;
+        this._bounceAnim = null; // 回弹动画句柄（进行中才有值，用于打断）
+        this.bounceEnabled = true; // 回弹开关（默认开启，config.ui.model_position.bounce_back 控制）
+    }
+
+    // 初始化
+    init(model, app, config = null) {
+        this.model = model;
+        this.app = app;
+        this.config = config;
+        // 读取回弹开关（默认开启）
+        if (config && config.ui && config.ui.model_position) {
+            this.bounceEnabled = config.ui.model_position.bounce_back !== false;
+        }
+        this._setupVRMInteractivity();
+        this._setupControlPanel();
+        this._setupScrollZoom();
+        this._setupWindowResize();
+        this._setupContextMenu();
+    }
+
+    // VRM控制面板（重置、VMC、渲染开关、穿透）
+    _setupControlPanel() {
+        const panel = document.getElementById('model-controls');
+        if (!panel) return;
+
+        panel.style.display = 'block';
+
+        // 展开/折叠按钮
+        const toggleBtn = document.getElementById('btn-toggle-panel');
+        const panelButtons = document.getElementById('panel-buttons');
+        if (toggleBtn && panelButtons) {
+            toggleBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isExpanded = panelButtons.classList.toggle('expanded');
+                toggleBtn.textContent = isExpanded ? '✕' : '⚙';
+                toggleBtn.title = isExpanded ? '收起面板' : '展开控制面板';
+            });
+        }
+
+        // 重置按钮：预留给VRM摄像头距离和旋转重置
+        const resetBtn = document.getElementById('btn-reset-position');
+        if (resetBtn) {
+            resetBtn.style.display = '';
+            resetBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.model.resetOrbit();
+            });
+        }
+
+        // VMC开关按钮
+        const vmcBtn = document.getElementById('btn-toggle-vmc');
+        if (vmcBtn) {
+            const vmcSender = this.model.getVMCSender && this.model.getVMCSender();
+            const vmcEnabled = vmcSender && vmcSender.enabled;
+            vmcBtn.classList.toggle('active', vmcEnabled);
+            this._updateRenderBtnState();
+
+            vmcBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const sender = this.model.getVMCSender && this.model.getVMCSender();
+                if (!sender) return;
+                if (sender.enabled) {
+                    sender.enabled = false;
+                    sender.stop();
+                    vmcBtn.classList.remove('active');
+                } else {
+                    sender.enabled = true;
+                    if (!sender.socket) sender.start();
+                    vmcBtn.classList.add('active');
+                }
+                this._updateRenderBtnState();
+            });
+        }
+
+        // 渲染开关按钮
+        const renderBtn = document.getElementById('btn-toggle-render');
+        if (renderBtn) {
+            renderBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const vmcSender = this.model.getVMCSender && this.model.getVMCSender();
+                if (!vmcSender || !vmcSender.enabled) return; // VMC未启用时禁用
+                const nowEnabled = this.model.isRenderingEnabled();
+                this.model.setRenderingEnabled(!nowEnabled);
+                renderBtn.classList.toggle('active', !nowEnabled);
+            });
+        }
+
+        // 鼠标穿透按钮
+        const ctBtn = document.getElementById('btn-click-through');
+        if (ctBtn) {
+            ctBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const newVal = !this.model.clickThrough;
+                this.model.clickThrough = newVal;
+                ctBtn.classList.toggle('active', newVal);
+            });
+        }
+
+        // 视线追踪按钮
+        const gazeBtn = document.getElementById('btn-toggle-gaze');
+        if (gazeBtn) {
+            gazeBtn.classList.toggle('active', this.model._gazeEnabled);
+            gazeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.model._gazeEnabled = !this.model._gazeEnabled;
+                gazeBtn.classList.toggle('active', this.model._gazeEnabled);
+            });
+        }
+
+        // 鼠标穿透逻辑：控制面板始终可交互
+        panel.addEventListener('mouseenter', () => {
+            ipcRenderer.send('set-ignore-mouse-events', { ignore: false });
+        });
+        panel.addEventListener('mouseleave', () => {
+            ipcRenderer.send('set-ignore-mouse-events', {
+                ignore: true, options: { forward: true }
+            });
+        });
+
+        // 聊天框在穿透模式下也保持可交互
+        const chatContainer = document.getElementById('text-chat-container');
+        if (chatContainer) {
+            chatContainer.addEventListener('mouseenter', () => {
+                ipcRenderer.send('set-ignore-mouse-events', { ignore: false });
+            });
+            chatContainer.addEventListener('mouseleave', () => {
+                ipcRenderer.send('set-ignore-mouse-events', {
+                    ignore: true, options: { forward: true }
+                });
+            });
+        }
+    }
+
+    // 更新渲染按钮的禁用状态
+    _updateRenderBtnState() {
+        const renderBtn = document.getElementById('btn-toggle-render');
+        if (!renderBtn) return;
+        const vmcSender = this.model.getVMCSender && this.model.getVMCSender();
+        const vmcEnabled = vmcSender && vmcSender.enabled;
+        renderBtn.classList.toggle('disabled', !vmcEnabled);
+        if (!vmcEnabled) {
+            // VMC关闭时强制启用渲染
+            this.model.setRenderingEnabled(true);
+            renderBtn.classList.remove('active');
+        }
+    }
+
+    // VRM模型的交互设置（视口拖拽、缩放、点击表情、鼠标穿透）
+    _setupVRMInteractivity() {
+        const canvas = this.app.renderer.view;
+        const model = this.model;
+        let mouseDownPos = null;
+        let isRightDragging = false;
+        const rightDragStart = { x: 0, y: 0 };
+
+        // containsPoint：检查client坐标是否在视口区域或UI元素上
+        model.containsPoint = (point) => {
+            if (!model._interactive || !model._visible) return false;
+            // 鼠标穿透模式下，模型区域不响应（但UI面板仍响应）
+            if (model._clickThrough) {
+                const controls = document.getElementById('model-controls');
+                if (controls && controls.style.display !== 'none') {
+                    const ctrlRect = controls.getBoundingClientRect();
+                    if (point.x >= ctrlRect.left && point.x <= ctrlRect.right &&
+                        point.y >= ctrlRect.top && point.y <= ctrlRect.bottom) return true;
+                }
+                const chatContainer = document.getElementById('text-chat-container');
+                if (chatContainer && chatContainer.style.display !== 'none') {
+                    const chatRect = chatContainer.getBoundingClientRect();
+                    if (point.x >= chatRect.left && point.x <= chatRect.right &&
+                        point.y >= chatRect.top && point.y <= chatRect.bottom) return true;
+                }
+                return false;
+            }
+
+            // 模型可见区域（使用屏幕空间碰撞盒）
+            const isOverModel = model.isPointOverModel(point.x, point.y);
+
+            // 聊天框
+            const chatContainer = document.getElementById('text-chat-container');
+            let isOverChat = false;
+            if (chatContainer && chatContainer.style.display !== 'none') {
+                const chatRect = chatContainer.getBoundingClientRect();
+                isOverChat = point.x >= chatRect.left && point.x <= chatRect.right &&
+                             point.y >= chatRect.top && point.y <= chatRect.bottom;
+            }
+
+            // 控制面板
+            const controls = document.getElementById('model-controls');
+            let isOverControls = false;
+            if (controls && controls.style.display !== 'none') {
+                const ctrlRect = controls.getBoundingClientRect();
+                isOverControls = point.x >= ctrlRect.left && point.x <= ctrlRect.right &&
+                                 point.y >= ctrlRect.top && point.y <= ctrlRect.bottom;
+            }
+
+            return isOverModel || isOverChat || isOverControls;
+        };
+
+        // 鼠标位置跟踪（使用client坐标）
+        const mouseGlobal = this.app.renderer.plugins.interaction.mouse.global;
+
+        canvas.addEventListener('mousemove', (e) => {
+            mouseGlobal.x = e.clientX;
+            mouseGlobal.y = e.clientY;
+
+            // 更新视线追踪鼠标坐标
+            if (model._gazeEnabled && model.setMousePosition) {
+                model.setMousePosition(e.clientX, e.clientY);
+            }
+
+            // 左键拖拽：移动视口
+            if (this.isDragging) {
+                const vr = model.viewRect;
+                vr.x = e.clientX - this.dragOffset.x;
+                vr.y = e.clientY - this.dragOffset.y;
+                return;
+            }
+
+            // 右键拖拽：旋转摄像头
+            if (isRightDragging) {
+                const dx = e.clientX - rightDragStart.x;
+                const dy = e.clientY - rightDragStart.y;
+                model._orbitTheta -= dx * 0.005;
+                model._orbitPhi += dy * 0.005;
+                model._orbitPhi = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, model._orbitPhi));
+                rightDragStart.x = e.clientX;
+                rightDragStart.y = e.clientY;
+                return;
+            }
+
+            // 鼠标穿透判定
+            if (model.containsPoint({ x: e.clientX, y: e.clientY })) {
+                ipcRenderer.send('set-ignore-mouse-events', { ignore: false });
+            } else {
+                ipcRenderer.send('set-ignore-mouse-events', {
+                    ignore: true, options: { forward: true }
+                });
+            }
+
+            // 穿透模式：鼠标在模型区域上时窗口半透明
+            if (model._clickThrough) {
+                model.setHoverTransparent(model.isPointOverModel(e.clientX, e.clientY));
+            }
+        });
+
+        canvas.addEventListener('mousedown', (e) => {
+            const isOverModel = model.isPointOverModel(e.clientX, e.clientY);
+
+            // 穿透模式下禁止所有模型交互
+            if (model._clickThrough) return;
+
+            if (e.button === 0) {
+                // 左键：视口拖拽
+                mouseDownPos = { x: e.clientX, y: e.clientY };
+                if (isOverModel) {
+                    this.isDragging = true;
+                    const vr = model.viewRect;
+                    this.dragOffset.x = e.clientX - vr.x;
+                    this.dragOffset.y = e.clientY - vr.y;
+                    // 开始拖动时取消进行中的回弹动画，避免和用户新拖动互相拉扯
+                    this._cancelBounce();
+                    ipcRenderer.send('set-ignore-mouse-events', { ignore: false });
+                }
+            } else if (e.button === 2) {
+                // 右键：摄像头旋转
+                if (isOverModel) {
+                    isRightDragging = true;
+                    rightDragStart.x = e.clientX;
+                    rightDragStart.y = e.clientY;
+                    ipcRenderer.send('set-ignore-mouse-events', { ignore: false });
+                }
+            }
+        });
+
+        window.addEventListener('mouseup', async (e) => {
+            if (e.button === 0 && this.isDragging) {
+                this.isDragging = false;
+
+                // 判断点击 vs 拖拽（距离 < 5px 视为点击）
+                if (mouseDownPos) {
+                    const dx = e.clientX - mouseDownPos.x;
+                    const dy = e.clientY - mouseDownPos.y;
+                    if (Math.sqrt(dx * dx + dy * dy) < 5) {
+                        if (model.isPointOverModel(e.clientX, e.clientY)) {
+                            model.motion('Tap');
+                            model.expression();
+                        }
+                    }
+                }
+
+                // 松手时若“光标拖到了窗口边缘 + 模型越过该边”，整窗重定位到那一侧的显示器。
+                const switched = await this.checkAndSwitchDisplay(e.clientX, e.clientY);
+                if (!switched) {
+                    this._bounceViewRectIntoWindow();
+                }
+
+                setTimeout(() => {
+                    if (!model.containsPoint({ x: e.clientX, y: e.clientY })) {
+                        ipcRenderer.send('set-ignore-mouse-events', {
+                            ignore: true, options: { forward: true }
+                        });
+                    }
+                }, 100);
+            }
+
+            if (e.button === 2 && isRightDragging) {
+                isRightDragging = false;
+                setTimeout(() => {
+                    if (!model.containsPoint({ x: e.clientX, y: e.clientY })) {
+                        ipcRenderer.send('set-ignore-mouse-events', {
+                            ignore: true, options: { forward: true }
+                        });
+                    }
+                }, 100);
+            }
+
+            if (e.button === 0) mouseDownPos = null;
+        });
+
+        canvas.addEventListener('mouseover', (e) => {
+            if (model.containsPoint({ x: e.clientX, y: e.clientY })) {
+                ipcRenderer.send('set-ignore-mouse-events', { ignore: false });
+            }
+        });
+
+        canvas.addEventListener('mouseout', () => {
+            if (!this.isDragging) {
+                ipcRenderer.send('set-ignore-mouse-events', {
+                    ignore: true, options: { forward: true }
+                });
+            }
+        });
+    }
+
+    // 滚轮缩放视口 / Alt+滚轮调节摄像头距离
+    _setupScrollZoom() {
+        window.addEventListener('wheel', (e) => {
+            if (!this.model.isPointOverModel(e.clientX, e.clientY)) return;
+            e.preventDefault();
+            if (this.model._clickThrough) return;
+
+            if (e.altKey) {
+                const factor = e.deltaY > 0 ? 1.1 : 0.9;
+                this.model._orbitDistance = Math.max(0.5, Math.min(20, this.model._orbitDistance * factor));
+                return;
+            }
+
+            const vr = this.model.viewRect;
+            const factor = e.deltaY > 0 ? 0.95 : 1.05;
+            const newWidth = vr.width * factor;
+            const newHeight = newWidth * VRM_VIEWPORT_ASPECT;
+
+            if (newWidth < 100 || newWidth > window.innerWidth * 5) return;
+
+            const mouseRelX = (e.clientX - vr.x) / vr.width;
+            const mouseRelY = (e.clientY - vr.y) / vr.height;
+
+            vr.x -= (newWidth - vr.width) * mouseRelX;
+            vr.y -= (newHeight - vr.height) * mouseRelY;
+            vr.width = newWidth;
+            vr.height = newHeight;
+
+            this._clampViewRect();
+            this.saveModelPosition();
+        }, { passive: false });
+    }
+
+    _setupWindowResize() {
+        window.addEventListener('resize', () => {
+            if (this.app && this.app._renderer) {
+                this.app._renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+        });
+    }
+
+    _setupContextMenu() {
+        window.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            return false;
+        });
+    }
+
+    // ===== 跨屏：松手时若“光标拖到窗口边缘 + 模型越过该边”，整窗重定位到那一侧的显示器 =====
+    // 触发用“光标贴边(EDGE 内) 且 模型可见区也越过该边”双重确认：光标到边缘=明确要往那侧推出去，
+    // 松手在屏幕中间不会误触；光标永远能拖到边缘，故四向、任意抓取点都对称。
+    // VRM 在 client/CSS 像素下工作（渲染器 1:1，无 ×2）。cursorX/cursorY：松手时光标的窗口 CSS 坐标。
+    async checkAndSwitchDisplay(cursorX, cursorY) {
+        if (!window.electronScreen || !window.electronScreen.moveWindowToDisplay) return false;
+        if (!this.model || !this.model.viewRect) return false;
+        if (!Number.isFinite(cursorX) || !Number.isFinite(cursorY)) return false;
+
+        try {
+            const displays = await window.electronScreen.getAllDisplays();
+            if (!displays || displays.length <= 1) return false;
+            const currentDisplay = await window.electronScreen.getCurrentDisplay();
+            if (!currentDisplay) return false;
+
+            const vr = this.model.viewRect;
+            const W = window.innerWidth, H = window.innerHeight;
+            // 模型可见区域在当前窗口 client 像素下的边界
+            const vLeft = vr.x + VRM_PADDING_X * vr.width;
+            const vRight = vr.x + (1 - VRM_PADDING_X) * vr.width;
+            const vTop = vr.y + VRM_PADDING_Y * vr.height;
+            const vBottom = vr.y + 0.96 * vr.height;
+
+            // 光标贴到哪条边(EDGE 内) 且 模型也越过该边，就在那侧“边外一点”探测目标显示器；另一轴用光标位置。
+            const EDGE = 10;
+            const sX = currentDisplay.screenX, sY = currentDisplay.screenY;
+            const probes = [];
+            if (cursorX <= EDGE && vLeft < 0)       probes.push({ x: sX - 1,      y: sY + cursorY });
+            if (cursorX >= W - EDGE && vRight > W)   probes.push({ x: sX + W + 1,  y: sY + cursorY });
+            if (cursorY <= EDGE && vTop < 0)        probes.push({ x: sX + cursorX, y: sY - 1 });
+            if (cursorY >= H - EDGE && vBottom > H)  probes.push({ x: sX + cursorX, y: sY + H + 1 });
+
+            let targetDisplay = null, probe = null;
+            for (const p of probes) {
+                for (const d of displays) {
+                    if (d.id === currentDisplay.id) continue;
+                    if (p.x >= d.screenX && p.x < d.screenX + d.width &&
+                        p.y >= d.screenY && p.y < d.screenY + d.height) {
+                        targetDisplay = d; probe = p; break;
+                    }
+                }
+                if (targetDisplay) break;
+            }
+            if (!targetDisplay) return false;
+
+            console.log('[VRM] 光标拖到屏幕边缘，准备切换到屏幕:', targetDisplay.id);
+            const result = await window.electronScreen.moveWindowToDisplay(probe.x, probe.y);
+            if (result && result.success && !result.sameDisplay) {
+                if (result.scaleRatio && result.scaleRatio !== 1) {
+                    console.log('[VRM] 屏幕缩放比变化:', result.scaleRatio);
+                }
+
+                // 以探测点为视觉中心放到新窗口，再夹住可见模型完整落入目标屏（用目标屏 DIP 尺寸，免受 innerWidth 未稳定影响）。
+                const tw = targetDisplay.width, th = targetDisplay.height;
+                const halfVisW = (vRight - vLeft) / 2;
+                const halfVisH = (vBottom - vTop) / 2; // VRM_CENTER_Y_FRAC 取可见区上下中点，故上下对称
+                const margin = 16;
+                let cx = probe.x - targetDisplay.screenX;
+                let cy = probe.y - targetDisplay.screenY;
+                const loX = margin + halfVisW, hiX = tw - margin - halfVisW;
+                const loY = margin + halfVisH, hiY = th - margin - halfVisH;
+                cx = hiX >= loX ? Math.min(Math.max(cx, loX), hiX) : tw / 2;
+                cy = hiY >= loY ? Math.min(Math.max(cy, loY), hiY) : th / 2;
+
+                this.model.viewRect.x = cx - 0.5 * vr.width;
+                this.model.viewRect.y = cy - VRM_CENTER_Y_FRAC * vr.height;
+
+                // 保存：用目标显示器 DIP 尺寸作基准，避免依赖跨屏后尚未稳定的 innerWidth。
+                this.saveModelPosition(tw, th);
+                console.log('[VRM] 跨屏切换完成，viewRect:', this.model.viewRect);
+                return true;
+            }
+            return false;
+        } catch (error) {
+            console.error('[VRM] 跨屏检测/切换出错:', error);
+            return false;
+        }
+    }
+
+
+   // 设置嘴部动画
+    setMouthOpenY(v) {
+        if (!this.model) return;
+
+        try {
+            v = Math.max(0, Math.min(v, 3.0));
+            const coreModel = this.model.internalModel.coreModel;
+
+            // 同时尝试所有可能的组合，不要return，让所有的都执行
+            try {
+                coreModel.setParameterValueById('PARAM_MOUTH_OPEN_Y', v);
+            } catch (e) { try { __silentAudit.audit('vrm-model-interaction.js:494', e); } catch (e2) {} }
+
+            try {
+                coreModel.setParameterValueById('ParamMouthOpenY', v);
+            } catch (e) { try { __silentAudit.audit('vrm-model-interaction.js:498', e); } catch (e2) {} }
+
+            try {
+                coreModel.SetParameterValue('PARAM_MOUTH_OPEN_Y', v);
+            } catch (e) { try { __silentAudit.audit('vrm-model-interaction.js:502', e); } catch (e2) {} }
+
+            try {
+                coreModel.SetParameterValue('ParamMouthOpenY', v);
+            } catch (e) { try { __silentAudit.audit('vrm-model-interaction.js:506', e); } catch (e2) {} }
+
+        } catch (error) {
+            console.error('设置嘴型参数失败:', error);
+        }
+    }
+
+    // 初始化VRM视口位置
+    setupInitialModelProperties() {
+        if (!this.model || !this.app) return;
+
+        const rememberPosition = this.config?.ui?.model_position?.remember_position !== false;
+        const savedPos = this.config?.ui?.model_position;
+        const savedScale = this.config?.ui?.model_scale;
+
+        if (rememberPosition && savedPos?.x != null && savedPos?.y != null &&
+            savedScale && savedScale > 0) {
+            this.model.viewRect = this._savedToViewRect(savedPos.x, savedPos.y, savedScale);
+            console.log('加载保存的VRM视口位置:', this.model.viewRect);
+        } else {
+            this.model.viewRect = this._savedToViewRect(1.35, 0.8, 2.3);
+            console.log('VRM视口初始化（默认位置）:', this.model.viewRect);
+        }
+        this._clampViewRect();
+    }
+
+    // 保存VRM视口位置（Live2D兼容格式）
+    saveModelPosition(overrideWidth, overrideHeight) {
+        if (!this.model || !this.config) return;
+        const vr = this.model.viewRect;
+        if (!vr || !this.config.ui?.model_position?.remember_position) return;
+
+        const saved = this._viewRectToSaved(overrideWidth, overrideHeight);
+        this.config.ui.model_position.x = saved.x;
+        this.config.ui.model_position.y = saved.y;
+        this.config.ui.model_scale = saved.scale;
+
+        ipcRenderer.send('save-model-position', saved);
+        console.log('保存VRM位置（Live2D格式）:', saved);
+    }
+
+    // ===== VRM坐标转换（与Live2D统一坐标系） =====
+
+    // 将Live2D兼容保存值转换为VRM视口矩形
+    _savedToViewRect(relX, relY, scale) {
+        const iW = window.innerWidth;
+        const iH = window.innerHeight;
+        const width = scale * VRM_SCALE_FACTOR * iW;
+        const height = width * VRM_VIEWPORT_ASPECT;
+        return {
+            x: relX * iW / 2 - VRM_PADDING_X * width,
+            y: relY * iH / 2 - VRM_PADDING_Y * height,
+            width: width,
+            height: height
+        };
+    }
+
+    // 将VRM视口矩形转换为Live2D兼容保存值
+    // overrideWidth/Height：跨屏切换时传入“目标显示器的 DIP 尺寸”，避免依赖尚未稳定的 innerWidth。
+    _viewRectToSaved(overrideWidth, overrideHeight) {
+        const vr = this.model.viewRect;
+        const iW = overrideWidth || window.innerWidth;
+        const iH = overrideHeight || window.innerHeight;
+        return {
+            x: (vr.x + VRM_PADDING_X * vr.width) * 2 / iW,
+            y: (vr.y + VRM_PADDING_Y * vr.height) * 2 / iH,
+            scale: vr.width / (VRM_SCALE_FACTOR * iW)
+        };
+    }
+
+    _clampViewRect() {
+        if (!this.model) return;
+        const vr = this.model.viewRect;
+        const iW = window.innerWidth;
+        const iH = window.innerHeight;
+        // 模型可见区域边界
+        const modelLeft = vr.x + VRM_PADDING_X * vr.width;
+        const modelRight = vr.x + (1 - VRM_PADDING_X) * vr.width;
+        const modelTop = vr.y + VRM_PADDING_Y * vr.height;
+        const modelBottom = vr.y + 0.96 * vr.height;
+        const margin = 80;
+        // 确保模型可见区域至少margin像素在屏幕内
+        if (modelRight < margin) vr.x += margin - modelRight;
+        if (modelLeft > iW - margin) vr.x -= modelLeft - (iW - margin);
+        if (modelBottom < margin) vr.y += margin - modelBottom;
+        if (modelTop > iH - margin) vr.y -= modelTop - (iH - margin);
+    }
+
+    // ===== 回弹：以「碰撞箱（getScreenHitBox，骨骼投影的真实可抓取范围）」为判断依据 =====
+    // 当碰撞箱在窗口内的可见部分 < 15% 时触发（即模型被拖到几乎抓不到了）。
+    // 回弹目标用「碰撞箱」而非「模型整体」——位移精确匹配抓取区出屏量，避免左右回弹距离被放大。
+    // 受 bounceEnabled 开关控制（config.ui.model_position.bounce_back，默认开启）。
+    _bounceViewRectIntoWindow() {
+        if (!this.model || !this.model.viewRect) return;
+        if (!this.bounceEnabled) {
+            // 回弹关闭：不做动画，但仍走旧夹紧，避免模型拖出窗口后当前会话抓不回来
+            this._clampViewRect();
+            this.saveModelPosition();
+            return;
+        }
+        const iW = window.innerWidth;
+        const iH = window.innerHeight;
+        const margin = 16;
+
+        // 碰撞箱 = 真实屏幕碰撞盒（可抓取范围），降级到 viewRect。
+        const hb = this.model.getScreenHitBox ? this.model.getScreenHitBox() : null;
+        const boxLeft = hb ? hb.x : this.model.viewRect.x;
+        const boxTop = hb ? hb.y : this.model.viewRect.y;
+        const boxW = hb ? hb.width : this.model.viewRect.width;
+        const boxH = hb ? hb.height : this.model.viewRect.height;
+        const boxRight = boxLeft + boxW;
+        const boxBottom = boxTop + boxH;
+
+        // 碰撞箱在窗口内的可见部分
+        const visW = Math.max(0, Math.min(boxRight, iW) - Math.max(boxLeft, 0));
+        const visH = Math.max(0, Math.min(boxBottom, iH) - Math.max(boxTop, 0));
+
+        // 触发阈值：碰撞箱可见部分低于 15%（下限 8px）。
+        const minVisX = Math.max(8, boxW * 0.15);
+        const minVisY = Math.max(8, boxH * 0.15);
+        const needX = visW < minVisX;
+        const needY = visH < minVisY;
+
+        if (!needX && !needY) {
+            this.saveModelPosition();
+            return;
+        }
+
+        // 回弹目标：用碰撞箱（而非模型整体），把碰撞箱完整夹回 [margin, iW-margin]×[margin, iH-margin]。
+        let targetLeft = boxLeft;
+        let targetTop = boxTop;
+        if (needX) {
+            if (boxW >= iW - margin * 2) targetLeft = (iW - boxW) / 2;
+            else if (boxLeft < margin) targetLeft = margin;
+            else if (boxRight > iW - margin) targetLeft = iW - margin - boxW;
+        }
+        if (needY) {
+            if (boxH >= iH - margin * 2) targetTop = (iH - boxH) / 2;
+            else if (boxTop < margin) targetTop = margin;
+            else if (boxBottom > iH - margin) targetTop = iH - margin - boxH;
+        }
+
+        // 由碰撞箱位移反推 viewRect.x / viewRect.y 的位移（碰撞箱与 viewRect 同步平移）。
+        const dx = targetLeft - boxLeft;
+        const dy = targetTop - boxTop;
+        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) {
+            this.saveModelPosition();
+            return;
+        }
+
+        this._animateBounce(dx, dy);
+    }
+
+    // 平滑回弹动画（easeInOutCubic + 轻微 overshoot），期间用户再次按下会由 _cancelBounce 打断。
+    _animateBounce(dx, dy) {
+        this._cancelBounce();
+        const startX = this.model.viewRect.x;
+        const startY = this.model.viewRect.y;
+        const duration = 340;
+        const start = performance.now();
+        const step = (now) => {
+            if (!this.model || !this.model.viewRect) return;
+            if (this.isDragging) { this._cancelBounce(); return; }
+            const t = Math.min(1, (now - start) / duration);
+            // easeInOutCubic：起止都缓，中段快，配合 overshoot 更顺滑
+            const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+            // 仅在中段加入轻微 overshoot（峰值 ~1.04），抵消 easeInOut 的“突然停止感”
+            const overshoot = Math.sin(Math.PI * t) * 0.04;
+            const s = e + overshoot;
+            this.model.viewRect.x = startX + dx * s;
+            this.model.viewRect.y = startY + dy * s;
+            if (t < 1) {
+                this._bounceAnim = requestAnimationFrame(step);
+            } else {
+                this._bounceAnim = null;
+                this.saveModelPosition();
+            }
+        };
+        this._bounceAnim = requestAnimationFrame(step);
+    }
+
+    // 取消进行中的回弹动画。
+    _cancelBounce() {
+        if (this._bounceAnim != null) {
+            cancelAnimationFrame(this._bounceAnim);
+            this._bounceAnim = null;
+        }
+    }
+}
+
+module.exports = { VRMInteractionController };

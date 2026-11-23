@@ -1,0 +1,10 @@
+{
+  "name": "memory-evolve",
+  "displayName": "记忆自我演化",
+  "version": "1.0.0",
+  "author": "pet-runtime",
+  "description": "短期门控 + 长期巩固：只把「长期有用的信息」写进 MemOS，自动去重，并留一份可审计的整理日志",
+  "framework_version": ">=1.0.0",
+  "main": "index.js",
+  "lang": "js"
+}

@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  稀疏 MSIX「包身份」清单模板（external location / sparse package）
+  ─────────────────────────────────────────────────────────────
+  作用：只给一个已有 exe 发“包身份”，不搬运它的任何文件。
+  应用仍从原目录（ExternalLocation）运行，目录保持可写，
+  所以 config.json、崩溃转储、HKCU Run 这些老逻辑不受影响。
+
+  为什么不是普通 MSIX：普通 MSIX 会把应用装进 WindowsApps（只读），
+  她仓里大量 __dirname 相对写入会失败；见 docs\打包-安装器与包身份-2026-11-18.md。
+
+  占位符由 identity\make-identity-package.ps1 替换：
+    __IDENTITY_NAME__ / __PUBLISHER__ / __VERSION__ / __DISPLAY_NAME__
+    __PUBLISHER_DISPLAY_NAME__ / __APPLICATION_ID__ / __EXECUTABLE__
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap3 uap10 rescap">
+
+  <Identity Name="__IDENTITY_NAME__"
+            Publisher="__PUBLISHER__"
+            Version="__VERSION__"
+            ProcessorArchitecture="neutral" />
+
+  <Properties>
+    <DisplayName>__DISPLAY_NAME__</DisplayName>
+    <PublisherDisplayName>__PUBLISHER_DISPLAY_NAME__</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <!-- 关键：应用文件不在包里，注册时用 Add-AppxPackage -ExternalLocation 指过去 -->
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+  </Properties>
+
+  <Resources>
+    <Resource Language="zh-CN" />
+    <Resource Language="en-US" />
+  </Resources>
+
+  <Dependencies>
+    <!-- AllowExternalContent 从 Windows 10 2004 (10.0.19041.0) 开始支持 -->
+    <TargetDeviceFamily Name="Windows.Desktop"
+                        MinVersion="10.0.19041.0"
+                        MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Applications>
+    <Application Id="__APPLICATION_ID__"
+                 Executable="__EXECUTABLE__"
+                 uap10:TrustLevel="mediumIL"
+                 uap10:RuntimeBehavior="win32App">
+      <!-- AppListEntry=none：身份包不往开始菜单塞第二个图标，桌面仍用原来的快捷方式 -->
+      <uap:VisualElements AppListEntry="none"
+                          DisplayName="__DISPLAY_NAME__"
+                          Description="大肥鱼桌面伴侣（包身份）"
+                          BackgroundColor="transparent"
+                          Square150x150Logo="Assets\Square150x150Logo.png"
+                          Square44x44Logo="Assets\Square44x44Logo.png" />
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- Win32 全信任进程必需；不声明会在 MakeAppx / 安装时被拒 -->
+    <rescap:Capability Name="runFullTrust" />
+
+    <!-- 关闭 HKCU 与 AppData 的写虚拟化。
+         不开这个，包内进程写 HKCU\...\Run 会被重定向到包私有位置，
+         setLoginItemSettings 的现有绕法会“写成功但开机不启动”。 -->
+    <rescap:Capability Name="unvirtualizedResources" />
+
+    <!-- 本次目标能力：
+         Windows.UI.Notifications.Management.UserNotificationListener
+         命名空间是 uap3（Windows SDK 10.0.26100 的 ST_Capability_Uap_3 实测），
+         不是 uap，也不是 rescap。用户首次调用还要 RequestAccessAsync 授权。 -->
+    <uap3:Capability Name="userNotificationListener" />
+  </Capabilities>
+</Package>

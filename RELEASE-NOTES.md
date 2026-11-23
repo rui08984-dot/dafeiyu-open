@@ -1,0 +1,71 @@
+# RELEASE NOTES — 大肥鱼公开代码树
+
+生成方式：`node scripts/export-public-tree.mjs`（源：主仓 + 应用仓的 tracked 文件）。
+状态：**纯本地树**，未配置 remote、未 push。
+
+## 包含
+
+- 主仓白名单：`pet-runtime/ pet-core/ scripts/ _probe/ docs/(curated) asr/ audio_common/ audio-loop/ edge-tts/ live-danmaku/ extensions/ _packaging/ .github/` + 根入口/说明/架构/compose。
+- 应用仓：`_incoming/my-neuro/` 下全部 tracked 代码（无 `.git`、无真实配置）。
+- Live2D Cubism Core/Framework（文件头注明 Redistributable Code，附 Framework LICENSE）。
+- MemOS 记忆后端子树（Apache-2.0，附 `LICENSE` + `NOTICE` + 修改说明）。
+- 角色模型 DeepSeek-chan（大肥鱼）：经作者授权随仓（原画/建模署名与使用边界见 `NOTICE`）。
+- LumenAct FACS 片段（CC BY 4.0，带 NOTICE）、角花 SVG（CC0，带 CREDITS）。
+
+## 排除
+
+- 凭据/PII：`config.json`、`llm_providers.json`、`memos_config.json`、`.env*`、`.control-token`、`.qq-token.txt`、`data/`（原记录室目录）、`备份/`、`语音样本/`、`character_backups*.json`、`panel-bounds.json`、`song-library/`、`live-2d/fake_neuro_audio/`。
+- 许可不明：Cubism 2 时代的 `live2d.min.js`（无许可头）。
+- 上游召回模块（许可边界，已移除）。
+- 运行/构建产物：`node_modules/`、`venv-voice/`、`.state/`、`crash-dumps/`、`*.log*`、`_probe/out|recovery|shots*|_archive*`、`tmp-verify/`、`dashboard.html`、`pet-core/target/`、`pet-runtime/mc-mod/**/build/`。
+- 大模型权重：`*.gguf *.onnx *.pt *.pth`。
+- 文档收窄：只保留 `docs/adr|specs|plans` 与文件名含 `设计-|决策-|调研-|规范-|README` 的；排除 `progress.md`、交接/HANDOFF/提示词/复盘/审计/archive。
+
+## 仍需自备
+
+- LLM API key（`config.json` + `llm_providers.json` 或环境变量）。
+- 8090 嵌入服务（MemOS 依赖；缺失时记忆嵌入降级，聊天/TTS/字幕照常）。
+- SenseVoice/Silero/Ollama 模型（语音识别/本地视觉）。
+
+## 如何验证
+
+```bat
+node scripts\install-wizard.mjs --dry-run --json
+node scripts\bootstrap.mjs --json
+cd _incoming\my-neuro\live-2d && npm install
+cd ..\..\.. && node _probe\check-ci.mjs
+```
+
+期望：向导的「最低可用性」在填 key 后为可用；bootstrap 只有「用户自备」项（key / 8090 / 模型服务）非 ok；无代码级红。
+
+## 验证结果（2026-11-23 实测）
+
+### 规模与卫生
+
+- 版本库文件：**1379 个 / 66.4 MiB**（含模型两处副本各 16.5MB；`node_modules`/`target` 未入版本库）。
+- 独立扫描 **29/29 通过**：0 真实 key（`sk-zk`/`sk-yg`/`gho_`/`AKIA`/长 `sk-`）、0 PII（用户名/用户目录）、
+  0 源项目绝对路径、0 `AI记录室`、0 真实 `config.json`/`llm_providers.json`、0 许可不明的 `live2d.min.js`。
+- `node --check`：**649 / 649 通过**（全部 .js/.cjs/.mjs）。
+
+### bootstrap（24 项）
+
+- 17 ok / 3 missing（`config.json`、`llm_providers.json`、`memos_config.json`）/ 1 warn（皮套 bundle 待构建）/
+  3 skip（venv-voice、pet-core、LumenAct）。
+- `requiredMissing` 只有 `config`、`providers`（用户 key）；**无代码级红**。
+
+### 回归测试（E 内实跑，不依赖宿主）
+
+- 累计 **331 通过 / 0 失败 / 12 合理 SKIP**：
+  dispatch-followup 47 · install-manifest 47 · voice-intent 58 · wiring 46 · interrupt-event 21 ·
+  heard-text 51 · latency-budget 19 · upload-hygiene 21 · param-commit 21。
+- `_probe/check-ci.mjs`：**6/6 全过**。
+- 12 项 SKIP 为「公开树无独立 app .git / 本地运行文件」的合理跳过（由根目录 `.public-tree` 标记区分）。
+
+### 已知偏差
+
+1. 模型随仓是**基于用户确认的作者授权**；`NOTICE` 保留了原画/建模署名与使用边界（禁二次销售/冒充），
+   如权利人异议会立即移除。
+2. `memos_config.json` 与皮套 bundle 属于首次初始化：向导/README 给生成与构建命令，bootstrap 不判红。
+3. npm 11 的 allow-scripts 会提示 electron/uiohook 的 postinstall；新机器被拦时执行
+   `npm approve-scripts --allow-scripts-pending`。
+

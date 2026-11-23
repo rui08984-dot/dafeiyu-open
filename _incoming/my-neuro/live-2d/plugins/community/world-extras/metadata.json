@@ -1,0 +1,10 @@
+{
+  "name": "world-extras",
+  "displayName": "世界感知扩展（浏览器/RSS）",
+  "version": "0.1.0",
+  "author": "pet-runtime",
+  "description": "把浏览器 tab 与 RSS 简报的「变化」写进易变尾巴（≤120 字符），不新增工具/端口/进程",
+  "framework_version": ">=1.0.0",
+  "main": "index.js",
+  "lang": "js"
+}

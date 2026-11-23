@@ -1,0 +1,16 @@
+{
+  "enabled_line": {
+    "title": "是否注入",
+    "description": "关掉就完全不注入",
+    "type": "bool",
+    "default": true,
+    "value": true
+  },
+  "include_reason": {
+    "title": "带上触发原因",
+    "description": "例如「因为听到『笑死』」",
+    "type": "bool",
+    "default": true,
+    "value": true
+  }
+}

@@ -1,0 +1,14 @@
+# audio_common —— 声学/情绪/声纹公共层
+#
+# 安装（主环境）：py -m pip install -r audio_common/requirements.txt
+# 这里只列 acoustic.py / emotion_arc.py / voice_id.py 需要的依赖（纯 numpy）。
+#
+# 声纹服务 voiceprint_server.py 额外依赖 resemblyzer（会拉 torch），
+# **不要装进系统 Python**（会和 MemOS/ASR 的 numpy 冲突，历史上有 0xC0000005 段错误）。
+# 它必须用隔离环境：
+#   py -m venv pet-runtime/venv-voice
+#   pet-runtime/venv-voice/Scripts/python.exe -m pip install -r pet-runtime/requirements-voice.txt
+#
+# 本机实测：numpy 2.3.5。
+
+numpy>=1.26,<3

@@ -1,0 +1,10 @@
+{
+  "name": "live-dock",
+  "displayName": "直播对接",
+  "version": "1.0.0",
+  "author": "pet-runtime",
+  "description": "接入直播间弹幕（mock/blivedm），按选择策略挑最值得回的一条回，不安全弹幕屏蔽，漏掉的摘要进上下文——像真主播一样看弹幕",
+  "framework_version": ">=1.0.0",
+  "main": "index.js",
+  "lang": "js"
+}

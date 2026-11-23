@@ -1,0 +1,187 @@
+{
+  "version": 1,
+  "skills": [
+    {
+      "name": "回到 ZCode 首页",
+      "description": "聚焦 ZCode 然后按 esc",
+      "steps": [
+        {
+          "action": "press_key",
+          "arg": "esc"
+        }
+      ],
+      "entryHash": "6d6b5f6f1f1f170d",
+      "exitHash": "6d6b5f6f1f1f170d",
+      "successCount": 5,
+      "attemptCount": 13,
+      "createdAt": "2026-11-09T10:26:18.857Z",
+      "updatedAt": "2026-11-09T13:38:49.805Z",
+      "risky": false,
+      "lastRunAt": "2026-11-09T13:38:52.446Z",
+      "deleted": true,
+      "deletedAt": "2026-11-09T13:38:52.450Z"
+    },
+    {
+      "name": "PVZ 经济位向日葵",
+      "description": "选卡槽1向日葵，种植在第3行第2列经济安全位",
+      "steps": [
+        {
+          "action": "pvz slot",
+          "arg": "1"
+        },
+        {
+          "action": "pvz plant",
+          "arg": "3,2"
+        }
+      ],
+      "entryHash": "a1b2c3d4e5f60718",
+      "exitHash": "a1b2c3d4e5f60718",
+      "successCount": 4,
+      "attemptCount": 4,
+      "createdAt": "2026-11-09T10:30:00.000Z",
+      "updatedAt": "2026-11-09T11:20:00.000Z",
+      "risky": false,
+      "lastRunAt": "2026-11-09T11:22:00.000Z",
+      "deleted": true,
+      "deletedAt": "2026-11-09T11:29:00.601Z"
+    },
+    {
+      "name": "验收-ZCode回到首页",
+      "description": "验收-ZCode回到首页（1 步）",
+      "steps": [
+        {
+          "action": "press_key",
+          "arg": "esc"
+        }
+      ],
+      "entryHash": "e8e0e4e0d4c4c4a8",
+      "exitHash": null,
+      "successCount": 0,
+      "attemptCount": 0,
+      "createdAt": "2026-11-09T11:36:31.960Z",
+      "updatedAt": "2026-11-09T11:36:31.960Z",
+      "risky": false,
+      "deleted": true,
+      "deletedAt": "2026-11-09T12:33:41.306Z"
+    },
+    {
+      "name": "验收-回ZCode首页",
+      "description": "验收-回ZCode首页（2 步）",
+      "steps": [
+        {
+          "action": "focus_window",
+          "arg": "ZCode"
+        },
+        {
+          "action": "press_key",
+          "arg": "esc"
+        }
+      ],
+      "entryHash": "699793939b971d2d",
+      "exitHash": "699793939b971d2d",
+      "successCount": 0,
+      "attemptCount": 3,
+      "createdAt": "2026-11-09T12:21:11.052Z",
+      "updatedAt": "2026-11-09T12:33:50.539Z",
+      "risky": false,
+      "lastRunAt": "2026-11-09T12:21:15.301Z",
+      "deleted": true,
+      "deletedAt": "2026-11-09T12:33:53.309Z"
+    },
+    {
+      "name": "测试-回首页",
+      "description": "回首页，本身改变界面",
+      "steps": [
+        {
+          "action": "focus_window",
+          "arg": "ZCode"
+        },
+        {
+          "action": "press_key",
+          "arg": "esc"
+        }
+      ],
+      "entryHash": "9b9b4b6edfff9efe",
+      "exitHash": null,
+      "scope": "any",
+      "successCount": 0,
+      "attemptCount": 0,
+      "createdAt": "2026-11-09T13:13:34.294Z",
+      "updatedAt": "2026-11-09T13:13:34.295Z",
+      "risky": false,
+      "deleted": true,
+      "deletedAt": "2026-11-09T13:13:34.342Z"
+    },
+    {
+      "name": "测试-点固定坐标",
+      "description": "点特定位置",
+      "steps": [
+        {
+          "action": "click_at",
+          "arg": "750,278"
+        }
+      ],
+      "entryHash": "9b9b6b6f5f7f1eff",
+      "exitHash": null,
+      "scope": "exact",
+      "successCount": 0,
+      "attemptCount": 0,
+      "createdAt": "2026-11-09T13:13:34.324Z",
+      "updatedAt": "2026-11-09T13:13:34.324Z",
+      "risky": false,
+      "deleted": true,
+      "deletedAt": "2026-11-09T13:13:34.343Z"
+    },
+    {
+      "name": "进关卡",
+      "description": "进关卡（4 步）",
+      "steps": [
+        {
+          "action": "focus_window",
+          "arg": "植物大战僵尸杂交版"
+        },
+        {
+          "action": "click_at",
+          "arg": "1109,1085"
+        },
+        {
+          "action": "click_at",
+          "arg": "1080,805"
+        },
+        {
+          "action": "click_at",
+          "arg": "1320,736"
+        }
+      ],
+      "entryHash": "2f312130353d151f",
+      "exitHash": null,
+      "scope": "any",
+      "successCount": 0,
+      "attemptCount": 0,
+      "createdAt": "2026-11-09T18:40:20.127Z",
+      "updatedAt": "2026-11-09T18:40:20.128Z",
+      "risky": false
+    },
+    {
+      "name": "测试_按esc",
+      "description": "按一次 esc（验证 skill run 的 entry/exit/记账链路）",
+      "steps": [
+        {
+          "action": "press_key",
+          "arg": "esc"
+        }
+      ],
+      "entryHash": null,
+      "exitHash": "efece87440c8d2e9",
+      "scope": "any",
+      "successCount": 1,
+      "attemptCount": 2,
+      "createdAt": "2026-11-10T06:59:40.420Z",
+      "updatedAt": "2026-11-10T06:59:40.420Z",
+      "risky": false,
+      "deleted": true,
+      "lastRunAt": "2026-11-10T06:59:49.592Z",
+      "deletedAt": "2026-11-10T06:59:58.486Z"
+    }
+  ]
+}

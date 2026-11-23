@@ -1,0 +1,16 @@
+{
+  "tavily_api_key": {
+    "title": "Tavily API Key",
+    "description": "Tavily 搜索服务的 API Key，前往 https://tavily.com 获取",
+    "type": "string",
+    "default": "",
+    "value": ""
+  },
+  "search_base_url": {
+    "title": "本地 SearXNG 地址",
+    "description": "优先用本机搜索实例（不要 key、不花钱）。默认 http://127.0.0.1:18080",
+    "type": "string",
+    "default": "http://127.0.0.1:18080",
+    "value": "http://127.0.0.1:18080"
+  }
+}

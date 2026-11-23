@@ -1,0 +1,212 @@
+/* ============================================================================
+ * tokens.css —— 设计令牌（古董画框调性：Antique Frame · Walnut & Brass（2026-11-16 换肤））
+ *
+ * 设计语言：
+ * 1. 深渊极夜（Abyss）：曜石极夜黑 (#0d0906) + 虎鲸暗夜琉璃 (rgba(13, 9, 6, 0.94))
+ * 2. 深海与流光（Ocean & Cyan）：深洋午夜蓝 (#8f7024) + 发光冰晶青 (#d9bd72) + 冰晶极光青 (#ecda9f)
+ * 3. 瑞士国际主义与高定（Swiss & Editorial）：发丝级双色流光嵌边、呼吸感有机弧线、零杂质暗色琉璃玻璃
+ * ========================================================================= */
+
+:root {
+  /* ── 核心调性基础令牌（Core Deep Sea Tokens）─────────────────────── */
+  --c-bg:             #0d0906;                   /* 曜石极夜黑主底 */
+  --c-ocean:          #8f7024;                   /* 深洋午夜蓝 */
+  --c-accent:         #d9bd72;                   /* 发光冰晶青 */
+
+  /* 兼容短名别名 */
+  --bg:               #0d0906;
+  --ocean:            #8f7024;
+  --accent:           #d9bd72;
+
+  /* ── 虎鲸深渊暗底（极高通透质感深色玻璃）───────────────────────── */
+  --c-bg-base:        rgba(13, 9, 6, 0.94);     /* 面板主底：虎鲸极夜黑 */
+  --c-bg-raised:      rgba(24, 17, 11, 0.96);    /* 抬起层（卡片/输入框） */
+  --c-bg-sunken:      rgba(8, 6, 4, 0.88);      /* 凹陷层（代码块/说明） */
+  --c-bg-hover:       rgba(52, 38, 20, 0.92);    /* 悬停微蓝 */
+  --c-bg-active:      rgba(70, 51, 26, 0.95);    /* 按下/选中 */
+
+  /* ── 虎鲸黑与深海蓝（Orca Abyss Palette）────────────────────────── */
+  --c-orca-black:     #0d0906;
+  --c-orca-deep:      rgba(13, 9, 6, 0.94);
+  --c-orca-surface:   rgba(20, 14, 9, 0.90);
+  --c-orca-raised:    rgba(30, 22, 14, 0.94);
+  --c-orca-hover:     rgba(46, 33, 18, 0.92);
+
+  --c-ocean-blue:     #8f7024;                   /* 冰海深蓝 */
+  --c-ocean-deep:     #7a5c18;                   /* 深洋午夜蓝 */
+  --c-cyan-glow:      #d9bd72;                   /* 生物发光青 */
+  --c-cyan-light:     #f7ecc8;                   /* 青白冷高光 */
+  --c-cyan-dim:       rgba(232, 207, 138, 0.16);
+  --c-cyan-border:    rgba(232, 207, 138, 0.42);
+
+  /* ── 金鱼曳尾与深海流光（Goldfish Veil-Tail & Deep Ocean Palette）─── */
+  --c-goldfish:        #d9bd72;                  /* 经典深海发光青 */
+  --c-goldfish-fin:    #ecda9f;                  /* 冰晶极光青 */
+  --c-goldfish-gold:   #8f7024;                  /* 冰海深蓝 */
+  --c-goldfish-light:  #f7ecc8;                  /* 冰晶白蓝光 */
+  --c-goldfish-dim:    rgba(232, 207, 138, 0.16);
+  --c-goldfish-border: rgba(232, 207, 138, 0.40);
+  --c-goldfish-glow:   0 0 20px rgba(232, 207, 138, 0.35);
+
+  /* ── 文字层次（高定杂志级纯粹排版，高对比度且不刺眼）─────────── */
+  --c-text:           #f2e6c8;                   /* 主文字：霜白 */
+  --c-text-muted:     #bfa87f;                   /* 次要说明：海洋雾灰 */
+  --c-text-faint:     #7e6e52;                   /* 占位/辅助：深海板岩 */
+  --c-text-invert:    #0d0906;                   /* 亮底反色字 */
+
+  /* ── 品牌与语义 ─────────────────────────────────────────────────── */
+  --c-brand:          var(--c-cyan-glow);
+  --c-brand-hover:    #ecda9f;
+  --c-brand-dim:      var(--c-goldfish-dim);
+  --c-accent:         var(--c-cyan-glow);
+  --c-accent-dim:     var(--c-cyan-dim);
+
+  --c-success:        #8aa864;                   /* 翡翠绿 */
+  --c-warn:           #d9a441;                   /* 琥珀黄 */
+  --c-error:          #b8473a;                   /* 绯红珊瑚 */
+  --c-info:           #d9bd72;                   /* 深海青 */
+
+  /* ── Vogue 双色流光与高定微光渐变 ────────────────────────────────── */
+  --grad-vogue-border: linear-gradient(135deg, rgba(232, 207, 138, 0.7) 0%, rgba(247, 236, 200, 0.32) 46%, rgba(143, 112, 36, 0.65) 100%);
+  --grad-vogue-glaze:  linear-gradient(160deg, rgba(26, 19, 12, 0.96) 0%, rgba(12, 9, 6, 0.98) 100%);
+  --grad-vogue-bubble: linear-gradient(145deg, rgba(30, 22, 14, 0.97) 0%, rgba(14, 10, 7, 0.99) 100%);
+  --grad-vogue-fin:    linear-gradient(135deg, rgba(143, 112, 36, 0.25) 0%, rgba(232, 207, 138, 0.18) 100%);
+
+  /* ── 阴影与微光体系 ──────────────────────────────────────────────── */
+  --sh-sm:             0 1px 2px rgba(0, 0, 0, 0.35);
+  --sh-md:             0 4px 14px rgba(0, 0, 0, 0.45);
+  --sh-lg:             0 14px 36px rgba(0, 0, 0, 0.60);
+  --sh-glow:           0 0 0 1px var(--c-cyan-dim), 0 4px 16px rgba(232, 207, 138, 0.15);
+  --sh-vogue:          0 16px 40px rgba(4, 7, 14, 0.6), 0 0 0 1px var(--c-cyan-border), 0 0 24px rgba(232, 207, 138, 0.16);
+  --sh-vogue-bubble:   0 12px 32px rgba(4, 7, 14, 0.52), 0 0 0 1px rgba(232, 207, 138, 0.35), 0 0 20px rgba(143, 112, 36, 0.25);
+  --sh-vogue-glow:     0 0 26px rgba(232, 207, 138, 0.24), 0 0 14px rgba(232, 207, 138, 0.2);
+
+  /* ── 兼容别名（平滑承接历史引用）─────────────────────────────────── */
+  --c-sakura:          var(--c-cyan-glow);
+  --c-sakura-light:    var(--c-cyan-light);
+  --c-sakura-dim:      var(--c-cyan-dim);
+  --c-sakura-border:   var(--c-cyan-border);
+  --c-sakura-glow:     var(--sh-vogue-glow);
+
+  --c-peach:           var(--c-goldfish-fin);
+  --c-peach-light:     var(--c-goldfish-light);
+  --c-peach-dim:       var(--c-goldfish-dim);
+  --c-peach-border:    var(--c-goldfish-border);
+
+  --grad-sakura-border: var(--grad-vogue-border);
+  --grad-sakura-glaze:  var(--grad-vogue-glaze);
+  --grad-sakura-bubble: var(--grad-vogue-bubble);
+  --grad-sakura-soft:   var(--grad-vogue-fin);
+  --sh-sakura:          var(--sh-vogue);
+  --sh-bubble:          var(--sh-vogue-bubble);
+
+  /* ── 边框与分隔 ─────────────────────────────────────────────────── */
+  --c-border:          rgba(255, 255, 255, 0.09);
+  --c-border-strong:   rgba(255, 255, 255, 0.18);
+  --c-divider:         rgba(255, 255, 255, 0.07);
+
+  /* ── 字号与排版 ─────────────────────────────────────────────────── */
+  --fs-xs:   11px;
+  --fs-sm:   12px;
+  --fs-md:   13px;
+  --fs-lg:   15px;
+  --fs-xl:   18px;
+  --fs-2xl:  22px;
+
+  --fw-normal: 400;
+  --fw-medium: 500;
+  --fw-bold:   600;
+
+  --font-ui:   'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Cascadia Mono', 'Consolas', 'Courier New', monospace;
+
+  /* ── 间距网格 ───────────────────────────────────────────────────── */
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-5:  20px;
+  --sp-6:  24px;
+  --sp-8:  32px;
+  --sp-10: 40px;
+
+  /* ── 圆角（古董画框：2–3px，禁胶囊/大圆角）──────────────────────── */
+  --r-sm:   2px;
+  --r-md:   3px;
+  --r-lg:   3px;
+  --r-xl:   3px;
+  --r-full: 3px;
+
+  /* ── 动效 ───────────────────────────────────────────────────────── */
+  --t-fast:   120ms;
+  --t-base:   200ms;
+  --t-slow:   320ms;
+  --ease:     cubic-bezier(0.22, 0.8, 0.3, 1);
+  --ease-in:  cubic-bezier(0.4, 0, 1, 1);
+
+  /* ── 层级 ───────────────────────────────────────────────────────── */
+  --z-model:    1;
+  --z-chat:     100;
+  --z-quick:    200;
+  --z-subtitle: 300;
+  --z-menu:     400;
+  --z-modal:    500;
+  --z-toast:    600;
+
+  /* ── 组件尺寸 ───────────────────────────────────────────────────── */
+  --h-control:   30px;
+  --h-control-lg: 36px;
+  --h-row:       34px;
+  --w-panel:     340px;
+}
+
+/* ── 基础重置 ─────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  color: var(--c-text);
+  background: transparent;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── 极简深色发光滚动条 ───────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(232, 207, 138, 0.22);
+  border-radius: var(--r-full);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(232, 207, 138, 0.45);
+}
+
+/* ── 焦点态 ───────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--c-cyan-glow);
+  outline-offset: 2px;
+}
+
+/* ── 动效偏好 ─────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

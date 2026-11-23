@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+WebUI 模块化重构 - 主应用入口
+负责 Flask 应用初始化、蓝图注册和启动函数
+"""
+
+import datetime
+import os
+import threading
+import time
+import webbrowser
+from flask import Flask, render_template, jsonify, send_from_directory
+
+from .utils import PROJECT_ROOT, IS_CLOUD_VERSION, logger, find_free_port, service_pids
+from .security import install_security
+
+# 记录启动时间
+START_TIME = datetime.datetime.now()
+
+DEFAULT_WEBUI_HOST = '127.0.0.1'
+
+# /live-2d/<path> 只用于历史静态资源引用；白名单目录之外的任何文件
+# （config.json、llm_providers.json、webui/.token、plugins/** 等）一律不对外。
+LIVE2D_STATIC_PREFIXES = (
+    'assets/',
+    'css/',
+    'js/',
+    'libs/',
+    'song-library/',
+    'vendor/',
+)
+
+
+def _resolve_bind_host():
+    """默认只绑定回环；PET_WEBUI_HOST 显式覆盖（默认必须安全）。"""
+    host = str(os.environ.get('PET_WEBUI_HOST') or '').strip()
+    return host or DEFAULT_WEBUI_HOST
+
+
+def _live2d_asset_allowed(filename):
+    normalized = str(filename or '').replace('\\', '/').lstrip('/')
+    if not normalized or normalized.startswith('.'):
+        return False
+    parts = normalized.split('/')
+    if any(part.startswith('.') or part == '..' for part in parts):
+        return False
+    if not normalized.startswith(LIVE2D_STATIC_PREFIXES):
+        return False
+    # 解析后必须仍在 PROJECT_ROOT 内（防符号链接把文件指到目录外）
+    root_real = os.path.realpath(str(PROJECT_ROOT))
+    target_real = os.path.realpath(os.path.join(root_real, normalized))
+    try:
+        if os.path.commonpath([root_real, target_real]) != root_real:
+            return False
+    except ValueError:
+        return False
+    return True
+
+
+
+def create_app():
+    """创建并配置 Flask 应用"""
+    app = Flask(__name__,
+                template_folder=str(PROJECT_ROOT / 'webui' / 'templates'),
+                static_folder=str(PROJECT_ROOT / 'webui' / 'static'))
+
+    # 插件 zip 上传上限（比 marketplace_updater.MAX_PLUGIN_ARCHIVE_BYTES 略大，留出表单开销）
+    app.config['MAX_CONTENT_LENGTH'] = 320 * 1024 * 1024
+
+    # 绑定/Host/令牌统一收口（所有蓝图共用同一个 before_request）
+    install_security(app)
+
+    @app.errorhandler(413)
+    def _payload_too_large(_error):
+        return jsonify({
+            'success': False,
+            'error': '上传文件超过 320 MB 上限，请精简插件包（如去掉 node_modules 里的开发依赖）后重试',
+        }), 413
+
+    # 注册各个功能蓝图
+    from .service_controller import service_bp
+    from .config_manager import config_bp
+    from .plugin_manager import plugin_bp
+    from .tool_manager import tool_bp
+    from .marketplace import market_bp
+    from .log_monitor import log_bp
+    from .live2d_manager import live2d_bp
+    from .avatar_manager import avatar_bp
+    from .updater import updater_bp
+    from .telemetry import telemetry_bp
+    from . import process_metrics
+
+    app.register_blueprint(service_bp)
+    app.register_blueprint(config_bp)
+    app.register_blueprint(plugin_bp)
+    app.register_blueprint(tool_bp)
+    app.register_blueprint(market_bp)
+    app.register_blueprint(log_bp)
+    app.register_blueprint(live2d_bp)
+    app.register_blueprint(avatar_bp)
+    app.register_blueprint(updater_bp)
+    app.register_blueprint(telemetry_bp)
+
+    # 进程/系统指标采样（总览仪表盘数据源）；失败不影响 WebUI 启动
+    try:
+        process_metrics.start_sampler()
+    except Exception as e:
+        logger.warning(f'process_metrics 采样启动失败: {e}')
+
+    # 注册首页路由（必须在蓝图之后，确保根路径被正确处理）
+    @app.route('/')
+    def dashboard():
+        """主页：按 config.ui.webui_flavor 选新版/旧版模板（缺省新版）"""
+        from .config_manager import load_config, normalize_webui_flavor
+        start_time_str = START_TIME.strftime('%Y-%m-%d %H:%M:%S')
+        flavor = normalize_webui_flavor((load_config().get('ui') or {}).get('webui_flavor'))
+        template = 'index_new.html' if flavor == 'new' else 'index.html'
+        return render_template(template, start_time=start_time_str, is_cloud=IS_CLOUD_VERSION)
+
+    # 提供 live-2d 目录的静态文件访问（路由保持 /live-2d/ 不变，但只暴露资源目录）
+    @app.route('/live-2d/<path:filename>')
+    def serve_live2d_file(filename):
+        """提供 live-2d 目录的静态资源访问。
+
+        原实现把整个 live-2d 目录交给 send_from_directory，等于无鉴权读取
+        config.json / llm_providers.json / webui/.token；这里收敛到资源目录白名单。
+        """
+        if not _live2d_asset_allowed(filename):
+            return jsonify({'success': False, 'error': '文件不在可公开的静态资源目录内'}), 404
+        return send_from_directory(PROJECT_ROOT, filename)
+
+    return app
+
+
+def run_app():
+    """运行 Flask 应用"""
+    app = create_app()
+    host = _resolve_bind_host()
+    try:
+        port = find_free_port(host)
+    except OSError:
+        port = find_free_port()
+
+    display_host = 'localhost' if host in ('127.0.0.1', '0.0.0.0') else host
+    print(f"\n{'='*50}")
+    print(f"WebUI 控制面板")
+    print(f"{'='*50}")
+    print(f"监听地址：{host}:{port}")
+    print(f"访问地址：http://{display_host}:{port}")
+    print(f"安全提示：状态变更接口需要令牌或同源请求（见上方令牌文件）")
+    print(f"{'='*50}\n")
+    '''
+    # 打印已注册的路由（调试用）
+    ##print("已注册的 API 路由:")
+    for rule in app.url_map.iter_rules():
+        if rule.endpoint != 'static':
+            methods = ','.join(sorted(rule.methods - {'HEAD', 'OPTIONS'}))
+            print(f"  {methods:10} {rule}")
+    print()
+'''
+    # 自动打开浏览器
+    def open_browser():
+        time.sleep(1.5)
+        webbrowser.open(f'http://{display_host}:{port}')
+
+    threading.Thread(target=open_browser, daemon=True).start()
+    
+    # 运行 Flask 应用：默认只监听回环，绝不默认暴露到 0.0.0.0
+    app.run(host=host, port=port, debug=False, use_reloader=False)

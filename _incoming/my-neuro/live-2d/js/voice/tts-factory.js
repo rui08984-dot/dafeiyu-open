@@ -1,0 +1,146 @@
+// tts-factory.js - TTS处理器工厂模块
+const { EnhancedTextProcessor } = require('./tts-processor.js');
+const { logToTerminal } = require('../api-utils.js');
+const { eventBus } = require('../core/event-bus.js');
+const { Events } = require('../core/events.js');
+const { TextMouthDriver } = require('./text-mouth-driver');
+
+// 情绪/动作标签只供皮套驱动使用，不能进入字幕和聊天记录。
+// 第二个 replace 会隐藏流式响应末尾尚未闭合的半截标签（例如“<开”）。
+function cleanDisplayText(text) {
+    return String(text || '')
+        .replace(/<[^>]*>/g, '').replace(/<[^<>]*$/g, '')
+        .replace(/＜[^＞]*＞/g, '').replace(/＜[^＜＞]*$/g, '')
+        .trim();
+}
+
+function appendAiMessage(container, text) {
+    if (!container || !text) return;
+    const messageElement = document.createElement('div');
+    const label = document.createElement('strong');
+    label.textContent = '大肥鱼:';
+    messageElement.append(label, document.createTextNode(` ${text}`));
+    container.appendChild(messageElement);
+    container.scrollTop = container.scrollHeight;
+}
+
+class TTSFactory {
+    // 创建TTS处理器
+    static create(config, modelController, voiceChat, uiController, onBarrageTTSComplete) {
+        const ttsEnabled = config.tts?.enabled !== false;
+        // ASR启用：本地ASR或百度流式ASR任一启用即可
+        const localASREnabled = config.asr?.enabled !== false;
+        const baiduASREnabled = config.cloud?.baidu_asr?.enabled === true;
+        const siliconflowASREnabled = config.cloud?.siliconflow_asr?.enabled === true;
+        const asrEnabled = localASREnabled || baiduASREnabled || siliconflowASREnabled;
+
+        if (ttsEnabled) {
+            return new EnhancedTextProcessor(
+                config.tts.url,
+                (value) => modelController.setMouthOpenY(value),
+                () => {
+                    // TTS开始时的回调 - 事件已由tts-processor发出，无需手动管理
+                    if (voiceChat && asrEnabled && !config.asr?.voice_barge_in) {
+                        voiceChat.pauseRecording();
+                    }
+                },
+                () => {
+                    // TTS结束时的回调 - 事件已由tts-processor发出，无需手动管理
+                    if (voiceChat && asrEnabled && !config.asr?.voice_barge_in) {
+                        voiceChat.resumeRecording();
+                    }
+                    // 发送交互更新事件
+                    eventBus.emit(Events.INTERACTION_UPDATED);
+                    // 调用新的TTS完成回调
+                    onBarrageTTSComplete();
+                },
+                config
+            );
+        } else {
+            let mouthSink = value => modelController.setMouthOpenY(value);
+            const textMouth = new TextMouthDriver(value => mouthSink(value));
+            // 创建虚拟TTS处理器（纯文本模式）
+            const virtualTTS = {
+                setMouthCallback: callback => { mouthSink = callback; },
+                reset: () => { textMouth.stop(); virtualTTS.accumulatedText = ''; },
+                processTextToSpeech: (text) => {
+                    // 直接显示文本，不进行语音合成
+                    const displayText = cleanDisplayText(text);
+                    textMouth.push(displayText);
+                    uiController.showSubtitle(`大肥鱼: ${displayText}`, 3000);
+
+                    // 添加到聊天记录
+                    const chatMessages = document.getElementById('chat-messages');
+                    appendAiMessage(chatMessages, displayText);
+
+                    // 立即调用结束回调，解锁ASR
+                    if (virtualTTS.onEndCallback) {
+                        virtualTTS.onEndCallback();
+                    }
+
+                    // 模拟TTS结束，延迟3秒后触发其他逻辑
+                    setTimeout(() => {
+                        // 发送交互更新事件
+                        eventBus.emit(Events.INTERACTION_UPDATED);
+                        onBarrageTTSComplete();
+                    }, 3000);
+                },
+                addStreamingText: (text) => {
+                    // 在纯文本模式下，流式文本直接累积显示，带自动消失
+                    if (!virtualTTS.accumulatedText) virtualTTS.accumulatedText = '';
+                    const previousText = cleanDisplayText(virtualTTS.accumulatedText);
+                    virtualTTS.accumulatedText += text;
+                    textMouth.push(cleanDisplayText(virtualTTS.accumulatedText).slice(previousText.length));
+                    uiController.showSubtitle(`大肥鱼: ${cleanDisplayText(virtualTTS.accumulatedText)}`, 3000);
+                },
+                finalizeStreamingText: () => {
+                    if (virtualTTS.accumulatedText) {
+                        const displayText = cleanDisplayText(virtualTTS.accumulatedText);
+                        // 最终确保字幕会在3秒后消失
+                        uiController.showSubtitle(`大肥鱼: ${displayText}`, 3000);
+
+                        // 添加到聊天记录
+                        const chatMessages = document.getElementById('chat-messages');
+                        appendAiMessage(chatMessages, displayText);
+                        virtualTTS.accumulatedText = '';
+
+                        // 立即调用结束回调，解锁ASR
+                        if (virtualTTS.onEndCallback) {
+                            virtualTTS.onEndCallback();
+                        }
+
+                        // 3秒后模拟TTS结束的其他逻辑
+                        setTimeout(() => {
+                            // 发送交互更新事件
+                            eventBus.emit(Events.INTERACTION_UPDATED);
+                            onBarrageTTSComplete();
+                        }, 3000);
+                    }
+                },
+                interrupt: () => {
+                    textMouth.stop();
+                    virtualTTS.accumulatedText = '';
+                    uiController.hideSubtitle();
+                    // 立即调用结束回调，确保ASR解锁
+                    if (virtualTTS.onEndCallback) {
+                        virtualTTS.onEndCallback();
+                    }
+                },
+                setEmotionMapper: (mapper) => {
+                    // 在纯文本模式下也支持情绪映射
+                    virtualTTS.emotionMapper = mapper;
+                },
+                isPlaying: () => false,
+                accumulatedText: '',
+                onEndCallback: null
+            };
+
+            console.log('TTS已禁用，使用纯文本模式');
+            logToTerminal('info', 'TTS已禁用，使用纯文本模式');
+
+            return virtualTTS;
+        }
+    }
+}
+
+module.exports = { TTSFactory };

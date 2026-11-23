@@ -1,0 +1,41 @@
+{
+  "providers": [
+    {
+      "id": "comad",
+      "name": "示例云端服务",
+      "api_key": "<填你的密钥>",
+      "api_url": "https://api.example.com/v1",
+      "enabled": true,
+      "models": [
+        {
+          "model_id": "example-model",
+          "name": "示例模型",
+          "enabled": true,
+          "temperature": 0.85,
+          "temperature_enabled": true,
+          "reasoning_enabled": false,
+          "reasoning_effort": "medium"
+        }
+      ]
+    },
+    {
+      "id": "wb",
+      "name": "示例本地网关",
+      "api_key": "<填你的密钥>",
+      "api_url": "https://api.example.com/v1",
+      "enabled": false,
+      "models": [
+        {
+          "model_id": "example-model",
+          "name": "示例模型",
+          "enabled": true
+        },
+        {
+          "model_id": "example-model",
+          "name": "示例模型",
+          "enabled": true
+        }
+      ]
+    }
+  ]
+}

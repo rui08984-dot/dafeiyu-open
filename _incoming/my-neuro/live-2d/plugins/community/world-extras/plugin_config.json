@@ -1,0 +1,23 @@
+{
+  "enabled": {
+    "title": "注入浏览器/RSS 世界行",
+    "description": "只在内容变化时注入一行（≤200 字符的 JSON 数据封装），走易变尾巴；没有新东西时 0 token",
+    "type": "bool",
+    "default": true,
+    "value": true
+  },
+  "browser_fresh_ms": {
+    "title": "浏览器行有效期（毫秒）",
+    "description": "超过这个时间没有收到 tab 心跳，就不再写浏览器行（心跳由宿主 /browser-tab 记账）",
+    "type": "number",
+    "default": 300000,
+    "value": 300000
+  },
+  "max_chars": {
+    "title": "单行上限（字符）",
+    "description": "约 80 tokens；JSON 封装需要容纳键名与引号，120 会把标题压到 ~12 字。超预算时按优先级先丢 feed/n、保住 title 与 at",
+    "type": "number",
+    "default": 200,
+    "value": 200
+  }
+}

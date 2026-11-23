@@ -1,0 +1,8 @@
+# edge-tts —— 本地语音合成服务（9883）
+#
+# 安装：py -m pip install -r edge-tts/requirements.txt
+# 本机实测：aiohttp 3.14.5 / edge-tts 7.3.1。
+# edge-tts 需要联网访问微软语音端点；离线时服务会明确报错，不会静默变哑。
+
+aiohttp>=3.9
+edge-tts>=6.1

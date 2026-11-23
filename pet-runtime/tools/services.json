@@ -1,0 +1,239 @@
+{
+  "version": 1,
+  "_comment": "桌宠服务清单 —— 单一事实源。launch-my-neuro.mjs / kill-all-pet.ps1 / restart-pet.ps1 / doctor.mjs 共用：端口、启动方式、健康 URL、是否必需、超时都只在这里改一次。路径一律相对项目根。Python 解释器由 launch-my-neuro.mjs 通过 live-2d/js/core/runtime-paths.js 解析（start.exe 里的 py/python 只是兜底）。8090（llama.cpp 嵌入）是共用基础设施，刻意不在清单里，任何脚本都不许杀它。",
+  "root": ".",
+  "sharedInfra": [
+    {
+      "port": 8090,
+      "name": "llama.cpp 嵌入（共用）",
+      "kill": false
+    }
+  ],
+  "services": [
+    {
+      "id": "vts",
+      "name": "VTS 协议",
+      "port": 8001,
+      "required": false,
+      "launchBy": "external",
+      "start": null,
+      "health": null,
+      "startTimeoutMs": 0,
+      "note": "由 VTube Studio/外部插件提供；缺失只影响面捕联动"
+    },
+    {
+      "id": "memos",
+      "name": "MemOS 记忆后端",
+      "port": 8003,
+      "required": false,
+      "launchBy": "launcher",
+      "start": {
+        "exe": "py",
+        "script": "_incoming/my-neuro/plugins-dlc/memos/memos_system/api/memos_api_server_v2.py",
+        "args": [],
+        "cwd": "_incoming/my-neuro/plugins-dlc/memos/memos_system"
+      },
+      "health": {
+        "url": "http://127.0.0.1:8003/health",
+        "timeoutMs": 10000
+      },
+      "startTimeoutMs": 45000,
+      "note": "入口不带 --port；冷启动要加载嵌入/索引，可能几十秒。MemOS 子树随仓分发（Apache-2.0）；未装 Python 依赖时该项为可选"
+    },
+    {
+      "id": "devtools",
+      "name": "自检通道",
+      "port": 8004,
+      "required": false,
+      "launchBy": "electron",
+      "start": null,
+      "health": null,
+      "startTimeoutMs": 0,
+      "note": "8004/eval 依赖 PET_DEVTOOLS；不作为必需项"
+    },
+    {
+      "id": "inner",
+      "name": "内部通道",
+      "port": 8102,
+      "required": false,
+      "launchBy": "electron",
+      "start": null,
+      "health": null,
+      "startTimeoutMs": 0,
+      "note": "渲染层 inner WS；渲染健康自查依赖它"
+    },
+    {
+      "id": "control",
+      "name": "HTTP 控制口",
+      "port": 8103,
+      "required": true,
+      "launchBy": "electron",
+      "start": null,
+      "health": {
+        "url": "http://127.0.0.1:8103/health",
+        "timeoutMs": 4000
+      },
+      "startTimeoutMs": 60000,
+      "note": "宿主活的判据；8080 上的 /state /quiet 也走这里"
+    },
+    {
+      "id": "sendinput",
+      "name": "SendInput 常驻助手",
+      "port": 8104,
+      "required": false,
+      "launchBy": "external",
+      "start": {
+        "exe": "pwsh",
+        "script": "pet-runtime/tools/send-input.ps1",
+        "args": [
+          "-Serve",
+          "-Port",
+          "8104"
+        ],
+        "cwd": "pet-runtime/tools"
+      },
+      "health": null,
+      "startTimeoutMs": 15000,
+      "note": "按需启动，不常驻；kill 时一并清掉"
+    },
+    {
+      "id": "uia",
+      "name": "常驻 UIA 服务",
+      "port": 8106,
+      "required": false,
+      "launchBy": "external",
+      "start": {
+        "exe": "pwsh",
+        "script": "pet-runtime/tools/uia-service.ps1",
+        "args": [
+          "-Serve",
+          "-Port",
+          "8106"
+        ],
+        "cwd": "pet-runtime/tools"
+      },
+      "health": null,
+      "startTimeoutMs": 15000,
+      "note": "按需启动；缺失时 UIA 定位退化为一次性调用"
+    },
+    {
+      "id": "tts",
+      "name": "语音合成 edge-tts",
+      "port": 9883,
+      "required": true,
+      "launchBy": "launcher",
+      "start": {
+        "exe": "py",
+        "script": "edge-tts/tts_server.py",
+        "args": [
+          "--port",
+          "9883"
+        ],
+        "cwd": "edge-tts"
+      },
+      "health": {
+        "url": "http://127.0.0.1:9883/health",
+        "timeoutMs": 5000
+      },
+      "startTimeoutMs": 60000
+    },
+    {
+      "id": "asr",
+      "name": "SenseVoice 语音识别",
+      "port": 1000,
+      "required": false,
+      "launchBy": "launcher",
+      "start": {
+        "exe": "py",
+        "script": "asr/asr_server.py",
+        "args": [
+          "--port",
+          "1000"
+        ],
+        "cwd": "asr"
+      },
+      "health": null,
+      "startTimeoutMs": 30000,
+      "note": "没有它按住 V 没反应；模型缺失时跳过"
+    },
+    {
+      "id": "cowatch",
+      "name": "一起看·耳朵",
+      "port": 1001,
+      "required": false,
+      "launchBy": "launcher",
+      "start": {
+        "exe": "py",
+        "script": "audio-loop/audio_loop_server.py",
+        "args": [
+          "--port",
+          "1001"
+        ],
+        "cwd": "audio-loop"
+      },
+      "health": null,
+      "startTimeoutMs": 20000,
+      "note": "WASAPI 回环；缺回环设备时起不来"
+    },
+    {
+      "id": "remote",
+      "name": "手机遥控页",
+      "port": 3003,
+      "required": true,
+      "launchBy": "electron",
+      "start": null,
+      "health": null,
+      "startTimeoutMs": 60000,
+      "note": "launcher 用 3003 判断「还有没有人在供应宿主」"
+    },
+    {
+      "id": "livedock",
+      "name": "直播台面板",
+      "port": 3004,
+      "required": false,
+      "launchBy": "electron",
+      "start": null,
+      "health": null,
+      "startTimeoutMs": 60000
+    },
+    {
+      "id": "voiceprint",
+      "name": "声纹嵌入",
+      "port": 8020,
+      "required": false,
+      "launchBy": "launcher",
+      "start": {
+        "exe": "py",
+        "venvPython": "pet-runtime/venv-voice/Scripts/python.exe",
+        "script": "audio_common/voiceprint_server.py",
+        "args": [],
+        "cwd": "audio_common"
+      },
+      "health": null,
+      "startTimeoutMs": 20000,
+      "note": "必须用 venv-voice 的解释器（隔离 resemblyzer/numpy）"
+    },
+    {
+      "id": "semantic",
+      "name": "LumenAct 语义选择器",
+      "port": 8120,
+      "required": false,
+      "launchBy": "launcher",
+      "start": {
+        "exe": "py",
+        "script": "pet-runtime/tools/lumen-semantic-server.py",
+        "args": [
+          "--port",
+          "8120"
+        ],
+        "cwd": "pet-runtime/tools"
+      },
+      "health": {
+        "url": "http://127.0.0.1:8120/health",
+        "timeoutMs": 5000
+      },
+      "startTimeoutMs": 45000,
+      "note": "冷启动加载 146MB ONNX 实测 11.4s，加载完才 bind"
+    }
+  ]
+}

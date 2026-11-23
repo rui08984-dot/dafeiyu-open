@@ -1,0 +1,10 @@
+{
+  "name": "companion-health",
+  "displayName": "陪伴健康提示",
+  "version": "1.0.0",
+  "author": "pet-runtime",
+  "description": "记录每日陪伴时长；超过阈值时由她主动提一句关心（对应研究方向「避免过度依赖」）",
+  "framework_version": ">=1.0.0",
+  "main": "index.js",
+  "lang": "js"
+}

@@ -1,0 +1,221 @@
+{
+  "game": "minecraft-1.21.1",
+  "window": "Minecraft",
+  "fps": 20,
+  "keys": {
+    "forward": "w",
+    "back": "s",
+    "left": "a",
+    "right": "d",
+    "jump": "space",
+    "sneak": "shift",
+    "sprint": "ctrl",
+    "attack": "mouse_left",
+    "use": "mouse_right",
+    "inventory": "e",
+    "drop": "q",
+    "hotbar": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9"
+    ]
+  },
+  "detect": {
+    "bars": {
+      "hp": {
+        "roi": [
+          0.3218,
+          0.8584,
+          0.1522,
+          0.0198
+        ],
+        "color": "heart"
+      }
+    },
+    "motion": {
+      "enemy": {
+        "roi": [
+          0.06,
+          0.12,
+          0.88,
+          0.62
+        ],
+        "threshold": 20,
+        "min_area": 0.0012
+      }
+    },
+    "scenes": {
+      "title": {
+        "templates": [
+          "scenes/title.png"
+        ],
+        "roi": [
+          0.25,
+          0.28,
+          0.55,
+          0.62
+        ],
+        "match": 0.72
+      },
+      "death": {
+        "templates": [
+          "scenes/death.png"
+        ],
+        "roi": [
+          0.3,
+          0.22,
+          0.4,
+          0.22
+        ],
+        "match": 0.85
+      },
+      "inventory": {
+        "templates": [
+          "scenes/inventory.png"
+        ],
+        "roi": [
+          0.28,
+          0.18,
+          0.44,
+          0.7
+        ],
+        "match": 0.8
+      },
+      "pause": {
+        "templates": [
+          "scenes/pause.png"
+        ],
+        "roi": [
+          0.28,
+          0.14,
+          0.44,
+          0.2
+        ],
+        "match": 0.8
+      },
+      "chat": {
+        "templates": [
+          "scenes/chat.png"
+        ],
+        "roi": [
+          0,
+          0.89,
+          0.26,
+          0.11
+        ],
+        "match": 0.9
+      }
+    }
+  },
+  "rules": [
+    {
+      "if": "hp < 0.25",
+      "act": {
+        "kind": "hold",
+        "key": "s",
+        "ms": 700
+      },
+      "why": "濒死：后退拉开距离",
+      "cooldown": 1400
+    },
+    {
+      "if": "enemy.nearest.dist <= 4.5 && enemy.nearest.offAim > 6",
+      "act": {
+        "kind": "aim"
+      },
+      "why": "近处有实体且准星还没对上（Mod 给的距离+偏差）：先转过去；对上之后交给下面的攻击规则",
+      "cooldown": 120
+    },
+    {
+      "if": "enemy.area > 0.004 && enemy.frames >= 2",
+      "act": {
+        "kind": "attack",
+        "from": "enemy"
+      },
+      "why": "画面里有东西在动且连续两帧都在：转向并攻击",
+      "cooldown": 200
+    },
+    {
+      "if": "hp < 0.5",
+      "act": {
+        "kind": "key",
+        "key": "2"
+      },
+      "why": "血量过半：切第 2 格（食物）",
+      "cooldown": 4000
+    },
+    {
+      "if": "always",
+      "act": {
+        "kind": "none"
+      },
+      "why": "待命"
+    }
+  ],
+  "_calibration": {
+    "at": "2026-11-14",
+    "window_at_calibration": "整窗 2582x1462（客户区 2560x1406，guiScale 自动=5）",
+    "hp_roi_source": "自标定：底部左半找红色包围盒 → 393x29px（正好 10 颗心）",
+    "how_to_recalibrate": "换分辨率/GUI 缩放后，跑 game_detector 的 colors: {hp: {roi:[0,0.8,0.5,0.15], color:'red'}} 拿 bbox，填回 bars.hp.roi",
+    "verified": "hp 检测实测 1.0（满血），5ms",
+    "hp_color": "2026-11-14 五十三轮：color 从 \"red\" 改成 \"heart\"（红/金/中毒橙/冰冻青四种都算），凋灵黑读不出来 → valid=false → 循环暂停，不再当成「血空了」"
+  },
+  "_limits": {
+    "keyboard_needs_foreground": "⚠ 2026-11-14 实测推翻：GLFW **丢弃 SendInput 注入的键盘**（W/E/F3/Esc 全无反应），但认 PostMessage（WM_KEYDOWN/WM_CHAR 立刻生效）。游戏键盘用 post_keys / post_key_down，鼠标（click/move_rel）仍然只有 SendInput 有效。",
+    "gui_can_be_background": "GUI 界面（菜单/背包/箱子）可以用 post_mouse 后台点击",
+    "motion_false_positive": "玩家自己的手/武器、粒子、草叶摆动都会动 —— ROI 已排除中心偏下（0.12~0.74 高度）；2026-11-14 加两层：① 连通域（两只怪不再合成一个质心）② frames 连续帧数（enemy.frames >= 2 过滤单帧粒子）",
+    "rules_boolean": "if 支持 && 与 ||（|| 优先级低）：如 \"enemy.area > 0.004 && enemy.frames >= 2\"",
+    "safety_gate": "三道闸：前台 fgMatch / HUD hpValid / GUI 面板 guiFlat。没配 detect.bars.hp 的 profile 默认 fail-closed；确实没有血条的游戏要在 profile 里显式写 \"safety\": {\"requireHp\": false}（2026-11-14 五十三轮）",
+    "scenes": "场景模板在 scenes/ 里，用 pet-runtime/tools/game-scene-capture.py 拍（--roi 要和 profile 里的一致）。只列**该拦住的场景**：一个都不匹配 = 正常游戏。",
+    "window_match": "2026-11-14：window 只写 \"Minecraft\" —— 装 Fabric/Forge 后标题会变成 \"Minecraft* 1.21.1\"，写 \"Minecraft 1.21.1\" 会匹配不上（抓帧直接失败）"
+  },
+  "_rules_note": "排序=紧急度。cooldown 必填（否则持续状态会永远命中同一条，把后面的规则挡住 —— 2026-11-14 实测被僵尸打死在「一直切食物格」上） ｜ 2026-11-14：新增 aim 规则（用 Mod 的 enemy.nearest.dist + yawDelta/pitchDelta）；没装 Mod 时这条永远不命中（fact 不存在），自动退回视觉的 attack 规则。",
+  "_hp_baseline": 0.8855,
+  "_hp_baseline_note": "满血时 bars.hp 的原始读数（10 颗分离心形，间隙占列）。换分辨率/GUI缩放后要重测。",
+  "state": {
+    "enabled": true,
+    "sources": {
+      "mod": {
+        "enabled": true,
+        "port": 8123
+      },
+      "vision": {
+        "enabled": true
+      }
+    },
+    "factSources": {
+      "scene": [
+        "vision"
+      ],
+      "player.hud": [
+        "vision"
+      ],
+      "enemy.cx": [
+        "vision"
+      ],
+      "enemy.cy": [
+        "vision"
+      ],
+      "enemy.frames": [
+        "vision"
+      ],
+      "player.hp": [
+        "mod",
+        "api",
+        "vision"
+      ]
+    },
+    "_note": "多通道状态：mod（进程内观测，最准）优先，vision 永远在（兜底 + 验证动作生效）。mod 侧往 127.0.0.1:8123 按行发 JSON，协议见 js/core/mod-provider.js 顶部。state.enabled=false 一键回滚；factSources 限定某条事实只能由谁写。"
+  },
+  "aim": {
+    "pxPerDeg": 6.67,
+    "gain": 1,
+    "_measured": "2026-11-14 真机标定：move_rel 200px → yaw 转 30.0°（0.15°/px）；灵敏度改了要重测"
+  }
+}

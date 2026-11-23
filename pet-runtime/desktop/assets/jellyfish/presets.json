@@ -1,0 +1,372 @@
+{
+  "schemaVersion": 1,
+  "modelId": "jellyfish",
+  "modelFingerprint": "6129b0b9d33b1d4927f1e1a3fcc9de6b9bfc2ee74758b924eafcc768e1e9bfb6",
+  "items": [
+    {
+      "id": "proc-head",
+      "label": "头部跟随",
+      "category": "procedural",
+      "source": "procedural",
+      "availability": "automatic",
+      "defaultEnabled": true,
+      "previewable": false
+    },
+    {
+      "id": "proc-body",
+      "label": "身体摆动",
+      "category": "procedural",
+      "source": "procedural",
+      "availability": "automatic",
+      "defaultEnabled": true,
+      "previewable": false
+    },
+    {
+      "id": "proc-blink",
+      "label": "眨眼",
+      "category": "procedural",
+      "source": "procedural",
+      "availability": "automatic",
+      "defaultEnabled": true,
+      "previewable": false
+    },
+    {
+      "id": "motion-idle-0",
+      "label": "待机动作",
+      "category": "motion",
+      "source": "motion",
+      "availability": "automatic",
+      "defaultEnabled": true,
+      "previewable": true
+    },
+    {
+      "id": "expr-happy",
+      "label": "＞＜",
+      "category": "expression",
+      "source": "expression",
+      "availability": "automatic",
+      "defaultEnabled": true,
+      "previewable": true,
+      "expressionName": "＞＜",
+      "emotions": [
+        "happy",
+        "开心",
+        "joy"
+      ]
+    },
+    {
+      "id": "expr-shy",
+      "label": "脸红",
+      "category": "expression",
+      "source": "expression",
+      "availability": "automatic",
+      "defaultEnabled": true,
+      "previewable": true,
+      "expressionName": "脸红",
+      "emotions": [
+        "shy",
+        "害羞"
+      ]
+    },
+    {
+      "id": "expr-sad",
+      "label": "流泪",
+      "category": "expression",
+      "source": "expression",
+      "availability": "automatic",
+      "defaultEnabled": true,
+      "previewable": true,
+      "expressionName": "流泪",
+      "emotions": [
+        "sad",
+        "难过"
+      ]
+    },
+    {
+      "id": "expr-angry",
+      "label": "黑脸",
+      "category": "expression",
+      "source": "expression",
+      "availability": "automatic",
+      "defaultEnabled": true,
+      "previewable": true,
+      "expressionName": "黑脸",
+      "emotions": [
+        "angry",
+        "生气"
+      ]
+    },
+    {
+      "id": "expr-surprised",
+      "label": "圈圈眼",
+      "category": "expression",
+      "source": "expression",
+      "availability": "automatic",
+      "defaultEnabled": true,
+      "previewable": true,
+      "expressionName": "圈圈眼",
+      "emotions": [
+        "surprised",
+        "惊讶"
+      ]
+    },
+    {
+      "id": "expr-smug",
+      "label": "屑屑眼",
+      "category": "expression",
+      "source": "expression",
+      "availability": "automatic",
+      "defaultEnabled": true,
+      "previewable": true,
+      "expressionName": "屑屑眼",
+      "emotions": [
+        "smug",
+        "得意"
+      ]
+    },
+    {
+      "id": "expr-awkward",
+      "label": "流冷汗",
+      "category": "expression",
+      "source": "expression",
+      "availability": "automatic",
+      "defaultEnabled": true,
+      "previewable": true,
+      "expressionName": "流冷汗",
+      "emotions": [
+        "awkward",
+        "尴尬"
+      ]
+    },
+    {
+      "id": "app-94217",
+      "label": "体型1",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "体型1"
+    },
+    {
+      "id": "app-28106",
+      "label": "体型2",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "体型2"
+    },
+    {
+      "id": "app-49014",
+      "label": "兔牙",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "兔牙"
+    },
+    {
+      "id": "app-63918",
+      "label": "前倾",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "前倾"
+    },
+    {
+      "id": "app-73843",
+      "label": "加载",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "加载"
+    },
+    {
+      "id": "app-31151",
+      "label": "单片眼镜",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "单片眼镜"
+    },
+    {
+      "id": "app-46320",
+      "label": "圈圈眼",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "圈圈眼"
+    },
+    {
+      "id": "app-38466",
+      "label": "尾巴开关",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "尾巴开关"
+    },
+    {
+      "id": "app-91573",
+      "label": "屑屑眼",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "屑屑眼"
+    },
+    {
+      "id": "app-87812",
+      "label": "流冷汗",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "流冷汗"
+    },
+    {
+      "id": "app-41107",
+      "label": "流泪",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "流泪"
+    },
+    {
+      "id": "app-82671",
+      "label": "爱心眼",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "爱心眼"
+    },
+    {
+      "id": "app-62448",
+      "label": "竖食指关",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "竖食指关"
+    },
+    {
+      "id": "app-66665",
+      "label": "竖食指开",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "竖食指开"
+    },
+    {
+      "id": "app-79550",
+      "label": "胸口衣服",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "胸口衣服"
+    },
+    {
+      "id": "app-12577",
+      "label": "脱鞋",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "脱鞋"
+    },
+    {
+      "id": "app-62848",
+      "label": "脸红",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "脸红"
+    },
+    {
+      "id": "app-67879",
+      "label": "裙子切换",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "裙子切换"
+    },
+    {
+      "id": "app-71091",
+      "label": "钢盆",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "钢盆"
+    },
+    {
+      "id": "app-70087",
+      "label": "黑框眼镜",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "黑框眼镜"
+    },
+    {
+      "id": "app-27066",
+      "label": "黑脸",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "黑脸"
+    },
+    {
+      "id": "app-25334",
+      "label": "默认体型",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "默认体型"
+    },
+    {
+      "id": "app-2105",
+      "label": "＞＜",
+      "category": "appearance",
+      "source": "expression",
+      "availability": "manual",
+      "defaultEnabled": false,
+      "previewable": true,
+      "expressionName": "＞＜"
+    }
+  ]
+}

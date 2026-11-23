@@ -1,0 +1,10 @@
+{
+  "name": "inner-state",
+  "displayName": "内在状态注入",
+  "version": "1.0.0",
+  "author": "pet-runtime",
+  "description": "把她此刻真实的情绪与心情注入系统提示（零 LLM 调用），替代 dynamic-persona 那种用 LLM 编状态的做法",
+  "framework_version": ">=1.0.0",
+  "main": "index.js",
+  "lang": "js"
+}

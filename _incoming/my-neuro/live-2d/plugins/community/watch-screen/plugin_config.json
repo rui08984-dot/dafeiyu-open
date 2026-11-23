@@ -1,0 +1,135 @@
+{
+  "captureInterval": {
+    "title": "截图间隔（毫秒）",
+    "description": "多少毫秒截一次图",
+    "type": "int",
+    "default": 2000,
+    "value": 2000
+  },
+  "maxFrames": {
+    "title": "保留帧数",
+    "description": "最多保留几张截图作为上下文记忆",
+    "type": "int",
+    "default": 5,
+    "value": 5
+  },
+  "passiveMode": {
+    "title": "被动模式",
+    "description": "用户说话时自动把最新截图带入 LLM",
+    "type": "bool",
+    "default": true,
+    "value": true
+  },
+  "activeMode": {
+    "title": "主动模式",
+    "description": "每次截图后立刻判断有没有值得说的",
+    "type": "bool",
+    "default": true,
+    "value": true
+  },
+  "organKeyframeMinGapMs": {
+    "title": "关键帧最短间隔（毫秒）",
+    "description": "两个画面摘要之间至少隔多久。调小看得更细但更费钱：2000 = 看一集剧 1300+ 次模型调用；15000 够用。",
+    "type": "int",
+    "default": 15000,
+    "value": 15000
+  },
+  "organSceneMinGapMs": {
+    "title": "换场景最短间隔（毫秒）",
+    "description": "检测到明显换镜头时的最短间隔。",
+    "type": "int",
+    "default": 6000,
+    "value": 6000
+  },
+  "organVisionBudgetPerHour": {
+    "title": "每小时摘要预算（次）",
+    "description": "超过就降级成\"只有时间戳\"，防止无上限烧钱。",
+    "type": "int",
+    "default": 220,
+    "value": 220
+  },
+  "organSummaryMaxChars": {
+    "title": "单条摘要长度上限（字）",
+    "description": "太短会变成\"桌面有图标\"这种废话，建议 60~90。",
+    "type": "int",
+    "default": 72,
+    "value": 72
+  },
+  "organProactiveGapMs": {
+    "title": "主动开口间隔·换镜头（毫秒）",
+    "description": "检测到换镜头后，两次主动评论至少隔多久。",
+    "type": "int",
+    "default": 90000,
+    "value": 90000
+  },
+  "organProactiveChangeGapMs": {
+    "title": "主动开口间隔·画面变化（毫秒）",
+    "description": "只是画面在变（比如人物在房间里说话）时的间隔。太小会变成碎碎念。",
+    "type": "int",
+    "default": 150000,
+    "value": 150000
+  },
+  "state_trigger_enabled": {
+    "title": "屏幕状态触发",
+    "description": "屏幕状态机（game/video/working/idle）照常运行并注入上下文；开启后才会主动触发：进入游戏状态满 N 分钟陪玩开场、闲置满 N 分钟关心一句（各有 30 分钟冷却，静默期只记日志）。",
+    "type": "bool",
+    "default": true,
+    "value": true
+  },
+  "gamer_idle_minutes": {
+    "title": "陪玩开场等待（分钟）",
+    "description": "进入 game 状态（画面高频变化且没有媒体播放器）持续多少分钟后说一句陪玩开场。",
+    "type": "int",
+    "default": 5,
+    "value": 5
+  },
+  "idle_care_minutes": {
+    "title": "闲置关心等待（分钟）",
+    "description": "进入 idle 状态（屏幕长时间没有变化）持续多少分钟后关心一句。",
+    "type": "int",
+    "default": 10,
+    "value": 10
+  },
+  "proactivity": {
+    "title": "主动性四档",
+    "description": "按能力分别控制主动性。L0 只回应 / L1 状态触发开口（现状）/ L2 自动开功能但先问一句 / L3 直接做。L3 的自动动作全是本地操作（读知识库、建会话文件、注入上下文），不调 LLM；L2 只问一句。",
+    "type": "object",
+    "fields": {
+      "default": {
+        "title": "默认档位",
+        "description": "没在 overrides 里单独配置的能力用这一档。读取失败或写错都按 L1 处理。",
+        "type": "string",
+        "default": "L2",
+        "value": "L2"
+      },
+      "overrides": {
+        "title": "按能力覆盖",
+        "description": "auto_cowatch=检测到视频；auto_knowledge=检测到游戏；auto_idle_care=闲置关心（只有显式设 L0 才会关掉现有触发）。",
+        "type": "object",
+        "fields": {
+          "auto_cowatch": {
+            "title": "检测到视频",
+            "description": "L2 先问「一起看？」；L3 直接开一起看会话。L0/L1 不动作。",
+            "type": "string",
+            "default": "L2",
+            "value": "L2"
+          },
+          "auto_knowledge": {
+            "title": "检测到游戏",
+            "description": "L3 直接加载本地攻略到上下文（不打扰）；L2 先问一句。L0/L1 不动作。",
+            "type": "string",
+            "default": "L2",
+            "value": "L2"
+          },
+          "auto_idle_care": {
+            "title": "闲置关心",
+            "description": "只有显式设 L0 才抑制闲置关心；其他档保持现有行为。",
+            "type": "string",
+            "default": "L1",
+            "value": "L1"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,427 @@
+// volcengine-streaming.js
+// 字节TTS单session流式播放：整段LLM回复一个session，PCM实时调度到Web Audio API
+// 字幕根据音频播放进度逐字显示，与音频自然同步
+
+'use strict';
+
+const __silentAudit = require('../core/silent-audit.js');
+const { randomUUID } = require('crypto');
+const WebSocket = require('ws');
+const { readVolcengineConfig, volcengineHeaders } = require('./volcengine-config');
+const { eventBus } = require('../core/event-bus.js');
+const { Events } = require('../core/events.js');
+const { shouldUseLegacyEmotionLogic } = require('../avatar/motion-mode.js');
+const {
+    EventType, MsgType,
+    receiveMessage, waitForEvent,
+    startConnection, finishConnection,
+    startSession, finishSession, taskRequest,
+} = require('./volcengine-protocols.js');
+
+// 未闭合标签检测（含单尖括号情绪标签 <开心>，最多持有15字符）
+const INCOMPLETE_TAG = /(?:<<[^>]*|\[[^\]]*|【[^】]*|[（(][^）)]*|<[^\s<>]{0,15})\s*$/;
+
+class VolcengineStreamingSession {
+    constructor(config, { onMouthValue, onStartCallback, onEndCallback, onComplete, emotionMapper, expressionMapper }) {
+        this.config          = config;
+        this.onMouthValue    = onMouthValue;
+        this.onStartCallback = onStartCallback;
+        this.onEndCallback   = onEndCallback;
+        this.onComplete      = onComplete;
+        this.emotionMapper   = emotionMapper;
+        this.expressionMapper = expressionMapper;
+        this.useLegacyEmotionLogic = shouldUseLegacyEmotionLogic(config);
+
+        const volcCfg = readVolcengineConfig(config);
+        this.apiKey      = volcCfg.apiKey;
+        this.voiceType   = volcCfg.voiceType;
+        this.endpoint    = volcCfg.endpoint;
+        this.resourceId  = volcCfg.resourceId;
+
+        // WebSocket / session
+        this.ws        = null;
+        this.sessionId = null;
+        this.baseReq   = null;
+
+        // Web Audio
+        this.audioContext     = null;
+        this.analyser         = null;
+        this.gainNode         = null;
+        this.nextStartTime    = 0;
+        this.audioStarted     = false;
+        this._audioStartedAt  = 0;   // audioContext 时间轴上第一帧的起点
+        this._animId          = null; // requestAnimationFrame 句柄（嘴形+字幕共用）
+
+        // 字幕
+        this.tagBuf           = '';  // 未冲出的 token（等待完整标签）
+        this._subtitleAccum   = '';  // 已显示的字幕文本
+        this._subtitleFull    = '';  // 全部应显示的字幕文本（含未触发的）
+        this._subtitleCharIdx = 0;   // 已调度的字幕字符数（用于计算延迟）
+        // 情绪：按句子攒干净文本，在该句第一个字上屏的时刻切一次表情
+        //（流式 TTS 这条路以前从不切表情 —— 老代码只认 <标签>，而 system prompt 禁止写标签）
+        this._emoBuf = '';
+        this._emoBufStart = 0;
+
+        this.stopped         = false;
+        this.finalized       = false;
+        this.sessionFinished = false;
+    }
+
+    // ── 建立连接并开启 session ─────────────────────────────
+
+    async open() {
+        this.ws = new WebSocket(this.endpoint, {
+            headers: volcengineHeaders(this.apiKey),
+            skipUTF8Validation: true,
+        });
+
+        await new Promise((resolve, reject) => {
+            this.ws.on('open', resolve);
+            this.ws.on('error', reject);
+        });
+
+        this.ws.on('close', () => {
+            if (!this.stopped) this._handleEnd();
+        });
+
+        await startConnection(this.ws);
+        await waitForEvent(this.ws, MsgType.FullServerResponse, EventType.ConnectionStarted);
+
+        this.sessionId = randomUUID();
+        this.baseReq = {
+            user: { uid: randomUUID() },
+            namespace: 'BidirectionalTTS',
+            req_params: {
+                speaker: this.voiceType,
+                audio_params: { format: 'pcm', sample_rate: 24000 },
+            },
+        };
+
+        await startSession(
+            this.ws,
+            Buffer.from(JSON.stringify({ ...this.baseReq, event: EventType.StartSession })),
+            this.sessionId,
+        );
+        await waitForEvent(this.ws, MsgType.FullServerResponse, EventType.SessionStarted);
+
+        this._initAudio();
+        this._receiveLoop();
+    }
+
+    // ── 接收 token ────────────────────────────────────────
+
+    async sendToken(token) {
+        if (this.stopped || this.finalized) return;
+        this.tagBuf += token;
+        if (!INCOMPLETE_TAG.test(this.tagBuf)) {
+            await this._flushTagBuf();
+        }
+    }
+
+    // ── LLM 输出结束 ──────────────────────────────────────
+
+    async finalize() {
+        if (this.stopped || this.finalized) return;
+        this.finalized = true;
+        if (this.tagBuf.trim()) await this._flushTagBuf();
+        // 末尾没标点的半句也要有机会切表情
+        if (this._emoBuf && this.emotionMapper?.applyTextEmotion) {
+            const sentence = this._emoBuf;
+            const start = this._emoBufStart;
+            this._emoBuf = '';
+            setTimeout(() => {
+                if (this.stopped) return;
+                try { this.emotionMapper.applyTextEmotion(sentence); } catch (e) { /* 表情失败不影响播放 */ }
+            }, Math.max(0, 1000 + start * 210 - 400));
+        }
+        await finishSession(this.ws, this.sessionId);
+    }
+
+    // ── 打断 ──────────────────────────────────────────────
+
+    stop() {
+        if (this.stopped) return;
+        this.stopped = true;
+        this._stopAudio();
+        if (this.ws) {
+            try { this.ws.close(); } catch (_) { try { __silentAudit.audit('volcengine-streaming.js:132', _); } catch (e2) {} }
+            this.ws = null;
+        }
+        if (typeof hideSubtitle === 'function') hideSubtitle();
+        if (this.onMouthValue) this.onMouthValue(0);
+    }
+
+    isPlaying() {
+        if (!this.audioContext) return false;
+        return this.nextStartTime > this.audioContext.currentTime + 0.05;
+    }
+
+    // ── 内部：冲 tagBuf ───────────────────────────────────
+
+    async _flushTagBuf() {
+        const raw = this.tagBuf;
+        this.tagBuf = '';
+
+        this._triggerEmotionMarkersDelayed(raw);
+
+        const clean = this._cleanText(raw);
+        if (!clean) return;
+
+        // 情绪：按句子推一次「文本→表情」（中性句不动，保持原脸不乱切）
+        this._queueSentenceEmotion(clean, raw);
+
+        // 逐字发给 TTS，同时按字符顺序延迟显示字幕（首字1秒后出现，之后每字250ms）
+        for (const char of clean) {
+            if (this.stopped || this.finalized) return;
+            const c = char;
+            const delay = 1000 + this._subtitleCharIdx * 210;
+            this._subtitleCharIdx++;
+            const progressChars = this._subtitleCharIdx;
+            this._subtitleFull += c;
+            setTimeout(() => {
+                if (this.stopped) return;
+                this._subtitleAccum += c;
+                this._showSubtitle(this._subtitleAccum);
+                try {
+                    global.paramDirector?.noteSpeechProgress?.(progressChars);
+                } catch (_) { try { __silentAudit.audit('volcengine-streaming.js:169', _); } catch (e2) {} }
+            }, delay);
+            await taskRequest(
+                this.ws,
+                Buffer.from(JSON.stringify({
+                    ...this.baseReq,
+                    event: EventType.TaskRequest,
+                    req_params: { ...this.baseReq.req_params, text: char },
+                })),
+                this.sessionId,
+            );
+        }
+    }
+
+    _cleanText(text) {
+        return text
+            .replace(/<<[^>]*>>/g, '')
+            .replace(/<[^>]+>/g, '')
+            .replace(/\[[^\]]*\]/g, '')
+            .replace(/【[^】]*】/g, '')
+            .replace(/[（(][^）)]*[）)]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    /**
+     * 流式 TTS 的「文本→表情」：按句子攒，在该句第一个字上屏时切脸。
+     * 为什么需要（2026-11-15 六十三轮）：这条路原来只在 _triggerEmotionMarkersDelayed 里
+     * 认 <开心> 这种标签，而 system prompt 明令禁止她写标签 → 标记恒空 →
+     * 用户看到的就是「说话时面无表情、脸一直不动」。这里不依赖标签，用整句推断。
+     * 中性句 applyTextEmotion 返回 null，保持当前表情不乱切。
+     */
+    _queueSentenceEmotion(clean, raw) {
+        if (!this.emotionMapper || typeof this.emotionMapper.applyTextEmotion !== 'function') return;
+        // 带标签的片段交给老的标签通道，避免双触发
+        if (/<[^\s<>]+>/.test(String(raw || ''))) return;
+        if (!this._emoBuf) this._emoBufStart = this._subtitleCharIdx;
+        this._emoBuf += clean;
+        const m = this._emoBuf.match(/^[\s\S]*?[。！？!?…\n]/);
+        let sentence = m ? m[0] : '';
+        if (!sentence && this._emoBuf.length >= 24) sentence = this._emoBuf;
+        if (!sentence) return;
+        const start = this._emoBufStart;
+        this._emoBuf = this._emoBuf.slice(sentence.length);
+        this._emoBufStart = start + sentence.length;
+        const mapper = this.emotionMapper;
+        // 字幕时序：第 start 个字在 1000+start*210 ms 出现；表情提前 0.4s 切
+        setTimeout(() => {
+            if (this.stopped) return;
+            try { mapper.applyTextEmotion(sentence); } catch (e) { try { __silentAudit.audit('volcengine-streaming.js:emotion', e); } catch (e2) {} }
+        }, Math.max(0, 1000 + start * 210 - 400));
+    }
+
+    _triggerEmotionMarkersDelayed(raw) {
+        if (!this.useLegacyEmotionLogic) return;
+        // 按情绪标签在文本中的位置计算延迟，和对应字幕字符同步触发
+        const parts = raw.split(/(<[^\s<>]+>)/);
+        let cleanCharsBefore = 0;
+        for (const part of parts) {
+            const m = part.match(/^<([^\s<>]+)>$/);
+            if (m) {
+                const emotion = m[1];
+                const delay = 1000 + (this._subtitleCharIdx + cleanCharsBefore) * 220;
+                const em = this.emotionMapper;
+                const ex = this.expressionMapper;
+                setTimeout(() => {
+                    if (!this.stopped) {
+                        if (em?.playConfiguredEmotion) em.playConfiguredEmotion(emotion);
+                        if (ex?.triggerExpressionByEmotion) ex.triggerExpressionByEmotion(emotion);
+                    }
+                }, delay);
+            } else {
+                cleanCharsBefore += this._cleanText(part).length;
+            }
+        }
+    }
+
+    // ── 内部：接收循环 ────────────────────────────────────
+
+    async _receiveLoop() {
+        try {
+            while (!this.stopped) {
+                const msg = await receiveMessage(this.ws);
+                if (msg.type === MsgType.AudioOnlyServer) {
+                    this._schedulePCM(msg.payload);
+                } else if (msg.type === MsgType.FullServerResponse && msg.event === 350) {
+                    // TaskStarted，忽略
+                } else if (msg.type === MsgType.FullServerResponse && msg.event === 351) {
+                    // TaskFinished：用上一段的结束时刻作为本段起点
+                    try {
+                        const data = JSON.parse(msg.payload.toString('utf8'));
+                        const text = data.text || data.TEXT || '';
+                        if (text) {
+                            const segStart = this._lastSegmentEnd !== null
+                                ? this._lastSegmentEnd
+                                : (this._audioStartedAt || 0);
+                            const segEnd = this.nextStartTime;
+                            this._lastSegmentEnd = segEnd;
+                            this._subtitleSegments.push({ text, start: segStart, end: segEnd });
+                        }
+                    } catch (_) { try { __silentAudit.audit('volcengine-streaming.js:241', _); } catch (e2) {} }
+                } else if (msg.type === MsgType.FullServerResponse && msg.event === EventType.SessionFinished) {
+                    this.sessionFinished = true;
+                    this._waitForAudioEnd();
+                    break;
+                }
+            }
+        } catch (_) {
+            if (!this.stopped) this._handleEnd();
+        }
+    }
+
+    // ── 内部：Web Audio API ───────────────────────────────
+
+    _initAudio() {
+        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        this.audioContext.resume().catch(() => {});
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 256;
+        this.gainNode = this.audioContext.createGain();
+        this.gainNode.gain.value = 1.0;
+        this.gainNode.connect(this.analyser);
+        this.analyser.connect(this.audioContext.destination);
+        this.nextStartTime = this.audioContext.currentTime;
+    }
+
+    _schedulePCM(buffer) {
+        if (this.stopped || !this.audioContext) return;
+
+        const samples = buffer.length / 2;
+        const audioBuf = this.audioContext.createBuffer(1, samples, 24000);
+        const channel  = audioBuf.getChannelData(0);
+        for (let i = 0; i < samples; i++) {
+            channel[i] = buffer.readInt16LE(i * 2) / 32768;
+        }
+
+        const source  = this.audioContext.createBufferSource();
+        source.buffer = audioBuf;
+        source.connect(this.gainNode);
+
+        const startAt = Math.max(this.audioContext.currentTime, this.nextStartTime);
+        source.start(startAt);
+        this.nextStartTime = startAt + audioBuf.duration;
+
+        if (!this.audioStarted) {
+            this.audioStarted    = true;
+            this._audioStartedAt = startAt;
+            if (this.onStartCallback) this.onStartCallback();
+            eventBus.emit(Events.TTS_START);
+            this._startAnimLoop();
+        }
+    }
+
+    // 嘴形 + 字幕同步，共用一个 rAF 循环
+    _startAnimLoop() {
+        const freqData = new Uint8Array(this.analyser?.frequencyBinCount || 128);
+
+        const tick = () => {
+            if (this.stopped) {
+                if (this.onMouthValue) this.onMouthValue(0);
+                return;
+            }
+
+            // 嘴形
+            if (this.analyser && this.onMouthValue) {
+                this.analyser.getByteFrequencyData(freqData);
+                let sum = 0;
+                const half = freqData.length / 2;
+                for (let i = 0; i < half; i++) sum += freqData[i];
+                this.onMouthValue(Math.pow(sum / half / 256, 0.8));
+            }
+
+            // 字幕由 setTimeout 驱动，rAF 只负责嘴形
+
+            this._animId = requestAnimationFrame(tick);
+        };
+
+        this._animId = requestAnimationFrame(tick);
+    }
+
+    _waitForAudioEnd() {
+        const check = () => {
+            if (this.stopped) return;
+            if (this.audioContext && this.nextStartTime > this.audioContext.currentTime + 0.05) {
+                setTimeout(check, 100);
+            } else {
+                this._handleEnd();
+            }
+        };
+        setTimeout(check, 100);
+    }
+
+    _handleEnd() {
+        if (this.stopped) return;
+        this.stopped = true;
+
+        this._stopAudio();
+
+        // 确保字幕完整显示（用全量文本，不受 stopped 影响）
+        if (this._subtitleFull) this._showSubtitle(this._subtitleFull);
+        try {
+            global.paramDirector?.noteSpeechProgress?.(this._subtitleFull.length);
+        } catch (_) { try { __silentAudit.audit('volcengine-streaming.js:343', _); } catch (e2) {} }
+
+        try {
+            finishConnection(this.ws).catch(() => {});
+            setTimeout(() => { try { this.ws?.close(); } catch (_) { try { __silentAudit.audit('volcengine-streaming.js:347', _); } catch (e2) {} } }, 200);
+        } catch (_) { try { __silentAudit.audit('volcengine-streaming.js:348', _); } catch (e2) {} }
+
+        setTimeout(() => {
+            if (typeof hideSubtitle === 'function') hideSubtitle();
+        }, 1000);
+
+        if (this.onEndCallback) this.onEndCallback();
+        eventBus.emit(Events.TTS_END);
+        if (this.onComplete) this.onComplete();
+    }
+
+    _stopAudio() {
+        if (this._animId) {
+            cancelAnimationFrame(this._animId);
+            this._animId = null;
+        }
+        if (this.onMouthValue) this.onMouthValue(0);
+        if (this.audioContext) {
+            try { this.audioContext.close(); } catch (_) { try { __silentAudit.audit('volcengine-streaming.js:366', _); } catch (e2) {} }
+            this.audioContext = null;
+        }
+    }
+
+    _showSubtitle(text) {
+        const label = this.config.subtitle_labels?.ai || '大肥鱼';
+        if (typeof showSubtitle === 'function') {
+            showSubtitle(`${label}: ${text}`);
+            const container = document.getElementById('subtitle-container');
+            if (container) container.scrollTop = container.scrollHeight;
+        }
+    }
+}
+
+module.exports = { VolcengineStreamingSession };

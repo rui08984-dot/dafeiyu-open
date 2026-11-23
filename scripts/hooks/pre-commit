@@ -1,0 +1,46 @@
+#!/bin/sh
+# scripts/hooks/pre-commit —— 提交前扫密钥（2026-11-14）
+#
+# 为什么要有它：这次推 GitHub 前是**手工 grep 历史**才翻出 `.qq-token.txt`
+# （真 token，藏在 43 个 commit 里）和两个 90MB 第三方 APK。靠人翻不可靠 ——
+# 一次忘记就是永久泄露（推出去就算删了也在 fork/缓存里）。
+#
+# 只扫「暂存区的新增/修改行」，跳过 example 模板和二进制。
+# 装了钩子后每次 git commit 自动跑；发现问题会拒绝提交。
+#
+# 安装：node scripts/install-hooks.mjs
+
+RED='\033[0;31m'; YEL='\033[0;33m'; NC='\033[0m'
+
+# 常见 token 形态（宁可误报，不可漏报）
+PATTERN='sk-[A-Za-z0-9]{16,}|gho_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AIza[A-Za-z0-9_-]{20,}|coo_[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+
+# 跳过：模板文件（本来就放占位符）、二进制、锁文件
+SKIP_EXT='\.(example\.json|png|jpg|jpeg|gif|ico|bmp|webp|woff2?|ttf|otf|mp3|wav|ogg|mp4|zip|7z|gz|exe|dll|node|so|dylib|moc3|onnx|gguf|bin|pyc|lock)$'
+
+files=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null | grep -viE "$SKIP_EXT")
+
+[ -z "$files" ] && exit 0
+
+found=0
+for f in $files; do
+  [ -f "$f" ] || continue
+  # 只看这个文件「新增的行」，避免被历史里的旧内容挡住正常提交
+  hits=$(git diff --cached -U0 -- "$f" 2>/dev/null | grep '^+' | grep -v '^+++' | grep -oE "$PATTERN" | head -3)
+  if [ -n "$hits" ]; then
+    found=1
+    printf "%b\n" "${RED}[pre-commit] 密钥疑似泄漏：$f${NC}"
+    echo "$hits" | sed 's/^/    /' | cut -c1-80
+  fi
+done
+
+if [ "$found" = "1" ]; then
+  printf "%b\n" "${YEL}已拒绝提交。${NC}"
+  echo "  处理方式（三选一）："
+  echo "   1) 真密钥 → 从文件里删掉，改走环境变量/配置文件（配置文件本身要 gitignore）"
+  echo "   2) 假密钥/示例 → 改成占位符（如 <填你的密钥>）"
+  echo "   3) 确认误报 → git commit --no-verify"
+  exit 1
+fi
+
+exit 0
