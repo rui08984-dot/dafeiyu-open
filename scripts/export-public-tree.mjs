@@ -65,11 +65,16 @@ function sizeText(n) {
 }
 
 if (fs.existsSync(DEST)) {
-  const entries = fs.readdirSync(DEST);
+  // .git 不是导出产物：它是 E 侧的历史与 deploy key/remote 配置，
+  // --force 覆盖时必须保留，否则每次发布都会丢历史、得重新 init + 配 sshCommand。
+  const entries = fs.readdirSync(DEST).filter((n) => n !== '.git');
   if (entries.length && !FORCE) die('目标已存在且非空：' + DEST + '（加 --force 覆盖）');
   if (FORCE) {
-    log('清空旧树：' + DEST);
-    fs.rmSync(DEST, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    log('清空旧树：' + DEST + '（保留 .git 历史/远端配置）');
+    for (const name of fs.readdirSync(DEST)) {
+      if (name === '.git') continue;
+      fs.rmSync(path.join(DEST, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    }
   }
 }
 fs.mkdirSync(DEST, { recursive: true });
@@ -186,6 +191,14 @@ if (!mainFiles.includes(SELF_REL) && fs.existsSync(path.join(MAIN, SELF_REL))) {
 const WIZARD_REL = 'scripts/install-wizard.mjs';
 if (!mainFiles.includes(WIZARD_REL) && fs.existsSync(path.join(MAIN, WIZARD_REL))) {
   mainFiles.push(WIZARD_REL);
+  mainFiles.sort();
+}
+
+// 一键发布脚本（导出 → 自检 → commit → push）：同属新交付件，必须随树走，
+// 否则 clone 下来的人只有导出脚本、没有发布入口。
+const PUBLISH_REL = 'scripts/publish-public.mjs';
+if (!mainFiles.includes(PUBLISH_REL) && fs.existsSync(path.join(MAIN, PUBLISH_REL))) {
+  mainFiles.push(PUBLISH_REL);
   mainFiles.sort();
 }
 

@@ -90,9 +90,28 @@ class UIController {
         });
         // 启动先刷一次（不漏掉「启动时配置已开、但主进程之后又改过」的情况）。
         this._passGate.refreshIfStale();
+        // 2026-11-23 穿透根治：把手动开关状态同步给主进程（主进程据此决定
+        // 「光标进入窗口要不要解除穿透」；手动开=保持穿透，手动关=进入即恢复）。
+        try { ipcRenderer.send('pet:passthrough-manual', manualInitial); } catch (e) { /* 通道未就绪不影响 */ }
 
         const updateMouseIgnore = (e) => {
             if (this.isAdjustingSubtitle) return;
+            // 2026-11-24 根因修复（拖动只能拖一小段就停）：
+            // 拖动依赖持续的 pointermove/mousemove；而置上 WS_EX_TRANSPARENT 后窗口
+            // **收不到任何鼠标事件** → 拖动中途一旦被判为「透明处」就立刻断掉。
+            // 这是「穿透判定所依赖的输入被穿透本身破坏」的同一个自指死锁，
+            // 因此不是在尾端加 if，而是：**拖动期间根本不许进入穿透**。
+            // 拖动标志来自 petbody（window.__pbDragging，带 3s 新鲜度兜底）。
+            let dragging = false;
+            try {
+                dragging = window.__pbDragging === true
+                    && (Date.now() - (window.__pbDraggingAt || 0) < 3000);
+            } catch (err) { dragging = false; }
+            if (dragging) {
+                // 已经是可见态就什么都不做；若是穿透态（拖到透明处被切过），立刻恢复。
+                if (this._lastIgnoreMouse !== false) this._applyIgnoreMouse(false);
+                return;
+            }
             // 节流刷新手动开关（最多 1s 一次，不阻塞本次判定）。
             try { this._passGate.refreshIfStale(); } catch (_) { /* 刷新失败不影响悬停 */ }
 
@@ -161,20 +180,11 @@ class UIController {
             if (options.manual !== true && this._lastIgnoreMouse === want) return;
             this._lastIgnoreMouse = want;
             try {
-                if (options.manual === true) {
-                    ipcRenderer.send('pet:set-ignore-mouse', { ignore: want, options: { forward: true } });
-                    return;
-                }
-                // ⚠ 2026-11-13 实测结论：悬停路径**暂时必须走旧通道**（会被 petbody/ui.js
-                //   的总闸拦掉）。原因不是保守，是真做过实验：
-                //   · 走专用通道后 `WS_EX_TRANSPARENT` 确实能置上（穿透真生效了）
-                //   · 但置上之后窗口**收不到真实鼠标事件**，`setIgnoreMouseEvents` 的
-                //     `forward:true` 没有把 mousemove 转回来 → 鼠标移回她身上也无法
-                //     切回「可见」→ **一旦穿透就永久点不到她**。
-                //   这比现状（透明区域挡鼠标、但点得到她）更糟，所以回退。
-                //   要做对需要「离开窗口才穿透、进入就恢复」的边界检测，且必须先证明
-                //   forward 事件能回来 —— 那是独立一件事，不要顺手改。
-                ipcRenderer.send('set-ignore-mouse-events', { ignore: want, options: { forward: true } });
+                // 2026-11-23 穿透根治：**两条路径统一走专用通道**（pet:set-ignore-mouse）。
+                // 旧实现里悬停路径走 set-ignore-mouse-events，会被 petbody/ui.js 总闸拦掉，
+                // 导致「透明处穿透」这个功能实际上从没生效过。现在主进程有光标轮询兜底
+                //（进入窗口即恢复可见），所以即便置上穿透也不会再出现「永久点不到她」。
+                ipcRenderer.send('pet:set-ignore-mouse', { ignore: want, options: { forward: true } });
             } catch (err) { try { __silentAudit.audit('ui-controller.js:101', err); } catch (e2) {} }
         };
         this._win = typeof window !== 'undefined' ? window : null;
@@ -266,7 +276,9 @@ class UIController {
         }
 
         const setMousePassthrough = (ignore, forward = true) => {
-            ipcRenderer.send('set-ignore-mouse-events', {
+            // 2026-11-23：统一走专用通道（旧通道会被 petbody/ui.js 总闸拦掉，
+            // 表现为「聊天框内划过就整窗永久穿透/再也点不到」）。
+            ipcRenderer.send('pet:set-ignore-mouse', {
                 ignore,
                 options: { forward }
             });
@@ -1601,7 +1613,7 @@ class UIController {
         this._adjustCleanup.push(() => document.removeEventListener('keydown', onKey));
 
         overlay.addEventListener('mouseenter', () =>
-            ipcRenderer.send('set-ignore-mouse-events', { ignore: false, options: { forward: false } }));
+            ipcRenderer.send('pet:set-ignore-mouse', { ignore: false, options: { forward: false } }));
 
         // 拖拽
         const onDragStart = (e) => {
@@ -1643,7 +1655,7 @@ class UIController {
             this._adjustCleanup.push(() => confirmBtn.removeEventListener('click', onConfirm));
         }
 
-        ipcRenderer.send('set-ignore-mouse-events', { ignore: false, options: { forward: false } });
+        ipcRenderer.send('pet:set-ignore-mouse', { ignore: false, options: { forward: false } });
     }
 
     // 退出调整模式
@@ -1670,7 +1682,7 @@ class UIController {
         document.getElementById('subtitle-adjust-overlay')?.remove();
 
         this.isAdjustingSubtitle = this.isDraggingSubtitle = false;
-        ipcRenderer.send('set-ignore-mouse-events', { ignore: true, options: { forward: true } });
+        ipcRenderer.send('pet:set-ignore-mouse', { ignore: true, options: { forward: true } });
     }
 
     // 应用保存的字幕位置

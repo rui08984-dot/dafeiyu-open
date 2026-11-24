@@ -1288,7 +1288,19 @@ class WatchScreenPlugin extends Plugin {
         if (lastActiveAt && now - lastActiveAt <= SCREEN_WORKING_MEM_MS) {
             return { state: 'working', what: this._appNameFromTitles(titles), via: 'app' };
         }
-        return { state: 'idle', what: '', via: '' };   // 长时间没有变化关键帧：quiet 帧在流（画面静止）或静默期没记录，都算 idle
+        // ④b 2026-11-23 根因修复：静默模式下 _record 只写**本地**关键帧（零 API），
+        //    kind 不是 scene/change，所以上面的 actives 恒 0 → 状态机永远 idle，
+        //    媒体窗口明明开着也被判「没在看」。这里把「窗口标题快照」本身作为 window 证据：
+        //    媒体窗口在 → video（via:titles）；能认出应用 → working。零成本，且只在
+        //    没有更强证据（帧变化/播放器识别/浏览器三票/游戏）时才用。
+        if (titles.length) {
+            const player = titles.map((t) => media.parsePlayerTitle(t)).find(Boolean);
+            if (player) return { state: 'video', what: player.name || this._browserNameFromTitles(titles) || '视频', via: 'titles' };
+            if (this._browserNameFromTitles(titles)) return { state: 'video', what: this._browserNameFromTitles(titles), via: 'titles' };
+            const app = this._appNameFromTitles(titles);
+            if (app) return { state: 'working', what: app, via: 'titles' };
+        }
+        return { state: 'idle', what: '', via: '' };   // 既无帧变化也无可用窗口标题：算 idle
     }
 
     /** 最近一次本地窗口枚举的标题快照（过期就当没有，宁缺毋滥） */
@@ -1642,10 +1654,11 @@ class WatchScreenPlugin extends Plugin {
     }
 
     async _probeMedia() {
-        // 静默期整条感知链停（省钱模式）：不枚举窗口、不截屏。
-        // 顺带根治 Electron 原生层的 wgc_capturer「Source is not capturable」每秒刷屏——
-        // 那是 desktopCapturer.getSources 对 DRM/全屏独占窗口的固有报错，不涉及功能。
-        try { if (global.__petQuiet) return; } catch (e) { try { __silentAudit.audit('index.js:735', e); } catch (e2) {} }
+        // 2026-11-23 根因修复：窗口枚举是**纯本地、零 API**（desktopCapturer + EnumWindows），
+        // 静默模式（省钱）只该拦「花钱的摘要」和「主动开口」，不该拦感知本身。
+        // 原来这里 `if (global.__petQuiet) return` 导致静默期 _winTitlesAt 恒 0 →
+        // _classifyScreenState 恒 idle → cowatch 永远回「没拿到画面」，而她只是忠实转述。
+        // 现在静默期照常枚举；花不花钱由 _record/_commentOn 里各自的闸门决定。
         // 两路窗口标题：desktopCapturer（快）+ EnumWindows（含最小化窗——Chromium 会跳过它们）
         const viaCapturer = await this._ipc.invoke('get-window-titles').catch(() => null);
         const viaPs = await media.listAllWindowTitles().catch(() => []);
@@ -1953,12 +1966,30 @@ class WatchScreenPlugin extends Plugin {
         return lines.map((x) => x.text).join(' ').trim();
     }
 
-    /** 把「现在在看什么 + 在说什么」拼成注入块（数据行形态，见 buildCoWatchContext） */
-    _coWatchContext(seconds = 60) {
+    /** 把「现在在看什么 + 在说什么」拼成注入块（数据行形态，见 buildCoWatchContext）
+     * @param {number} [seconds=60]
+     * @param {{userAsked?: boolean}} [opts]
+     *   userAsked=true：用户在**主动问**「你在看/听什么」——
+     *   此时若已有对白/画面摘要，即使状态机因静默期本地帧而判 idle 也要如实回答。
+     *   默认（false）保持严格契约：非 video/陪玩态一律返回空，绝不把陈旧摘要当现在注入。
+     */
+    _coWatchContext(seconds = 60, opts = {}) {
         // 2026-11-22 P0-1：先过状态门。不在 video / 陪玩态时，屏幕上是什么与「一起看」
-        // 无关（她可能在办公/发呆），旧摘要不能当现在。这个函数也服务于 cowatch_now 工具，
-        // 语义同样收口：没在看视频就返回空，由调用方说「暂时没拿到」。
-        if (!coWatchStateAllows(this._screenState, this._gameCompanion)) return '';
+        // 无关（她可能在办公/发呆），旧摘要不能当现在。
+        //
+        // 2026-11-23 根因修复（用户按需问被误答「没接到」）：
+        //   静默期只写本地关键帧（kind 非 scene/change）→ 状态机可能停在 idle。
+        //   但**用户主动问**时不能装看不见：只要真的有对白或画面摘要就照实回答。
+        //   注意必须用显式 opts.userAsked 区分「按需查询」与「主动注入」——
+        //   后者仍严格走状态门（test-watch-staleness 的旧契约不能破）。
+        if (!coWatchStateAllows(this._screenState, this._gameCompanion)) {
+            const asked = opts && opts.userAsked === true;
+            if (!asked) return '';
+            const hasSound = !!(this._audioText(seconds) || '').trim();
+            const hasVisual = !!(this._organ && this._organ.latestSummary
+                && this._organ.latestSummary(CO_WATCH_VISUAL_MAX_AGE_MS));
+            if (!hasSound && !hasVisual) return '';
+        }
         const visual = this._organ && this._organ.latestSummary
             ? this._organ.latestSummary(CO_WATCH_VISUAL_MAX_AGE_MS)
             : '';
@@ -2341,7 +2372,9 @@ class WatchScreenPlugin extends Plugin {
         }
         if (tool === 'cowatch_now') {
             const seconds = Math.max(10, Math.min(600, Number(params.seconds) || 90));
-            const ctx = this._coWatchContext(seconds);
+            // userAsked=true：这是用户在**主动问**「你在看/听什么」，
+            // 静默期状态机可能停在 idle，但仍要如实回答已有的对白/画面。
+            const ctx = this._coWatchContext(seconds, { userAsked: true });
             return JSON.stringify({
                 ok: true, seconds,
                 context: ctx || '（暂时没拿到画面或声轨）',

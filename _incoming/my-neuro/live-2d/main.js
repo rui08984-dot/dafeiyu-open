@@ -1685,6 +1685,9 @@ function createWindow () {
     });
 
     win.loadFile('index.html')
+    // 2026-11-23 穿透根治：启动主进程光标轮询（不依赖窗口 mousemove）。
+    // 这是唯一能在「已穿透」状态下仍读到鼠标位置的通道 → 才能做到「进入即恢复」。
+    try { startPassthroughWatcher(win); } catch (e) { try { __silentAudit.audit('main.js:pt-start', e); } catch (e2) {} }
     // 启动时把「托盘开关」落到渲染层（2026-11-15）：
     // 静音 / 表情强度都是渲染层的运行时开关，光写配置不生效 —— 之前勾了静音还出声就是这个原因。
     win.webContents.on('did-finish-load', () => {
@@ -2350,7 +2353,16 @@ function setUpTray(win) {
       { type: 'checkbox', label: '鼠标穿透（点不穿她）', checked: !!(config.ui && config.ui.click_through_default === true), click: (item) => {
         const on = item.checked;
         try {
-          petWinRef.setIgnoreMouseEvents(on, { forward: true });
+          // 2026-11-23 穿透根治：托盘开关只更新「策略」，由主进程轮询统一落地。
+          // 直接 setIgnoreMouseEvents(on) 会绕过边界自愈，导致「开了就永久点不到」。
+          __ptState.manual = on;
+          if (on) {
+            petWinRef.setIgnoreMouseEvents(true, { forward: true });
+          } else {
+            const rect = __ptWindowRect(petWinRef);
+            const inside = rect ? __ptCursorInside(rect) : null;
+            if (inside !== false) petWinRef.setIgnoreMouseEvents(false, { forward: true });
+          }
           global.__petIgnoreMouse = on;
           const wrote = patchConfigVerified('tray:鼠标穿透', (cfg) => {
             cfg.ui = cfg.ui || {};
@@ -2584,6 +2596,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+    try { stopPassthroughWatcher(); } catch (e) { /* 退出时清理失败不影响关闭 */ }
     avatarSwitchTransaction?.dispose();
     avatarSwitchTransaction = null;
     if (shortcutManager) {
@@ -2624,18 +2637,22 @@ ipcMain.on('get-screen-info-sync', (event) => {
 });
 
 // 相对位移（评测/自检用）：±40px 拖动模拟必须真的移动窗口，否则测到的只是
-// 「窗口没动时的 rAF 频率」。位置缓存在 win 上，避免 60Hz 调 getBounds 打扰原生窗。
+// 「窗口没动时的 rAF 频率」。
+//
+// 2026-11-24 根因修复（拖动「只能拖一小段就不动」的另一半原因）：
+// 原实现把位置缓存在 win._petCachedPos，只在**自己写**的时候更新；一旦窗口被
+// 外部移动（真实拖动 pet-drag-to / 用户拖窗口 / 其他模块 setBounds），缓存就变脏，
+// 后续 pet:move-by 会按**过期的绝对坐标**计算 → 表现为「跳回原处」或「拖不动」。
+// 缓存优化本身是错的：getBounds 是同步内存读（微秒级），60Hz 调用完全不成问题。
+// 现在每次都以真实 bounds 为准，并注册 move 事件让任何外部移动都不会留下脏缓存。
 ipcMain.on('pet:move-by', (event, dx, dy) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win.isDestroyed()) return;
-    let b = win._petCachedPos;
-    if (!b) {
-        try { b = win.getBounds(); } catch (e) { return; }
-        win._petCachedPos = { x: b.x, y: b.y };
-    }
+    let b;
+    try { b = win.getBounds(); } catch (e) { return; }
     const nx = Math.round(b.x + (Number(dx) || 0));
     const ny = Math.round(b.y + (Number(dy) || 0));
-    try { win.setPosition(nx, ny, false); win._petCachedPos = { x: nx, y: ny }; } catch (e) { try { __silentAudit.audit('main.js:move-by', e); } catch (e2) {} }
+    try { win.setPosition(nx, ny, false); } catch (e) { try { __silentAudit.audit('main.js:move-by', e); } catch (e2) {} }
 });
 
 // 拖动：渲染层算出目标位置，主进程移动窗口（透明窗口里最好用的拖法）。
@@ -2647,6 +2664,9 @@ ipcMain.on('pet-drag-to', (event, pos) => {
     win._petDragging = true;
     // §80 同族：这个标志也只有 drag-end 一个出口。记一下时刻，让 3s 看门狗能自解（见下）。
     win._petDragStartedAt = Date.now();
+    // 2026-11-24：同步给穿透自愈轮询（拖动期间绝不置穿透，否则收不到 pointermove → 拖动中断）。
+    global.__petDragging = true;
+    global.__petDraggingAt = Date.now();
     if (win._petBoundsRepairTimers) {
         for (const timer of win._petBoundsRepairTimers) clearTimeout(timer);
         win._petBoundsRepairTimers = [];
@@ -2699,10 +2719,23 @@ let __dragPreviewHtml = null;
 // 只在拖动时用，长期留着不值得 —— 松手 60 秒后销毁，下一次拖动按需重建。
 let __dragPreviewKillTimer = null;
 function petDragPreviewEnabled() {
-    // 2026-11-22：预览窗代码已实现，默认关（未真机验证）。下一轮验证通过后改「!== false」。
+    // 2026-11-22：预览窗代码已实现，默认关（未真机验证）。
     // 2026-11-22 §115：机制已按下面四项验收（真窗不动/预览跟随不吃鼠标/松手跳位/不进业务解析），
     // 默认改为开启；想回到「真实窗直接跟手」在 config.ui.drag_preview 写 false。
-    try { return !!(config && config.ui && config.ui.drag_preview !== false); } catch (e) { return true; }
+    //
+    // 2026-11-24 根因修复：原实现读的是**模块作用域里并不存在的 `config` 变量**
+    // （只有几个函数内部有 `let config`），ReferenceError 被 catch 吞掉 →
+    // 永远返回 true → 用户把 config.ui.drag_preview 写成 false 也**毫无效果**。
+    // 现在改为每次实时从磁盘读（与 readConfigJson 同源），并明确先判 false。
+    try {
+        const cfg = readConfigJson();
+        // 语义：未配置（缺 ui 或缺 drag_preview）→ 默认**开**预览；
+        // 只有显式写 false 才回到「真实窗直接跟手」。
+        // ⚠ 不能写成 `cfg.ui && cfg.ui.drag_preview !== false`——cfg.ui 缺失时结果是
+        //   undefined，`!!` 之后变成 false，与「默认开」相反（2026-11-24 自测抓到）。
+        if (!cfg || !cfg.ui) return true;
+        return cfg.ui.drag_preview !== false;
+    } catch (e) { return true; }
 }
 function ensureDragPreview() {
     // 复用时取消「闲置销毁」倒计时（见 hideDragPreview）
@@ -2789,7 +2822,10 @@ setInterval(() => {
       w._petDragging = false;
       w._petDragPendingPos = null;
       hideDragPreview();   // 预览窗不能残留（drag-end 丢了也要收）
-      logToTerminal('warn', '[pet] 拖动状态超过 5s 没收到 drag-end，已自动解除（否则尺寸校正会永久失效）');
+      // 2026-11-24：同步清掉全局拖动标志，否则穿透自愈会一直以为在拖动 → 永远不穿透。
+      global.__petDragging = false;
+      global.__petDraggingAt = 0;
+      logToTerminal('warn', '[pet] 拖动状态超过 5s 没收到 drag-end，已自动解除（否则尺寸校正与穿透自愈会永久失效）');
     }
     if (!w._petDragging) enforcePetSize(w);
   } catch (e) { try { __silentAudit.audit('main.js:1253', e); } catch (e2) {} }
@@ -2799,6 +2835,9 @@ ipcMain.on('pet-drag-end', (event) => {
     if (!win || win.isDestroyed()) return;
     win._petDragging = false;
     win._petDragStartedAt = 0;
+    // 2026-11-24：解除穿透自愈的「拖动中」保护，恢复正常的进出边界判定。
+    global.__petDragging = false;
+    global.__petDraggingAt = 0;
     // 预览模式：拖动过程中真实窗一直原地不动，松手才跳过去（见 pet-drag-to 注释）。
     const pendingPos = win._petDragPendingPos;
     win._petDragPendingPos = null;
@@ -2896,8 +2935,113 @@ ipcMain.on('pet:set-ignore-mouse', (event, { ignore, options }) => {
     }
 })
 
-ipcMain.on('set-window-opacity', (event, opacity) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
+// ── 穿透边界自愈（2026-11-23 根因修复）────────────────────────────────────
+// 事故：置上 WS_EX_TRANSPARENT 后，窗口**收不到真实鼠标事件**（forward:true 实测没把
+// mousemove 转回来），渲染层的悬停判定永远等不到「鼠标离开了」→ 一旦穿透就永久点不到她。
+//
+// 根因：穿透的判定权在渲染层，而穿透状态本身破坏了判定所依赖的输入（mousemove）。
+//       这是自指死锁，任何「渲染层再补一个 if」的补丁都不可能修好。
+//
+// 根治：把「鼠标是否还在窗口矩形内」这件事交给**主进程轮询**（screen.getCursorScreenPoint
+// 不依赖窗口事件，穿透时照样能读）。规则：
+//   ① 光标进入窗口矩形 → 立即解除穿透（保证她随时点得到）
+//   ② 光标离开窗口矩形 ≥ LEAVE_GRACE_MS → 恢复穿透（让下面的窗口可点）
+//   ③ 手动穿透开关（托盘/配置）= 开时，只允许 ②（进入也不解除），保持用户意图
+//   ④ 渲染层仍可下发 ignore（逐像素 alpha 命中），但主进程轮询是最终的兜底与边界权威
+// 开销：250ms 一次 getCursorScreenPoint（微秒级），只在窗口可见时跑。
+const PASSTHROUGH_POLL_MS = 250;
+const PASSTHROUGH_LEAVE_GRACE_MS = 600;
+let __ptTimer = null;
+let __ptState = { inside: null, ignoredAtLeave: 0, manual: false, lastIgnore: null };
+
+function __ptWindowRect(win) {
+    try {
+        if (!win || win.isDestroyed()) return null;
+        const b = win.getBounds();      // DIP 坐标，与 getCursorScreenPoint 同坐标系
+        return b;
+    } catch (e) { return null; }
+}
+function __ptCursorInside(rect) {
+    try {
+        const pt = screen.getCursorScreenPoint();
+        return pt.x >= rect.x && pt.x < rect.x + rect.width
+            && pt.y >= rect.y && pt.y < rect.y + rect.height;
+    } catch (e) { return null; }
+}
+function __ptApply(win, ignore, why) {
+    try {
+        if (!win || win.isDestroyed()) return;
+        if (__ptState.lastIgnore === !!ignore) return;   // 去重
+        __ptState.lastIgnore = !!ignore;
+        win.setIgnoreMouseEvents(!!ignore, { forward: true });
+        console.log('[穿透自愈] ' + (ignore ? '穿透(on)' : '可见(off)') + ' · ' + why);
+    } catch (e) { try { __silentAudit.audit('main.js:pt-apply', e); } catch (e2) {} }
+}
+function startPassthroughWatcher(win) {
+    if (__ptTimer) { clearInterval(__ptTimer); __ptTimer = null; }
+    __ptState = { inside: null, ignoredAtLeave: 0, manual: false, lastIgnore: null };
+    __ptTimer = setInterval(() => {
+        try {
+            if (!win || win.isDestroyed() || !win.isVisible()) return;
+            // 2026-11-24 根因修复：拖动期间绝不置穿透。
+            // 拖动靠渲染层持续收 pointermove；一旦穿透，窗口收不到事件 → 拖动中断。
+            // 渲染层已提前 return，这里再兜一层（拖到透明处 / 拖动时窗口移出光标位置都可能触发）。
+            let dragging = false;
+            try {
+                dragging = global.__petDragging === true
+                    && (Date.now() - (global.__petDraggingAt || 0) < 3000);
+            } catch (e) { dragging = false; }
+            if (dragging) {
+                if (__ptState.lastIgnore !== false) __ptApply(win, false, '拖动中强制可见');
+                __ptState.ignoredAtLeave = 0;
+                return;
+            }
+            const rect = __ptWindowRect(win);
+            if (!rect) return;
+            const inside = __ptCursorInside(rect);
+            if (inside === null) return;
+            const prev = __ptState.inside;
+            __ptState.inside = inside;
+            // 用户手动开了完全穿透：只做「离开→穿透」，不因进入而解除
+            const manual = !!__ptState.manual;
+            if (inside !== prev) {
+                if (inside) {
+                    if (!manual) __ptApply(win, false, '光标进入窗口');
+                    __ptState.ignoredAtLeave = 0;
+                } else {
+                    __ptState.ignoredAtLeave = Date.now();
+                }
+            }
+            // 离开超过宽限期 → 穿透（让下层窗口可点）
+            if (!inside && __ptState.ignoredAtLeave && !manual
+                && Date.now() - __ptState.ignoredAtLeave >= PASSTHROUGH_LEAVE_GRACE_MS
+                && __ptState.lastIgnore !== true) {
+                __ptApply(win, true, '光标离开 ≥' + PASSTHROUGH_LEAVE_GRACE_MS + 'ms');
+            }
+        } catch (e) { /* 轮询异常不影响主流程 */ }
+    }, PASSTHROUGH_POLL_MS);
+    if (__ptTimer.unref) __ptTimer.unref();
+    console.log('[穿透自愈] 已启动：主进程轮询光标（' + PASSTHROUGH_POLL_MS + 'ms），不依赖窗口 mousemove');
+}
+function stopPassthroughWatcher() {
+    if (__ptTimer) { clearInterval(__ptTimer); __ptTimer = null; }
+    __ptState = { inside: null, ignoredAtLeave: 0, manual: false, lastIgnore: null };
+}
+// 渲染层告知「手动穿透开关」当前值（托盘/配置变化时下发；只改策略，不直接动窗口）
+ipcMain.on('pet:passthrough-manual', (_event, on) => {
+    __ptState.manual = on === true;
+    // 手动开 → 立刻穿透；手动关 → 若光标在窗口内则立刻恢复可交互
+    const win = petWinRef;
+    if (!win || win.isDestroyed()) return;
+    if (__ptState.manual) __ptApply(win, true, '手动开关=开');
+    else {
+        const rect = __ptWindowRect(win);
+        const inside = rect ? __ptCursorInside(rect) : null;
+        if (inside === true) __ptApply(win, false, '手动开关=关且在窗口内');
+    }
+});
+// 渲染层逐像素判定仍可下发（alpha 命中），但主进程去重 + 轮询兜底
+ipcMain.on('set-window-opacity', (event, opacity) => {    const win = BrowserWindow.fromWebContents(event.sender);
     if (win) win.setOpacity(Math.max(0, Math.min(1, opacity)));
 })
 

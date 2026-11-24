@@ -21,7 +21,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const SELF = fileURLToPath(import.meta.url);
@@ -108,6 +108,7 @@ if (HELP) {
   --key-env=<NAME>     从哪个环境变量读 key（默认按 provider）
   --skip-chat          只测 GET /models，不发最小 chat
   --install-npm        缺依赖时真的执行 npm install（默认只打印命令）
+  --build-petbody      皮套 bundle 缺失且前置齐全时自动构建（--yes/无 TTY 时默认开启）
   --no-download        不下载模型（默认；模型永远不在向导里静默下载）
   --help               本帮助
 
@@ -119,7 +120,8 @@ if (HELP) {
 }
 
 const TARGET = path.resolve(ARGS.target || ROOT_DEFAULT);
-const APP = path.join(TARGET, '_incoming', 'my-neuro', 'live-2d');
+const MY = path.join(TARGET, '_incoming', 'my-neuro');
+const APP = path.join(MY, 'live-2d');
 const CFG = path.join(APP, 'config.json');
 const PROV = path.join(APP, 'llm_providers.json');
 
@@ -397,6 +399,7 @@ function checkAssets() {
       path.join(APP, 'libs', 'live2dcubismcore.min.js'),
     ],
     'MemOS 记忆子树': [
+      path.join(MY, 'plugins-dlc', 'memos', 'memos_system'),
       path.join(APP, 'plugins-dlc', 'memos', 'memos_system'),
       path.join(TARGET, 'pet-runtime', 'memos_system'),
     ],
@@ -411,13 +414,136 @@ function checkAssets() {
   else step('assets', '自备资产', 'warn', '缺：' + missing.join('；') + '（按 README「自备资产」获取；缺 moc3 时仅文字/字幕可用，缺 MemOS 时长记忆降级）');
 }
 
-// ── 步骤 9：皮套构建 ────────────────────────────────────────────────────
-function checkBuild() {
-  const build = path.join(TARGET, 'pet-runtime', 'desktop', 'build');
-  const deployed = path.join(APP, 'build');
-  const ok = fs.existsSync(build) && fs.existsSync(deployed);
-  if (ok) step('build', '皮套构建', 'ok', '构建产物已部署');
-  else step('build', '皮套构建', 'warn', '未构建/未部署：`node pet-runtime/build-and-deploy-petbody.mjs`（需先装 esbuild）');
+// ── 步骤 8.5：MemOS 配置（缺则从 example 生成，不写真实 key）──────────────
+function ensureMemosConfig() {
+  const memosRoot = path.join(MY, 'plugins-dlc', 'memos', 'memos_system');
+  if (!fs.existsSync(memosRoot)) {
+    step('memos-config', 'MemOS 配置', 'skip', '未发现 MemOS 子树（记忆/日记/知识库降级；聊天/TTS 不受影响）');
+    return;
+  }
+  const dir = path.join(memosRoot, 'config');
+  const example = path.join(dir, 'memos_config.example.json');
+  const real = path.join(dir, 'memos_config.json');
+  if (fs.existsSync(real)) {
+    step('memos-config', 'MemOS 配置', 'ok', 'config/memos_config.json 已存在（未改动）');
+    return;
+  }
+  if (!fs.existsSync(example)) {
+    step('memos-config', 'MemOS 配置', 'warn', '缺 config/memos_config.example.json，无法自动生成（见 README）');
+    return;
+  }
+  if (DRY) {
+    step('memos-config', 'MemOS 配置', 'skip', '--dry-run：将生成 config/memos_config.json（api_key=local）');
+    return;
+  }
+  const doc = readJson(example, null);
+  if (!doc || typeof doc !== 'object') {
+    step('memos-config', 'MemOS 配置', 'warn', '示例 JSON 解析失败，未生成');
+    return;
+  }
+  // 公开版不含真实 key：占位一律 local（嵌入服务 8090 也认 local）
+  if (doc.llm && typeof doc.llm === 'object') {
+    doc.llm.config = doc.llm.config && typeof doc.llm.config === 'object' ? doc.llm.config : {};
+    doc.llm.config.api_key = 'local';
+  }
+  if (doc.llm_fallback && doc.llm_fallback.config && typeof doc.llm_fallback.config === 'object') {
+    doc.llm_fallback.config.api_key = 'local';
+  }
+  try {
+    backupIfExists(real);
+    atomicWrite(real, JSON.stringify(doc, null, 2) + '\n');
+    step('memos-config', 'MemOS 配置', 'ok',
+      '已从示例生成 config/memos_config.json（api_key=local；记忆要用真实 LLM 时自行改成你的 key）');
+  } catch (e) {
+    step('memos-config', 'MemOS 配置', 'fail', '写入失败：' + redact(e && e.message || e));
+  }
+}
+
+// ── 步骤 9：皮套构建（缺 bundle 且前置齐全时可自动构建）──────────────────
+const PETBODY_CMD = 'node pet-runtime/build-and-deploy-petbody.mjs';
+
+function petbodyState() {
+  const built = path.join(TARGET, 'pet-runtime', 'desktop', 'build', 'petbody.js');
+  const deployed = path.join(APP, 'build', 'petbody.js');
+  const sizeOf = (p) => { try { return fs.statSync(p).size; } catch (e) { return -1; } };
+  const model = [
+    path.join(APP, 'assets', 'petbody', 'pet.moc3'),
+    path.join(TARGET, 'pet-runtime', 'desktop', 'assets', 'jellyfish', 'pet.moc3'),
+  ].find((p) => fs.existsSync(p));
+  const cubism = [
+    path.join(TARGET, 'pet-runtime', 'desktop', 'vendor', 'cubism'),
+    path.join(TARGET, 'pet-runtime', 'desktop', 'vendor2', 'live2dcubismcore.min.js'),
+  ].find((p) => fs.existsSync(p));
+  const esbuild = fs.existsSync(path.join(TARGET, 'pet-runtime', 'node_modules', 'esbuild'));
+  return {
+    built, deployed, model, cubism, esbuild,
+    script: path.join(TARGET, 'pet-runtime', 'build-and-deploy-petbody.mjs'),
+    builtOk: sizeOf(built) > 0,
+    deployedOk: sizeOf(deployed) > 0,
+  };
+}
+
+// 子进程流式输出：JSON 模式写 stderr（stdout 必须只有 JSON）
+function runStreamed(args, cwd, timeoutMs) {
+  return new Promise((resolve) => {
+    const sink = JSON_OUT ? process.stderr : process.stdout;
+    const child = spawn(process.execPath, args, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    const onData = (b) => { const s = b.toString(); out += s; try { sink.write(s); } catch (e) { /* ignore */ } };
+    child.stdout.on('data', onData);
+    child.stderr.on('data', onData);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; try { child.kill(); } catch (e) { /* ignore */ } }, timeoutMs);
+    child.on('error', (e) => { clearTimeout(timer); resolve({ code: -1, timedOut, out, error: e }); });
+    child.on('close', (code) => { clearTimeout(timer); resolve({ code, timedOut, out }); });
+  });
+}
+
+async function checkBuild() {
+  const st = petbodyState();
+  if (st.builtOk && st.deployedOk) {
+    step('build', '皮套构建', 'ok', '构建产物已部署（build/petbody.js）');
+    return;
+  }
+  const missing = [];
+  if (!fs.existsSync(st.script)) missing.push('build-and-deploy-petbody.mjs');
+  if (!st.model) missing.push('Live2D 模型（.moc3）');
+  if (!st.cubism) missing.push('Cubism SDK/Core');
+  if (!st.esbuild) missing.push('esbuild（cd pet-runtime && npm install）');
+  if (missing.length) {
+    step('build', '皮套构建', 'warn', '缺 ' + missing.join('、') + '，跳过自动构建；手动：' + PETBODY_CMD);
+    return;
+  }
+  if (DRY) {
+    step('build', '皮套构建', 'skip', '--dry-run：将执行 ' + PETBODY_CMD);
+    return;
+  }
+  let go = !!ARGS['build-petbody'] || YES;
+  if (!go) {
+    const ans = String(readLine('  皮套 bundle 未构建，现在构建？(Y/n)：') || '').trim().toLowerCase();
+    go = (ans === '' || ans === 'y' || ans === 'yes');
+  }
+  if (!go) {
+    step('build', '皮套构建', 'skip', '已跳过；需要时手动：' + PETBODY_CMD);
+    return;
+  }
+  const buildDir = path.dirname(st.deployed);
+  fs.mkdirSync(buildDir, { recursive: true });
+  // build-and-deploy 会先检查「运行时副本存在」再 copy：全新树里 build/ 是空的，
+  // 先放一个 0 字节占位让检查通过；失败且仍为 0 字节时删除，避免留下坏 bundle。
+  let placeholder = false;
+  if (!fs.existsSync(st.deployed)) { fs.writeFileSync(st.deployed, ''); placeholder = true; }
+  log('  构建中（超时 180s）：' + PETBODY_CMD);
+  const r = await runStreamed([st.script], TARGET, 180000);
+  let size = -1;
+  try { size = fs.statSync(st.deployed).size; } catch (e) { size = -1; }
+  if (r.code === 0 && size > 0) {
+    step('build', '皮套构建', 'ok', '已构建并部署（live-2d/build/petbody.js，' + (size / 1024).toFixed(0) + ' KB）');
+    return;
+  }
+  if (placeholder) { try { if (size === 0) fs.unlinkSync(st.deployed); } catch (e) { /* ignore */ } }
+  const why = r.timedOut ? '超时（180s）' : ('退出码 ' + r.code);
+  step('build', '皮套构建', 'fail', '自动构建失败（' + why + '）；手动执行：' + PETBODY_CMD);
 }
 
 // ── 步骤 10：启动与健康 ─────────────────────────────────────────────────
@@ -458,8 +584,9 @@ async function checkHealth() {
     if (wrote) await checkConnectivity(pick);
   }
   checkModels();
+  ensureMemosConfig();
   checkAssets();
-  checkBuild();
+  await checkBuild();
   await checkHealth();
   finish();
 

@@ -235,8 +235,16 @@ const __silentAudit = require('../../core/silent-audit.js');
     // 窗口跟着指针动，clientX 是「相对窗口」的坐标 —— 窗口一移动，它反而朝反方向变，
     // 于是每次 mousemove 算出来的位移 = 真实移动 - 上次位移，窗口在「原始位置」和
     // 「拖到的位置」之间高频来回闪。这就是抖动抽搐的根因。
-    drag.startX = (Number.isFinite(event.screenX) ? event.screenX : event.clientX);
-    drag.startY = (Number.isFinite(event.screenY) ? event.screenY : event.clientY);
+    //
+    // 2026-11-24 实测补充：Electron `webContents.sendInputEvent` 合成的鼠标事件
+    // **screenX/screenY 恒为 0**（只有 clientX/clientY 有效）。旧代码因为
+    // Number.isFinite(0)===true 而误采信 0 → dx 恒 0 → 永远过不了阈值 → 「拖不动」。
+    // 这里显式识别「0,0 + clientX>0」为无屏幕坐标，改用 client 坐标，并记住来源
+    // 供 moveDrag 保持一致（否则开始用 screen、移动用 client 也会错位）。
+    const _hasScreen = Number.isFinite(event.screenX) && !(event.screenX === 0 && event.screenY === 0);
+    drag.useScreen = _hasScreen;
+    drag.startX = _hasScreen ? event.screenX : event.clientX;
+    drag.startY = _hasScreen ? event.screenY : event.clientY;
     drag.moved = false;
     drag.base = null;
     drag.down += 1;
@@ -245,8 +253,12 @@ const __silentAudit = require('../../core/silent-audit.js');
   function moveDrag(event) {
     if (!drag.active) return;
     drag.moves += 1;
-    const x = Number.isFinite(event.screenX) ? event.screenX : event.clientX;
-    const y = Number.isFinite(event.screenY) ? event.screenY : event.clientY;
+    // 坐标来源必须与 beginDrag 一致，否则阈值判定永远不成立（合成事件 screenX=0 的坑）。
+    const useScreen = drag.useScreen !== false;
+    const rawX = useScreen ? event.screenX : event.clientX;
+    const rawY = useScreen ? event.screenY : event.clientY;
+    const x = Number.isFinite(rawX) ? rawX : event.clientX;
+    const y = Number.isFinite(rawY) ? rawY : event.clientY;
     const dx = x - drag.startX;
     const dy = y - drag.startY;
     if (!drag.moved) {

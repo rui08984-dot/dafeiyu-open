@@ -87,17 +87,34 @@ async function newPlugin(dir, cfg) {
 }
 function mockFetch(routes) {
   const real = globalThis.fetch;
+  const calls = [];
   globalThis.fetch = async (url) => {
     const key = String(url);
+    calls.push(key);
     const v = routes[key];
     if (v instanceof Error) throw v;
     if (v === undefined) throw new Error('mock fetch: 未配置路由 ' + key);
     return { ok: true, status: 200, text: async () => v };
   };
-  return () => { globalThis.fetch = real; };
+  const restore = () => { globalThis.fetch = real; };
+  // 防回归：让用例能断言「插件确实走了注入的 fetch」，而不是静默用了别的东西
+  restore.calls = calls;
+  return restore;
 }
 function sha1(s) {
   return crypto.createHash('sha1').update(s, 'utf8').digest('hex');
+}
+
+/**
+ * 防回归：fixture 的日期必须相对「现在」，不能写死。
+ * 2026-11-24 故障：RSS_XML 里硬编码 2026-11-20，过了 72h 后被 _prune 全部剪掉，
+ * 用例表现为「首次落盘 2 条 got 0」——不是插件 bug，是 fixture 过期（时间炸弹）。
+ */
+function rssDate(hoursAgo) {
+  return new Date(Date.now() - hoursAgo * 3600 * 1000).toISOString();
+}
+function rfc822(hoursAgo) {
+  return new Date(Date.now() - hoursAgo * 3600 * 1000).toUTCString();
 }
 
 const RSS_XML = '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -138,6 +155,19 @@ const SINGLE_XML = '<?xml version="1.0" encoding="UTF-8"?>\n'
   + '  <description>一条就够</description>\n'
   + '</item>\n'
   + '</channel></rss>';
+
+/**
+ * 把固定 XML 里的日期改写成「相对现在」的时间戳。
+ * ① 解析用例继续用字面量（断言的就是已知字符串 → ISO 的确定性）；
+ * ③⑥⑧ 走 _tick 的管道用例必须先过 _prune 的 72h 门槛，否则 fixture 一过期就假红。
+ */
+function freshXml(xml) {
+  return xml
+    .replace(/<dc:date>[^<]*<\/dc:date>/g, '<dc:date>' + rssDate(2) + '</dc:date>')
+    .replace(/<pubDate>[^<]*<\/pubDate>/g, '<pubDate>' + rfc822(1) + '</pubDate>');
+}
+const RSS_XML_FRESH = () => freshXml(RSS_XML);
+const SINGLE_XML_FRESH = () => freshXml(SINGLE_XML);
 
 (async () => {
   try {
@@ -249,12 +279,16 @@ const SINGLE_XML = '<?xml version="1.0" encoding="UTF-8"?>\n'
       writeJson(path.join(dir, 'feeds.json'), {
         feeds: [{ id: 'hn', url: 'https://mock/rss', name: 'HN', weight: 1, enabled: true }],
       });
-      const restore = mockFetch({ 'https://mock/rss': RSS_XML });
+      const restore = mockFetch({ 'https://mock/rss': RSS_XML_FRESH() });
       try {
         const { plugin } = await newPlugin(dir, { enabled: true, push_windows: [] });
         const r1 = await plugin._tick('test');
         ok('首次 tick 成功', r1.ok === true, JSON.stringify(r1));
+        // 防回归：断言插件确实调用了注入的 fetch（否则 mock 没生效会伪装成「抓取 0 条」）
+        eq('插件走了注入的 fetch', restore.calls, ['https://mock/rss']);
         const lines1 = readItems(dir);
+        // 防回归：断言解析器对固定 XML 稳定返回 2 条（区分「解析回归」与「剪枝误杀」）
+        eq('解析器对该 XML 返回 2 条', parseFeed(RSS_XML_FRESH()).items.length, 2);
         eq('首次落盘 2 条', lines1.length, 2);
         eq('id = sha1(feed_id+link)', lines1[0].id, sha1('hn' + lines1[0].link));
         ok('两条 id 都按契约生成', lines1.some((x) => x.id === sha1('hn' + 'https://example.com/a?x=1&y=2')));
@@ -372,13 +406,14 @@ const SINGLE_XML = '<?xml version="1.0" encoding="UTF-8"?>\n'
         ],
       });
       const restore = mockFetch({
-        'https://mock/good': RSS_XML,
+        'https://mock/good': RSS_XML_FRESH(),
         'https://mock/bad': new Error('connect ECONNREFUSED (mock)'),
       });
       try {
         const { plugin } = await newPlugin(dir, { enabled: true, push_windows: [] });
         const r = await plugin._tick('test');
         ok('单源失败不炸整轮', r.ok === true, JSON.stringify(r));
+        eq('两个源都被尝试过', restore.calls.slice().sort(), ['https://mock/bad', 'https://mock/good']);
         eq('好源仍落盘', readItems(dir).length, 2);
         ok('lastError 指向坏源', plugin._state.lastError && plugin._state.lastError.kind === 'fetch:bad',
           JSON.stringify(plugin._state.lastError));
@@ -411,10 +446,11 @@ const SINGLE_XML = '<?xml version="1.0" encoding="UTF-8"?>\n'
     // ── ⑧ 端到端：本地 http 临时端口 → 真实 fetch → rss-items 一行 ────
     {
       const dir = tmpDir();
+      const singleXml = SINGLE_XML_FRESH();
       const server = http.createServer((req, res) => {
         if (req.url !== '/feed') { res.writeHead(404); res.end('nope'); return; }
         res.writeHead(200, { 'content-type': 'application/rss+xml; charset=utf-8' });
-        res.end(SINGLE_XML);
+        res.end(singleXml);
       });
       await new Promise((resolve, reject) => {
         server.once('error', reject);

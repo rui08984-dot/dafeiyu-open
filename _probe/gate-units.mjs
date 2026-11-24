@@ -189,6 +189,15 @@ export const UNITS = [
   { label: '单测 记忆来源标注（source/turn_id/confidence）', file: '_probe/test-memory-provenance.cjs', tier: 'core', needsHost: null, parallelSafe: false },
   { label: '单测 语音四态分类（backchannel/noise/barge_in/turn_take）', file: '_probe/voice-intent.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 语音四态门接线（开关关闭零变化/附和不打断/兜底）', file: '_probe/voice-intent-wiring.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  // 2026-11-23 真机事故回归：静默模式(cost.quiet)不能掐掉零成本本地感知，
+  // 否则用户问「你在看/听什么」她只能忠实转述「没拿到画面」。
+  { label: '单测 静默不掐感知（本地关键帧/窗口标题兜底/按需豁免）', file: '_probe/test-quiet-perception.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  // 2026-11-24 穿透三次同族事故：自指死锁（穿透破坏自身所需输入）
+  { label: '单测 穿透边界自愈（主进程轮询光标/进入即恢复/离开才穿透）', file: '_probe/test-passthrough-selfheal.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  // 2026-11-24 真机事故：拖动只能拖一小段就停（拖动中置穿透 → 收不到 pointermove）
+  { label: '单测 拖动期间禁止穿透（标志/新鲜度/前后端双守卫）', file: '_probe/test-drag-passthrough-guard.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  // 2026-11-24 真机事故：drag_preview 开关读未定义变量恒为 true → 强制预览模式
+  { label: '单测 拖动预览开关真实生效（默认开/显式关/不走过期缓存）', file: '_probe/test-drag-preview-switch.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 语音韧性（VAD 重连/附和/并发轮/自听/口型/失败状态）', file: '_probe/test-voice-resilience.cjs', tier: 'core', needsHost: null, parallelSafe: false },
   { label: '单测 画像隔离（迁移/注入隔离/逐字节还原）', file: '_probe/test-profile-quarantine.cjs', tier: 'core', needsHost: null, parallelSafe: false },
   { label: '回归 记忆召回（真数据）', file: '_probe/test-memory-recall.cjs', tier: 'core', needsHost: null, parallelSafe: false },

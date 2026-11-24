@@ -38,34 +38,6 @@ cd ..\..\.. && node _probe\check-ci.mjs
 
 期望：向导的「最低可用性」在填 key 后为可用；bootstrap 只有「用户自备」项（key / 8090 / 模型服务）非 ok；无代码级红。
 
-## 验证结果（2026-11-23 实测）
+## 验证结果
 
-### 规模与卫生
-
-- 版本库文件：**1379 个 / 66.4 MiB**（含模型两处副本各 16.5MB；`node_modules`/`target` 未入版本库）。
-- 独立扫描 **29/29 通过**：0 真实 key（`sk-zk`/`sk-yg`/`gho_`/`AKIA`/长 `sk-`）、0 PII（用户名/用户目录）、
-  0 源项目绝对路径、0 `AI记录室`、0 真实 `config.json`/`llm_providers.json`、0 许可不明的 `live2d.min.js`。
-- `node --check`：**649 / 649 通过**（全部 .js/.cjs/.mjs）。
-
-### bootstrap（24 项）
-
-- 17 ok / 3 missing（`config.json`、`llm_providers.json`、`memos_config.json`）/ 1 warn（皮套 bundle 待构建）/
-  3 skip（venv-voice、pet-core、LumenAct）。
-- `requiredMissing` 只有 `config`、`providers`（用户 key）；**无代码级红**。
-
-### 回归测试（E 内实跑，不依赖宿主）
-
-- 累计 **331 通过 / 0 失败 / 12 合理 SKIP**：
-  dispatch-followup 47 · install-manifest 47 · voice-intent 58 · wiring 46 · interrupt-event 21 ·
-  heard-text 51 · latency-budget 19 · upload-hygiene 21 · param-commit 21。
-- `_probe/check-ci.mjs`：**6/6 全过**。
-- 12 项 SKIP 为「公开树无独立 app .git / 本地运行文件」的合理跳过（由根目录 `.public-tree` 标记区分）。
-
-### 已知偏差
-
-1. 模型随仓是**基于用户确认的作者授权**；`NOTICE` 保留了原画/建模署名与使用边界（禁二次销售/冒充），
-   如权利人异议会立即移除。
-2. `memos_config.json` 与皮套 bundle 属于首次初始化：向导/README 给生成与构建命令，bootstrap 不判红。
-3. npm 11 的 allow-scripts 会提示 electron/uiohook 的 postinstall；新机器被拦时执行
-   `npm approve-scripts --allow-scripts-pending`。
-
+（待执行后回填）

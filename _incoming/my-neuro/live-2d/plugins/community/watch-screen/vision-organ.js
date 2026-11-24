@@ -99,6 +99,7 @@ class VisionOrgan {
         this._fallbackMode = false;   // 是否已经降级
         this._stats = {
             startedAt: null, samples: 0, keyframes: 0, summaries: 0, fallbackEntries: 0,
+            localEntries: 0,   // 静默期本地关键帧（不调摘要模型，零 API）
             proactiveCount: 0, summarizerErrors: 0, captureErrors: 0, dropped: 0,
             lastSampleAt: 0, lastKeyframeAt: 0, lastSummaryAt: 0,
         };
@@ -246,8 +247,17 @@ class VisionOrgan {
                 Promise.resolve(this.gameHook(info)).catch(() => {});
             }
         } catch (e) { try { __silentAudit.audit('vision-organ.js:220', e); } catch (e2) {} }
-        // 省钱模式：静默时不调多模态模型（一次调用=一次钱），也不写摘要。
-        try { if (typeof this.isQuiet === 'function' && this.isQuiet()) return null; } catch (e) { try { __silentAudit.audit('vision-organ.js:222', e); } catch (e2) {} }
+        // 省钱模式：静默时不调多模态模型（一次调用=一次钱）。
+        // ⚠ 2026-11-23 真机修复：原来这里直接 `return null`，连本地关键帧都不写 ——
+        //   entries / frames / stats.keyframes 全空，屏幕状态机恒 idle，「一起看」工具
+        //   永远回「暂时没拿到画面」。静默的语义是「不主动开口 / 不花摘要钱」，不是
+        //   「不感知」：现在记一条**本地**关键帧（时间戳 + 变化类型，零 API），
+        //   recall/look/状态机/cowatch 仍有数据可依。
+        let quiet = false;
+        try { quiet = !!(typeof this.isQuiet === 'function' && this.isQuiet()); } catch (e) {
+            try { __silentAudit.audit('vision-organ.js:222', e); } catch (e2) {}
+        }
+        if (quiet) return this._recordLocal(ts, info);
         // 带上联络表：让摘要器一次看一段，而不是一帧
         const infoWithSheet = Object.assign({}, info, {
             sheet: (this.sheet || []).slice(),
@@ -278,6 +288,47 @@ class VisionOrgan {
         this._trim(ts);
         if (typeof this.onKeyframe === 'function') { try { this.onKeyframe(entry, this); } catch (_) { try { __silentAudit.audit('vision-organ.js:251', _); } catch (e2) {} } }
         return entry;
+    }
+
+    /**
+     * 静默期本地关键帧：只记时间戳 + 变化类型，**不调摘要模型**（零 API）。
+     *
+     * 和 wake() 的区别：wake 是「用户点名要看」时强制采一帧（internal，不进摘要流）；
+     * 这里是采样链自己的心跳，保留原始 kind（scene/change/quiet/fallback），
+     * 让屏幕状态机照常判断「画面在不在变」——静默只是不花钱理解画面，不是停止观察。
+     * 不触发 onKeyframe：时间线/主动评论都属于「付过摘要成本」的链路，静默期不该有。
+     */
+    _recordLocal(ts, info) {
+        const kind = (info && info.kind) || 'fallback';
+        const entry = {
+            t: ts, clock: clockOf(ts), kind,
+            mad: Number.isFinite(info && info.mad) ? +info.mad.toFixed(2) : 0,
+            histDist: Number.isFinite(info && info.histDist) ? +info.histDist.toFixed(3) : 0,
+            text: this._localText(ts, info),
+            local: true,   // 消费方（latestSummary/cowatch）可据此知道「没有理解过画面内容」
+        };
+        if (info && info.base64) {
+            const frameId = 'q' + (++this._frameSeq);
+            this.frames.set(frameId, info.base64);
+            entry.frameId = frameId;
+            while (this.frames.size > this.cfg.maxFrames) this.frames.delete(this.frames.keys().next().value);
+        }
+        this.entries.push(entry);
+        this._stats.keyframes += 1;
+        this._stats.localEntries += 1;
+        this._stats.lastKeyframeAt = ts;
+        this._trim(ts);
+        return entry;
+    }
+
+    /** 本地关键帧的文案：只说「有没有变化」，绝不假装看过画面内容 */
+    _localText(ts, info) {
+        const kind = (info && info.kind) || 'fallback';
+        const state = kind === 'scene' ? '画面大幅变化'
+            : kind === 'change' ? '画面有变化'
+            : kind === 'quiet' ? '画面基本静止'
+            : '画面';
+        return clockOf(ts) + ' ' + state + '（本地采样，未理解内容）';
     }
 
     async _summarizeFrame(ts, info) {
@@ -553,6 +604,7 @@ class VisionOrgan {
             keyframes: this._stats.keyframes,
             summaries: this._stats.summaries,
             fallbackEntries: this._stats.fallbackEntries,
+            localEntries: this._stats.localEntries,
             keyframeRatePerSec: +(this._stats.keyframes / spanSeconds).toFixed(3),
             spanSeconds,
             proactiveCount: this._stats.proactiveCount,

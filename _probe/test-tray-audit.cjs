@@ -70,7 +70,11 @@ const main = read('main.js');
 // ── ④ 取景 / 穿透 / 设置 / 自启 / 退出都有真实接线 ────────────────────────
 {
     ok('取景发送 framing IPC', /type: 'framing', mode/.test(main));
-    ok('穿透调用 setIgnoreMouseEvents', /setIgnoreMouseEvents\(on, \{ forward: true \}\)/.test(main));
+    // 2026-11-23 穿透根治后的契约变更：托盘不再「裸调 setIgnoreMouseEvents(on)」——
+    // 那会绕过主进程光标轮询的边界自愈，导致「开了就永久点不到她」（两次真机事故）。
+    // 新契约 = ① 同步自愈策略 __ptState.manual ② 仍要落到窗口 ③ 写回配置。
+    ok('穿透同步自愈策略（__ptState.manual）', /__ptState\.manual = on/.test(main));
+    ok('穿透仍落到窗口（setIgnoreMouseEvents）', /petWinRef\.setIgnoreMouseEvents\((true|false|on)/.test(main));
     ok('穿透写回配置（重启保持）', /click_through_default = on/.test(main));
     ok('打开设置有实现', /function openControlCenter\(\)/.test(main));
     ok('打开配置目录用 shell.openPath', /shell\.openPath\(path\.dirname\(configPath\)\)/.test(main));
