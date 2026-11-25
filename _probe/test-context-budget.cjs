@@ -83,6 +83,50 @@ try {
     // ⑤ telemetry 文件在临时目录（不污染真实 .runtime）
     const tel = path.join(tmpRoot, 'runtime', 'telemetry.jsonl');
     ok('遥测写进临时目录', fs.existsSync(tel) && fs.readFileSync(tel, 'utf8').includes('context.budget'));
+
+    // ⑥ P1-4：enable_limit=false 时仍有 token 硬上限兜底（紧急背压）─────────────
+    // 旧实现 trimMessages 第一行 `if (!enableContextLimit) return;` —— 关掉条数开关后
+    // history 无上限（单轮工具循环能顶到几十 k）。现在 token 闸独立于开关，只判 token。
+    {
+        const { ContextManager } = require(path.join(APP, 'js', 'ai', 'ContextManager.js'));
+        const long = [{ role: 'system', content: 'S' }];
+        for (let i = 0; i < 40; i += 1) long.push({ role: i % 2 ? 'assistant' : 'user', content: '长'.repeat(1200) + i });
+
+        const vc = {
+            messages: long.slice(), enableContextLimit: false, maxContextMessages: 8,
+            config: { context: { hard_trim_tokens: 24000 } }, fullConversationHistory: [],
+        };
+        const before = CB.measure({ messages: vc.messages }).history;
+        new ContextManager(vc).trimMessages();
+        const after = CB.measure({ messages: vc.messages }).history;
+        ok('P1-4：enable_limit=false + history>24k 仍触发紧急背压', before > 24000 && after <= 24000,
+            before + ' → ' + after);
+        ok('P1-4：背压后仍留 ≥4 条（非 system）',
+            vc.messages.filter((m) => m.role !== 'system').length >= 4,
+            String(vc.messages.filter((m) => m.role !== 'system').length));
+        ok('P1-4：记账 reason=tokens 且标出 countGateEnabled=false',
+            vc._lastTrim && vc._lastTrim.reason === 'tokens' && vc._lastTrim.countGateEnabled === false,
+            JSON.stringify(vc._lastTrim && { reason: vc._lastTrim.reason, gate: vc._lastTrim.countGateEnabled }));
+        ok('P1-4：system 消息保留', vc.messages[0] && vc.messages[0].role === 'system');
+
+        // 未超上限 → 不裁（条数闸确实被开关关掉了：5 条 > max 2 也不裁）
+        const small = {
+            messages: long.slice(0, 5), enableContextLimit: false, maxContextMessages: 2,
+            config: { context: { hard_trim_tokens: 24000 } }, fullConversationHistory: [],
+        };
+        new ContextManager(small).trimMessages();
+        ok('P1-4：enable_limit=false 且未超 token 上限 → 不裁',
+            small.messages.length === 5 && !small._lastTrim, 'len=' + small.messages.length);
+
+        // 对照：开启时 countGateEnabled=true（条数闸仍按 max_messages）
+        const enabled = {
+            messages: long.slice(), enableContextLimit: true, maxContextMessages: 8,
+            config: { context: { hard_trim_tokens: 24000 } }, fullConversationHistory: [],
+        };
+        new ContextManager(enabled).trimMessages();
+        ok('P1-4：enable_limit=true 时条数闸照旧开启',
+            enabled._lastTrim && enabled._lastTrim.countGateEnabled === true);
+    }
 } finally {
     try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (e) { /* ignore */ }
 }

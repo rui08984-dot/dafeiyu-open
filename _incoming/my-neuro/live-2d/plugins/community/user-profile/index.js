@@ -5,6 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const axios = require('axios');
+// 候选池/画像落盘统一走 json-store（原子写：同目录 tmp → rename；损坏文件隔离不覆盖）
+const jsonStore = require('../../../js/core/json-store.js');
 
 // 往上 4 层 = my-neuro/data（唯一真源，见 js/core/records-path.js）
 const LIVE2D_ROOT = path.join(__dirname, '..', '..', '..', '..');
@@ -18,6 +20,57 @@ const CATEGORY_TO_FIELD = {
     fact: 'facts',
     relationship: 'relationships'
 };
+
+// ── 类别归一化表（2026-11-24）─────────────────────────────────────────────
+// 根因：画像模型（本地 MemOperator-4B，云端模型偶尔同样）会把提示词里的**枚举示例**
+// 原样抄进 category —— 实测 `"category":"identity|preference|habit|relation|goal|health"`。
+// 旧 _normalizeCategory 只认 6 个正式类别，其余一律兜底 fact：于是「身份/关系/目标/健康」
+// 全被写进 facts，分桶失真，而且日志里一点信号都没有（看不出模型在乱填）。
+// 这里的修法是「翻译 + 认得枚举串」，不是再补一个 if：
+//   ① 精确表：6 个正式类别 + 常见复数；
+//   ② 同义词表：模型常用但不在枚举里的词翻译成正式类别（含上面抄回来的 token）；
+//   ③ 带分隔符的枚举串（| / , ; 全角同义）：切开后取**第一个能翻译的 token**；
+//   ④ 全翻译不了才兜底 fact，并只记一次（telemetry + 日志，带原值）。
+// 表是唯一真相：以后见到新枚举，只改这张表（或看日志发现它），不用动调用点。
+const CATEGORY_TABLE = new Map(Object.entries({
+    // ① 正式类别 + 常见复数
+    habit: 'habit', habits: 'habit',
+    trait: 'trait', traits: 'trait',
+    like: 'like', likes: 'like',
+    dislike: 'dislike', dislikes: 'dislike',
+    fact: 'fact', facts: 'fact',
+    relationship: 'relationship', relationships: 'relationship',
+    // ② 同义词（模型常见输出；identity/relation/goal/health 就是实测抄回来的枚举 token）
+    identity: 'trait',
+    personality: 'trait',
+    character: 'trait',
+    interest: 'like',
+    interests: 'like',
+    hobby: 'like',
+    hobbies: 'like',
+    // preference 需要看文本才能定 like / dislike，见 _resolveCategoryToken
+    preference: 'preference',
+    preferences: 'preference',
+    relation: 'relationship',
+    relations: 'relationship',
+    goal: 'fact',
+    goals: 'fact',
+    health: 'fact',
+    opinion: 'fact',
+    opinions: 'fact',
+    // 兼作「画像字段名」别名：_decayProfileItems 曾经把 field 当 category 传给 _candidateId，
+    // 没有这两条会误报「未识别」并落进 fact 桶。字段→类别本来就有 _fieldToCategory，
+    // 这里只是让同一套表也认字段名。
+    'preferences.likes': 'like',
+    'preferences.dislikes': 'dislike'
+}));
+
+// 枚举串分隔符（含全角）：只有「切开后 token 能翻译」才采用，避免把正常短语误切
+const CATEGORY_SEPARATORS = /[|｜/\\,，;；、]+/;
+// preference 按文本分 like / dislike 的判据（只认明确的否定表述，不猜语气）
+const DISLIKE_TEXT_HINTS = /讨厌|不喜欢|厌恶|反感|受不了/;
+// 「未识别」日志去重上限：防止模型乱填把进程内存撑大
+const UNKNOWN_CATEGORY_LOG_MAX = 50;
 
 const DEFAULT_PROFILE = {
     name: '',
@@ -60,6 +113,11 @@ class UserProfilePlugin extends Plugin {
         this._watchDebounce = null;
         this._interactionHandler = null;
         this._lastProcessedMessageCount = 0;
+        // 后台 LLM 闸（2026-11-25）：每次问 ensureCanRun；`_bgGate` 仅作单测注入缝。
+        this._bgGate = null;
+        this._bgGateLogged = false;
+        // 类别归一化（2026-11-24）：未识别原值的去重集合，见 _unknownCategoryOnce
+        this._unknownCategories = new Set();
     }
 
     async onStart() {
@@ -153,7 +211,7 @@ class UserProfilePlugin extends Plugin {
             type: 'function',
             function: {
                 name: 'profile',
-                description: '用户画像：view 查看当前已晋升的长期画像（不含候选池）；update 手动修正画像，需 update_action 指定操作类型、value 为内容；rebuild 备份当前画像并从 MemOS 长期记忆重新诊断。',
+                description: '用户画像：view 查看**完整**的长期画像（system 里每字段只注入前 10 条，细节缺口用 view 补）；update 手动修正画像，需 update_action 指定操作类型、value 为内容；rebuild 备份当前画像并从 MemOS 长期记忆重新诊断。',
                 parameters: {
                     type: 'object',
                     properties: {
@@ -258,6 +316,21 @@ class UserProfilePlugin extends Plugin {
 
         this._distilling = true;
         try {
+            // 2026-11-24（后台花钱闸）：画像分析 = 一次 LLM 调用，静默/配额耗尽/熔断期间不该跑。
+            // 判据统一来自 js/core/background-llm.js 的 canRun()（返回 {ok,reason,retryAt}）。
+            // 懒加载 + try/catch + fail-open：模块缺失或自身报错时照旧跑，不让数据链路停摆。
+            if (!(await this._backgroundAllowed())) {
+                // 不进 LLM，但仍做 TTL/归档这些零成本的本地维护
+                this._decayCandidates();
+                this._decayProfileItems();
+                if (!this._bgGateLogged) {
+                    this._bgGateLogged = true;
+                    this.context.log('info', '画像后台分析暂停：后台 LLM 闸不可用（静默/配额/熔断），恢复后自动补跑（只记一次）');
+                }
+                // 注意：不置 _dirty=false、不推进 _lastProcessedMessageCount → 闸恢复后这批消息还会被分析
+                return;
+            }
+
             const maxMessages = this._numberCfg('max_context_messages', 40);
             const recentMessages = messages
                 .filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.content)
@@ -266,14 +339,19 @@ class UserProfilePlugin extends Plugin {
             if (recentMessages.length === 0) return;
 
             const observations = await this._extractCandidates(recentMessages);
-            const { changed, promotable } = await this._updateCandidatePool(observations);
+            const { changed, profileChanged, promotable } = await this._updateCandidatePool(observations);
             const promoted = await this._promoteCandidates(promotable);
 
             this._decayCandidates();
             this._decayProfileItems();
 
-            if (changed || promoted > 0) {
-                this._saveCandidates();
+            // 2026-11-24：候选池只在真有池内变更/晋升时写；画像变更不再连带重写候选池
+            // （原来 profileChanged 也让 _saveCandidates 跑，等于每轮把 138 条整份重写）。
+            const poolTouched = changed || promoted > 0;
+            const profileTouched = profileChanged || promoted > 0;
+            if (poolTouched) this._saveCandidates();
+            if (profileTouched) {
+                if (!promoted) this._profile.updated_at = this._nowIso();
                 this._saveProfile();
                 this._refreshRenderedProfile();
             }
@@ -294,6 +372,35 @@ class UserProfilePlugin extends Plugin {
         }
     }
 
+    /**
+     * 后台 LLM 闸（2026-11-24；2026-11-25 收口）：判据唯一入口是
+     * `backgroundLLM.ensureCanRun(this.context, {kind})`（内部 = 用户开关 + 云端熔断），
+     * 返回 {ok, reason, retryAt, kind}。只有模块真的不在（早期启动）才 fail-open。
+     *
+     * 旧实现第一次 require 失败就把 `_bgGateReady=true` 永久置位，之后闸永远等于不存在；
+     * 还自己兼容 undefined/布尔/`{allowed}`，判错一律放行 —— 闸的「真相」被插件复制了一遍。
+     * 现在不再缓存失败、不再解析多种形状。`_bgGate` 仅保留为单测注入缝。
+     * @returns {Promise<boolean>} true = 允许调 LLM
+     */
+    async _backgroundAllowed() {
+        // 单测注入缝（生产不设置）：与真实闸同语义，返回 {ok:false} 即拒绝。
+        if (this._bgGate && typeof this._bgGate.ensureCanRun === 'function') {
+            const r = this._bgGate.ensureCanRun(this.context, { kind: 'user-profile' });
+            return !(r && r.ok === false);
+        }
+        if (this._bgGate && typeof this._bgGate.canRun === 'function') {
+            // 兼容旧测试注入的 {canRun}：按真实契约只认显式 ok:false。
+            const r = this._bgGate.canRun(this.context);
+            return !(r && r.ok === false);
+        }
+        let bg;
+        try { bg = require('../../../js/core/background-llm.js'); } catch (e) { return true; }
+        if (!bg || typeof bg.ensureCanRun !== 'function') return true;
+        // 不包 try/catch：ensureCanRun 内部已兜住配置/熔断/日志异常。
+        const r = bg.ensureCanRun(this.context, { kind: 'user-profile' });
+        return !(r && r.ok === false);
+    }
+
     async _extractCandidates(recentMessages) {
         const prompt = this._buildCandidatePrompt(recentMessages);
         const response = await this._callProfileLLM(prompt, { temperature: 0.2 });
@@ -307,7 +414,10 @@ class UserProfilePlugin extends Plugin {
 
     async _updateCandidatePool(observations) {
         const today = this._today();
+        // 2026-11-24：候选池变更与画像变更分开记。原来「观察命中已有画像项」也把
+        // candidates 标脏 → 每轮都把 138 条（含 110 条已晋升）整份重写一遍。
         let changed = false;
+        let profileChanged = false;
         const promotable = [];
 
         for (const obs of observations) {
@@ -316,11 +426,17 @@ class UserProfilePlugin extends Plugin {
             const existingProfileItem = this._findProfileItem(obs.category, obs.text);
             if (existingProfileItem) {
                 this._touchProfileItem(existingProfileItem.field, existingProfileItem.text, today);
-                changed = true;
+                profileChanged = true;
                 continue;
             }
 
             let candidate = this._findCandidateForObservation(obs);
+            if (!candidate) {
+                // 2026-11-24：归档 ≠ 遗忘。同一件事在归档后再次被观察到时，必须认出 archived
+                // 里的旧条目并**复活**它，否则会新建一条同名候选 → 再晋升一次 → 重复画像/重复
+                // 证据链（archived 里留着旧的，candidates 里又长出一条新的）。
+                candidate = this._reviveArchivedCandidate(obs, today);
+            }
             if (!candidate) {
                 candidate = {
                     id: this._candidateId(obs.category, obs.text),
@@ -339,32 +455,45 @@ class UserProfilePlugin extends Plugin {
             }
 
             const sameDay = candidate.last_counted_day === today;
-            if (!sameDay) {
-                candidate.count = Math.max(0, Number(candidate.count || 0)) + 1;
-                candidate.last_counted_day = today;
-            }
+            const evidenceItem = {
+                date: today,
+                text: obs.evidence || obs.text,
+                one_off: obs.one_off,
+                self_declared: obs.self_declared
+            };
+            // 同一天同一条证据不重复追加：原来每轮都 push 一次，evidence 永远「变了」
+            // → changed 恒 true → 整池重写（promoted 条目也跟着被重写）。
+            const evidenceAdded = this._isNewEvidence(candidate.evidence, evidenceItem) === true;
+            const countBumped = !sameDay;
+            const selfChanged = Boolean(candidate.self_declared) !== Boolean(candidate.self_declared || obs.self_declared);
+            const oneOffChanged = Boolean(candidate.one_off) !== Boolean(candidate.one_off || obs.one_off);
 
-            candidate.last_seen = today;
+            if (countBumped) candidate.count = Math.max(0, Number(candidate.count || 0)) + 1;
             candidate.self_declared = Boolean(candidate.self_declared || obs.self_declared);
             // 2026-11-21 审计 P1：one_off 必须**粘住**（一旦有一次被标成一次性事件，
             // 后续普通观察不能把它洗白）。跨天反复出现 ≥3 次且跨 ≥3 天时才在
             // _shouldPromote 里推翻这个标签 —— 见那里的注释。
             candidate.one_off = Boolean(candidate.one_off || obs.one_off);
-            candidate.status = candidate.status === 'promoted' ? 'promoted' : 'candidate';
-            candidate.evidence = this._appendEvidence(candidate.evidence, {
-                date: today,
-                text: obs.evidence || obs.text,
-                one_off: obs.one_off,
-                self_declared: obs.self_declared
-            });
-            changed = true;
+            const wasPromoted = candidate.status === 'promoted';
+            candidate.status = wasPromoted ? 'promoted' : 'candidate';
+            if (evidenceAdded) {
+                candidate.evidence = this._appendEvidence(candidate.evidence, evidenceItem);
+            }
+
+            // promoted 条目：只有「新证据 / 新计数 / 标签变化」才动它（含 last_seen）。
+            // 没变化的已晋升条目不该每轮被刷新、被重新序列化。
+            if (!wasPromoted || evidenceAdded || countBumped || selfChanged || oneOffChanged) {
+                if (countBumped) candidate.last_counted_day = today;
+                candidate.last_seen = today;
+                changed = true;
+            }
 
             if (candidate.status !== 'promoted' && await this._shouldPromote(candidate)) {
                 promotable.push(candidate);
             }
         }
 
-        return { changed, promotable };
+        return { changed, profileChanged, promotable };
     }
 
     async _promoteCandidates(candidates) {
@@ -377,8 +506,8 @@ class UserProfilePlugin extends Plugin {
 
         for (const candidate of pending) {
             const item = refined.get(candidate.id) || { category: candidate.category, text: candidate.text };
-            const category = this._normalizeCategory(item.category || candidate.category);
             const text = this._cleanText(item.text || candidate.text);
+            const category = this._normalizeCategory(item.category || candidate.category, text);
             if (!text) continue;
 
             this._addProfileItem(category, text, today);
@@ -400,7 +529,7 @@ class UserProfilePlugin extends Plugin {
     async _shouldPromote(candidate) {
         if (!candidate || candidate.status === 'promoted') return false;
 
-        const category = this._normalizeCategory(candidate.category);
+        const category = this._normalizeCategory(candidate.category, candidate.text);
         const count = Number(candidate.count || 0);
         const spanDays = this._daysBetween(candidate.first_seen, candidate.last_seen);
 
@@ -511,7 +640,7 @@ ${JSON.stringify(candidates.map(c => ({
             for (const item of items) {
                 if (item && item.id && item.text) {
                     result.set(item.id, {
-                        category: this._normalizeCategory(item.category),
+                        category: this._normalizeCategory(item.category, item.text),
                         text: this._cleanText(item.text)
                     });
                 }
@@ -646,9 +775,9 @@ ${JSON.stringify(candidates.map(c => ({
     }
 
     _writeJson(filePath, data) {
-        const dir = path.dirname(filePath);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+        // 原子写（2026-11-24）：原来 writeFileSync 直写目标文件，进程被杀会留半截 JSON；
+        // 走 json-store：tmp + rename，且损坏过的文件拒绝写回（不让空数据覆盖残骸）。
+        jsonStore.writeJson(filePath, data, { pretty: true });
     }
 
     _normalizeProfile(profile) {
@@ -685,13 +814,15 @@ ${JSON.stringify(candidates.map(c => ({
         next.archived = Array.isArray(next.archived) ? next.archived : [];
         next.candidates = next.candidates.map(c => ({
             id: c.id || this._candidateId(c.category, c.text),
-            category: this._normalizeCategory(c.category),
+            category: this._normalizeCategory(c.category, c.text),
             text: this._cleanText(c.text),
             count: Math.max(0, Number(c.count || 0)),
             first_seen: c.first_seen || this._today(),
             last_seen: c.last_seen || this._today(),
             last_counted_day: c.last_counted_day || '',
             self_declared: Boolean(c.self_declared),
+            // 2026-11-24：one_off 原来没被 normalize 带过来 → 每次加载都把「一次性事件」标签丢掉
+            one_off: Boolean(c.one_off),
             status: c.status || 'candidate',
             evidence: Array.isArray(c.evidence) ? c.evidence.slice(-10) : [],
             memos_support: c.memos_support || null,
@@ -706,7 +837,8 @@ ${JSON.stringify(candidates.map(c => ({
         if (!this._candidateStore) return;
 
         const maxCandidates = Math.max(1, this._numberCfg('max_candidates', 200));
-        const maxArchived = Math.max(0, this._numberCfg('max_archived_candidates', 200));
+        // 2026-11-24：归档上限统一走 _archiveMax()（archive_max 优先，默认 500）
+        const maxArchived = this._archiveMax();
         const today = this._today();
 
         const sortByFreshness = (a, b) => {
@@ -747,23 +879,72 @@ ${JSON.stringify(candidates.map(c => ({
     _refreshRenderedProfile() {
         // 2026-11-21：只从活跃列表（traits/habits/preferences/facts/relationships）
         // 拼注入文本；顶层 quarantined 故意不读——隔离区不注入。
-        const parts = [];
-        if (this._profile.name) parts.push(`姓名: ${this._profile.name}`);
-        if (this._profile.nickname) parts.push(`称呼/昵称: ${this._profile.nickname}`);
-        if (this._profile.traits.length) parts.push(`性格/做派:\n${this._profile.traits.map(x => `- ${x}`).join('\n')}`);
-        if (this._profile.habits.length) parts.push(`长期习惯/行为模式:\n${this._profile.habits.map(x => `- ${x}`).join('\n')}`);
-        if (this._profile.preferences.likes.length || this._profile.preferences.dislikes.length) {
-            const prefs = [];
-            if (this._profile.preferences.likes.length) prefs.push(`喜欢: ${this._profile.preferences.likes.join('；')}`);
-            if (this._profile.preferences.dislikes.length) prefs.push(`不喜欢: ${this._profile.preferences.dislikes.join('；')}`);
-            parts.push(`稳定偏好:\n${prefs.map(x => `- ${x}`).join('\n')}`);
-        }
-        if (this._profile.facts.length) parts.push(`稳定事实:\n${this._profile.facts.map(x => `- ${x}`).join('\n')}`);
-        if (this._profile.relationships.length) parts.push(`重要关系:\n${this._profile.relationships.map(x => `- ${x}`).join('\n')}`);
+        //
+        // 2026-11-24 ADR-014 轨道 2-8：system 里的画像**每字段只放前 max_items_per_field 条**
+        // （默认 10，仍可配）。完整画像不删、不变，继续由 `profile view` 工具提供。
+        // 为什么要分开：_limitItems 是**存储**裁剪（默认 20，别跟着降，否则会删真数据）；
+        // 这里只是**渲染**预算，省的是每次请求的 system token。
+        const maxPerField = this._renderMaxItems();
+        this._renderedProfile = this._buildProfileText(maxPerField, true);
+    }
 
-        this._renderedProfile = parts.length
-            ? `【用户画像 - 主人长期以来的习惯/性格/偏好，自然融入对话，勿照搬原文】\n${parts.join('\n')}`
-            : '';
+    /** 渲染预算：system 注入每字段条数（默认 10）。 */
+    _renderMaxItems() {
+        // ADR-014：默认 20→10。⚠ 旧版 plugin_config.json 里 value 仍是出厂默认 20，
+        // 那不是「用户选择」——按未配置处理（否则这个降预算在真机上静默失效）。
+        // 用户把它改成任何**非 20** 的数才按用户的来（仍可配，含调大）。
+        const v = Number(this._cfg && this._cfg.max_items_per_field);
+        if (Number.isFinite(v) && v > 0 && v !== 20) return Math.floor(v);
+        return 10;
+    }
+
+    /** 取前 n 条（不修改原数组，不写盘）。 */
+    _headItems(items, n) {
+        const arr = Array.isArray(items) ? items : [];
+        if (!Number.isFinite(n) || n >= arr.length) return arr.slice();
+        return arr.slice(0, n);
+    }
+
+    /**
+     * 拼画像文本。
+     * @param {number} maxPerField 每字段最多渲染几条（Infinity = 全量，给 profile 工具用）
+     * @param {boolean} withHint   是否追加「更多细节用 profile 工具查看」的提示
+     */
+    _buildProfileText(maxPerField, withHint) {
+        const p = this._profile || {};
+        const prefs = (p.preferences && typeof p.preferences === 'object') ? p.preferences : {};
+        const traits = Array.isArray(p.traits) ? p.traits : [];
+        const habits = Array.isArray(p.habits) ? p.habits : [];
+        const likes = Array.isArray(prefs.likes) ? prefs.likes : [];
+        const dislikes = Array.isArray(prefs.dislikes) ? prefs.dislikes : [];
+        const facts = Array.isArray(p.facts) ? p.facts : [];
+        const relationships = Array.isArray(p.relationships) ? p.relationships : [];
+
+        const parts = [];
+        if (p.name) parts.push(`姓名: ${p.name}`);
+        if (p.nickname) parts.push(`称呼/昵称: ${p.nickname}`);
+        if (traits.length) parts.push(`性格/做派:\n${this._headItems(traits, maxPerField).map(x => `- ${x}`).join('\n')}`);
+        if (habits.length) parts.push(`长期习惯/行为模式:\n${this._headItems(habits, maxPerField).map(x => `- ${x}`).join('\n')}`);
+        if (likes.length || dislikes.length) {
+            const prefsOut = [];
+            if (likes.length) prefsOut.push(`喜欢: ${this._headItems(likes, maxPerField).join('；')}`);
+            if (dislikes.length) prefsOut.push(`不喜欢: ${this._headItems(dislikes, maxPerField).join('；')}`);
+            parts.push(`稳定偏好:\n${prefsOut.map(x => `- ${x}`).join('\n')}`);
+        }
+        if (facts.length) parts.push(`稳定事实:\n${this._headItems(facts, maxPerField).map(x => `- ${x}`).join('\n')}`);
+        if (relationships.length) parts.push(`重要关系:\n${this._headItems(relationships, maxPerField).map(x => `- ${x}`).join('\n')}`);
+
+        if (!parts.length) return '';
+        let text = `【用户画像 - 主人长期以来的习惯/性格/偏好，自然融入对话，勿照搬原文】\n${parts.join('\n')}`;
+        // 有字段被裁才提示（没有裁剪就不加冗余句，省 token）
+        const counts = [traits.length, habits.length, likes.length, dislikes.length, facts.length, relationships.length];
+        const truncated = Number.isFinite(maxPerField) && counts.some(c => c > maxPerField);
+        if (withHint && truncated) {
+            text += `\n（这里每字段只放前 ${maxPerField} 条；更多细节用 profile 工具查看` +
+                `（traits ${traits.length} / habits ${habits.length} / 偏好 ${likes.length + dislikes.length}` +
+                ` / facts ${facts.length} / 关系 ${relationships.length}））`;
+        }
+        return text;
     }
 
     _watchFiles() {
@@ -866,12 +1047,12 @@ ${JSON.stringify(candidateSummary, null, 2)}
 最近对话：
 ${JSON.stringify(recentMessages.map(m => ({ role: m.role, content: m.content })), null, 2)}
 
-输出格式：
+输出格式（category 必须填**一个**词，从下面 6 个里选一个，不要照抄整行、不要带竖线/逗号）：
 {
   "observations": [
     {
       "match_id": "已有候选id或null",
-      "category": "habit|trait|like|dislike|fact|relationship",
+      "category": "habit",
       "text": "简洁观察",
       "evidence": "触发该观察的短证据",
       "one_off": false,
@@ -985,11 +1166,80 @@ ${JSON.stringify(recentMessages.map(m => ({ role: m.role, content: m.content }))
                 kept.push(candidate);
             }
         }
+        if (changed) this._candidateStore.candidates = kept;
 
-        if (changed) {
-            this._candidateStore.candidates = kept;
+        // 2026-11-24：已晋升条目超龄归档（候选池只增不减，§9.3-⑨）
+        const archivedPromoted = this._archivePromotedCandidates();
+        if (changed || archivedPromoted) {
             this._saveCandidates();
         }
+        return changed || archivedPromoted;
+    }
+
+    /** archived 上限：新配置 archive_max 优先；兼容旧键 max_archived_candidates。默认 500。 */
+    _archiveMax() {
+        const legacy = this._numberCfg('max_archived_candidates', 500);
+        return Math.max(0, this._numberCfg('archive_max', legacy));
+    }
+
+    /** 归档条目只留最小字段（id/category/text/status/promoted_at/last_seen + 归档元信息）。 */
+    _minimalArchived(candidate, today, reason) {
+        return {
+            id: candidate.id || this._candidateId(candidate.category, candidate.text),
+            category: this._normalizeCategory(candidate.category, candidate.text),
+            text: this._cleanText(candidate.text),
+            status: 'archived',
+            promoted_at: candidate.promoted_at || '',
+            last_seen: candidate.last_seen || '',
+            archived_at: today,
+            archived_reason: reason,
+        };
+    }
+
+    /**
+     * 已晋升条目归档（2026-11-24，§9.3-⑨）：
+     *   promoted 且 (last_seen 或 promoted_at) 距今 > archive_after_days（默认 30）→ 移入 archived。
+     *   只动候选池，**不动画像本体** —— 归档的是「晋升证据链」，画像里的条目照常注入。
+     * @returns {boolean} 是否有改动
+     */
+    _archivePromotedCandidates() {
+        const days = Math.max(1, this._numberCfg('archive_after_days', 30));
+        const today = this._today();
+        const kept = [];
+        const moved = [];
+
+        for (const candidate of Array.isArray(this._candidateStore.candidates) ? this._candidateStore.candidates : []) {
+            if (!candidate || candidate.status !== 'promoted') {
+                kept.push(candidate);
+                continue;
+            }
+            const anchor = candidate.last_seen || candidate.promoted_at || candidate.first_seen || '';
+            if (!anchor || this._daysBetween(anchor, today) <= days) {
+                kept.push(candidate);
+                continue;
+            }
+            moved.push(this._minimalArchived(candidate, today, 'promoted_stale'));
+        }
+
+        if (!moved.length) return false;
+        this._candidateStore.candidates = kept;
+        this._candidateStore.archived = this._mergeArchived(this._candidateStore.archived, moved);
+        return true;
+    }
+
+    /** 归档合并：按 id 去重（保 last_seen 更新的），按新鲜度降序，超 archive_max 丢最旧。 */
+    _mergeArchived(existing, incoming) {
+        const byId = new Map();
+        const freshness = (a) => new Date(a.last_seen || a.promoted_at || a.archived_at || a.first_seen || 0).getTime() || 0;
+        for (const item of [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(incoming) ? incoming : [])]) {
+            if (!item || (!item.text && !item.id)) continue;
+            const id = item.id || this._candidateId(item.category, item.text);
+            const prev = byId.get(id);
+            if (!prev || freshness(item) >= freshness(prev)) byId.set(id, { ...item, id });
+        }
+        return Array.from(byId.values())
+            .sort((a, b) => freshness(b) - freshness(a))
+            .slice(0, this._archiveMax());
     }
 
     _decayProfileItems() {
@@ -1036,7 +1286,7 @@ ${JSON.stringify(recentMessages.map(m => ({ role: m.role, content: m.content }))
     // ===== Profile operations =====
 
     _addProfileItem(category, text, date = this._today()) {
-        const field = CATEGORY_TO_FIELD[this._normalizeCategory(category)];
+        const field = CATEGORY_TO_FIELD[this._normalizeCategory(category, text)];
         if (!field || !text) return false;
 
         const list = this._getProfileList(field);
@@ -1054,7 +1304,7 @@ ${JSON.stringify(recentMessages.map(m => ({ role: m.role, content: m.content }))
     }
 
     _findProfileItem(category, text) {
-        const field = CATEGORY_TO_FIELD[this._normalizeCategory(category)];
+        const field = CATEGORY_TO_FIELD[this._normalizeCategory(category, text)];
         const list = this._getProfileList(field);
         if (!list) return null;
 
@@ -1175,12 +1425,14 @@ ${JSON.stringify(recentMessages.map(m => ({ role: m.role, content: m.content }))
     }
 
     _renderProfileForTool() {
-        if (!this._renderedProfile) return '当前没有已晋升的用户画像。';
+        // 工具视图 = **全量**（ADR-014：渲染降到 10/字段，但数据不删，细节从工具取）。
+        const full = this._buildProfileText(Infinity, false);
         const quarantined = this._quarantinedCount();
         const tail = quarantined
             ? `\n隔离区: ${quarantined} 条（已移出活跃画像，不参与注入；node _probe/profile-restore.cjs --all 可还原）`
             : '';
-        return `${this._renderedProfile}${tail}\n\n画像文件: ${this._profilePath}\n候选池文件: ${this._candidatePath}`;
+        if (!full) return `当前没有已晋升的用户画像。${tail}`;
+        return `${full}${tail}\n\n画像文件: ${this._profilePath}\n候选池文件: ${this._candidatePath}`;
     }
 
     // ===== Helpers =====
@@ -1204,10 +1456,60 @@ ${JSON.stringify(recentMessages.map(m => ({ role: m.role, content: m.content }))
         const norm = this._normalizeComparable(obs.text);
         return this._candidateStore.candidates.find(c => {
             if (c.status === 'archived') return false;
-            if (this._normalizeCategory(c.category) !== obs.category) return false;
+            if (this._normalizeCategory(c.category, c.text) !== obs.category) return false;
             const cNorm = this._normalizeComparable(c.text);
             return cNorm === norm || cNorm.includes(norm) || norm.includes(cNorm);
         });
+    }
+
+    /**
+     * 在 archived 里找同一观察（类别归一化 + 文本归一化后相同/互相包含）。
+     * 归档条目只留最小字段（id/category/text/promoted_at/last_seen），足够比对。
+     */
+    _findArchivedForObservation(obs) {
+        const list = Array.isArray(this._candidateStore.archived) ? this._candidateStore.archived : [];
+        const category = this._normalizeCategory(obs.category, obs.text);
+        const norm = this._normalizeComparable(obs.text);
+        if (!norm) return null;
+        return list.find((a) => {
+            if (!a || !a.text) return false;
+            if (this._normalizeCategory(a.category, a.text) !== category) return false;
+            const aNorm = this._normalizeComparable(a.text);
+            return aNorm === norm || aNorm.includes(norm) || norm.includes(aNorm);
+        }) || null;
+    }
+
+    /**
+     * 从 archived 复活一条候选（2026-11-24，配合 promoted 超龄归档）。
+     * 复活 = 从 archived 移出 + 放回 candidates（保留原 id/promoted_at，证据链不丢），
+     * 后续计数/晋升走原有逻辑。这样「归档后再提一次」不会产生同名重复候选。
+     * @returns {object|null} 复活后的候选对象（未找到返回 null）
+     */
+    _reviveArchivedCandidate(obs, today = this._today()) {
+        const found = this._findArchivedForObservation(obs);
+        if (!found) return null;
+        const foundId = found.id || this._candidateId(found.category, found.text);
+        this._candidateStore.archived = (this._candidateStore.archived || [])
+            .filter((a) => a !== found && (a.id || this._candidateId(a.category, a.text)) !== foundId);
+        const revived = {
+            id: foundId,
+            category: this._normalizeCategory(found.category || obs.category, found.text),
+            text: this._cleanText(found.text),
+            count: 0,
+            first_seen: found.promoted_at || found.last_seen || today,
+            last_seen: today,
+            last_counted_day: '',
+            self_declared: Boolean(obs.self_declared),
+            status: 'candidate',
+            evidence: [],
+            memos_support: null,
+            promoted_at: found.promoted_at || undefined,
+        };
+        this._candidateStore.candidates.push(revived);
+        try {
+            this.context.log('info', '[画像] 归档条目重新出现，已复活回候选池：' + String(revived.text).slice(0, 30));
+        } catch (e) { /* 日志失败不影响主线 */ }
+        return revived;
     }
 
     _normalizeObservation(obs) {
@@ -1216,7 +1518,7 @@ ${JSON.stringify(recentMessages.map(m => ({ role: m.role, content: m.content }))
         if (!text) return null;
         return {
             match_id: typeof obs.match_id === 'string' ? obs.match_id : '',
-            category: this._normalizeCategory(obs.category),
+            category: this._normalizeCategory(obs.category, text),
             text,
             evidence: this._cleanText(obs.evidence),
             one_off: Boolean(obs.one_off),
@@ -1225,14 +1527,74 @@ ${JSON.stringify(recentMessages.map(m => ({ role: m.role, content: m.content }))
         };
     }
 
-    _normalizeCategory(category) {
-        const c = String(category || '').toLowerCase();
-        if (['habit', 'habits'].includes(c)) return 'habit';
-        if (['trait', 'traits', 'personality'].includes(c)) return 'trait';
-        if (['like', 'likes', 'preference'].includes(c)) return 'like';
-        if (['dislike', 'dislikes'].includes(c)) return 'dislike';
-        if (['relationship', 'relationships', 'relation'].includes(c)) return 'relationship';
-        if (['fact', 'facts'].includes(c)) return 'fact';
+    /**
+     * 把模型给的 category 翻译成 6 个正式类别之一（表驱动，见文件头 CATEGORY_TABLE）。
+     * @param {string} category 模型原值（可能是枚举串 / 同义词 / 大小写 / 复数）
+     * @param {string} [text] 观察正文 —— preference 需要它才能分 like / dislike
+     * @returns {'habit'|'trait'|'like'|'dislike'|'fact'|'relationship'}
+     */
+    _normalizeCategory(category, text) {
+        const raw = String(category == null ? '' : category).trim();
+
+        // ①② 整串先当单 token 查表（"Habit" / "habits" / "identity" / "preferences.likes"）
+        const direct = this._resolveCategoryToken(raw, text);
+        if (direct) return direct;
+
+        // ③ 枚举串："identity|preference|habit|..." → 取第一个能翻译的 token。
+        //    模型抄回来的顺序就是提示词里的顺序，取第一个是**确定**选择（不是碰运气）。
+        const tokens = raw.split(CATEGORY_SEPARATORS);
+        if (tokens.length > 1) {
+            for (const token of tokens) {
+                const resolved = this._resolveCategoryToken(token, text);
+                if (resolved) return resolved;
+            }
+        }
+
+        // ④ 兜底 fact，但要留下信号（见 _unknownCategoryOnce）
+        return this._unknownCategoryOnce(raw);
+    }
+
+    /** 单个 token → 正式类别；查不到返回 null（由调用方决定是否兜底）。 */
+    _resolveCategoryToken(token, text) {
+        const t = String(token == null ? '' : token)
+            .replace(/^[\s"'`[\]()（）【】]+|[\s"'`[\]()（）【】]+$/g, '')
+            .toLowerCase();
+        if (!t) return null;
+        const mapped = CATEGORY_TABLE.get(t);
+        if (!mapped) return null;
+        if (mapped === 'preference') {
+            // 「preference」本身不区分爱憎：正文含明确否定词才算 dislike
+            return DISLIKE_TEXT_HINTS.test(String(text || '')) ? 'dislike' : 'like';
+        }
+        return mapped;
+    }
+
+    /**
+     * 兜底为 fact，并按原值去重记一次（日志 + telemetry）。
+     * 目的：下次模型换了一套枚举能立刻在日志/遥测里看到，而不是静默混进 facts。
+     */
+    _unknownCategoryOnce(raw) {
+        const key = String(raw == null ? '' : raw).trim().toLowerCase().slice(0, 60);
+        if (!this._unknownCategories) this._unknownCategories = new Set();
+        if (!key || this._unknownCategories.has(key) || this._unknownCategories.size >= UNKNOWN_CATEGORY_LOG_MAX) {
+            return 'fact';
+        }
+        this._unknownCategories.add(key);
+        try {
+            if (this.context && typeof this.context.log === 'function') {
+                this.context.log('warn', '画像类别未识别，已按 fact 兜底: ' + JSON.stringify(key));
+            }
+        } catch (e) { /* 日志失败不影响归一化 */ }
+        try {
+            const { emitTelemetry } = require('../../../js/core/telemetry.js');
+            emitTelemetry({
+                cat: 'profile',
+                type: 'profile.category_unknown',
+                title: '画像类别未识别: ' + key,
+                level: 'warn',
+                source: 'user-profile'
+            });
+        } catch (e) { /* 遥测不可用不影响归一化 */ }
         return 'fact';
     }
 
@@ -1246,17 +1608,26 @@ ${JSON.stringify(recentMessages.map(m => ({ role: m.role, content: m.content }))
     }
 
     _candidateId(category, text) {
+        const normalized = this._normalizeCategory(category, text);
         const hash = crypto.createHash('sha1')
-            .update(`${this._normalizeCategory(category)}:${this._normalizeComparable(text)}`)
+            .update(`${normalized}:${this._normalizeComparable(text)}`)
             .digest('hex')
             .slice(0, 12);
-        return `${this._normalizeCategory(category)}:${hash}`;
+        return `${normalized}:${hash}`;
     }
 
     _appendEvidence(list, item) {
         const next = Array.isArray(list) ? list.slice() : [];
         next.push(item);
         return next.slice(-10);
+    }
+
+    /** 这条证据是否还没记过（同日同文视为重复）。用于避免每轮都把 evidence 改脏。 */
+    _isNewEvidence(list, item) {
+        const arr = Array.isArray(list) ? list : [];
+        const date = String(item && item.date || '');
+        const text = String(item && item.text || '');
+        return !arr.some((e) => e && String(e.date || '') === date && String(e.text || '') === text);
     }
 
     _parseJsonObject(response) {
@@ -1325,7 +1696,14 @@ ${JSON.stringify(recentMessages.map(m => ({ role: m.role, content: m.content }))
     }
 
     _limitItems(items) {
-        const max = this._numberCfg('max_items_per_field', 20);
+        // 存储裁剪（ADR-014 拆分）：max_items_per_field 现在只管**渲染**（默认 10），
+        // 存储上限独立为 max_stored_items_per_field（默认 20，与旧行为一致）。
+        // 两者取大：即使有人把渲染调到 30，存储也不会因此从 20 缩到 10 而删数据。
+        const storeMax = Math.max(
+            this._numberCfg('max_stored_items_per_field', 20),
+            this._numberCfg('max_items_per_field', 10)
+        );
+        const max = Number.isFinite(storeMax) && storeMax > 0 ? Math.floor(storeMax) : 20;
         const seen = new Set();
         const result = [];
         for (const item of Array.isArray(items) ? items : []) {

@@ -8,9 +8,20 @@ import json
 import os
 import re
 import asyncio
+import logging
 from datetime import datetime
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
+
+logger = logging.getLogger(__name__)
+
+# 示例句泄漏兜底（纯函数，见 memory_guard.py）：v2 为主要运行版本，这里同步覆盖 v1。
+try:
+    from memory_guard import is_example_leak
+except ImportError:  # 以包方式/非脚本方式导入时，补上 api 目录
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from memory_guard import is_example_leak
 
 
 class EmbeddingModel:
@@ -460,11 +471,11 @@ async def process_conversation_batch(conversation: str) -> Dict[str, Any]:
 
 提取规则：
 1. 用自然的中文描述，像写日记一样记录要点
-2. 示例格式：
-   - "主人常在晚上与AI互动，称呼AI为大肥鱼；喜欢听AI唱歌"
-   - "主人说自己生日是5月20日，希望AI记住"
-   - "主人最近在学Python，问了很多编程问题"
-   - "AI承诺帮主人提醒明天的会议"
+2. 示例格式（以下均为「示例占位」标记，**严禁把示例内容写进结果**；只记录对话中真实出现的事实）：
+   - 「<示例占位：某人常在某个时间段与AI互动，称呼AI为某昵称>」
+   - 「<示例占位：某人说自己生日是某月某日，希望AI记住>」
+   - 「<示例占位：某人最近在学某技能，问了相关问题>」
+   - 「<示例占位：AI承诺帮某人提醒某个日程>」
 3. 多个要点可以用分号或逗号连接
 4. 每条记忆15-80字，保留关键细节
 5. 忽略无意义的闲聊（如"嗯"、"好的"、"知道了"）
@@ -559,6 +570,7 @@ async def process_conversation_batch(conversation: str) -> Dict[str, Any]:
                             
                             # 验证和清理
                             valid_memories = []
+                            skipped_leak = 0
                             for mem in memories:
                                 if isinstance(mem, dict) and mem.get('content'):
                                     content = str(mem['content']).strip()
@@ -568,6 +580,15 @@ async def process_conversation_batch(conversation: str) -> Dict[str, Any]:
                                         importance = 0.5
                                     importance = max(0.1, min(1.0, importance))
                                     if len(content) >= 5:
+                                        # 2026-11-25 P1-4：占位符无条件丢弃；旧示例句只在
+                                        # 对话原文无支撑时丢弃（用户真说了同一句 → 放行）。
+                                        if is_example_leak(content, conversation):
+                                            logger.warning(
+                                                "[记忆提取] 丢弃示例句泄漏（模型把 prompt 示例当结果）: %r",
+                                                content
+                                            )
+                                            skipped_leak += 1
+                                            continue
                                         valid_memories.append({
                                             "content": content,
                                             "importance": importance
@@ -577,7 +598,7 @@ async def process_conversation_batch(conversation: str) -> Dict[str, Any]:
                             for mem in valid_memories:
                                 print(f"   - [{mem['importance']:.1f}] {mem['content'][:40]}...")
                             
-                            return {"memories": valid_memories}
+                            return {"memories": valid_memories, "skipped_leak": skipped_leak}
                         else:
                             error_text = await response.text()
                             last_error = f"status {response.status}: {error_text[:200]}"
@@ -642,6 +663,7 @@ async def add_memory(request: AddMemoryRequest):
         added_count = 0
         merged_count = 0
         skipped_count = 0
+        skipped_leak = 0
         
         # 🔥 步骤1：将所有对话合并成一段文本
         conversation_text = []
@@ -653,17 +675,20 @@ async def add_memory(request: AddMemoryRequest):
                 conversation_text.append(f"【{role_label}】{content}")
         
         if not conversation_text:
-            return {"status": "success", "message": "无有效对话", "added": 0, "merged": 0}
+            return {"status": "success", "message": "无有效对话", "added": 0, "merged": 0, "skipped_leak": 0}
         
         full_conversation = "\n".join(conversation_text)
         print(f"📝 收到 {len(request.messages)} 条消息，合并后开始加工...")
         
         # 🔥 步骤2：一次性调用 LLM 提取关键记忆
         processed_result = await process_conversation_batch(full_conversation)
+        if isinstance(processed_result, dict):
+            skipped_leak += int(processed_result.get("skipped_leak") or 0)
         
         if not processed_result or not processed_result.get("memories"):
             print("⚠️ 未提取到有效记忆")
-            return {"status": "success", "message": "未提取到有效记忆", "added": 0, "merged": 0}
+            return {"status": "success", "message": "未提取到有效记忆", "added": 0, "merged": 0,
+                    "skipped_leak": skipped_leak}
         
         # 🔥 步骤3：处理提取出的每条记忆
         for mem_item in processed_result["memories"]:
@@ -672,7 +697,14 @@ async def add_memory(request: AddMemoryRequest):
             
             if not content or len(content) < 5:
                 continue
-            
+
+            # 双保险：process_conversation_batch 已过滤；写库前再挡一次。
+            # 传 full_conversation：旧示例句若在原文有支撑（用户真说过）仍放行。
+            if is_example_leak(content, full_conversation):
+                logger.warning("[记忆提取] 丢弃示例句泄漏（/add 写库前兜底）: %r", content)
+                skipped_leak += 1
+                continue
+
             # 如果重要度太低，跳过
             if importance < 0.3:
                 print(f"⏭️ 跳过低重要度记忆 ({importance}): {content[:30]}...")
@@ -731,6 +763,8 @@ async def add_memory(request: AddMemoryRequest):
             result_parts.append(f"合并 {merged_count} 条")
         if skipped_count > 0:
             result_parts.append(f"跳过 {skipped_count} 条")
+        if skipped_leak > 0:
+            result_parts.append(f"丢弃示例 {skipped_leak} 条")
         
         result_msg = "记忆已处理：" + "、".join(result_parts) if result_parts else "无有效记忆"
         
@@ -739,7 +773,8 @@ async def add_memory(request: AddMemoryRequest):
             "message": result_msg,
             "added": added_count,
             "merged": merged_count,
-            "skipped": skipped_count
+            "skipped": skipped_count,
+            "skipped_leak": skipped_leak
         }
     except Exception as e:
         import traceback

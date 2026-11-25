@@ -11,7 +11,16 @@
  */
 'use strict';
 
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
+
+// ⚠ 2026-11-24：persona-guard 的判官走 background-llm.canRun → llmHealth.canCall，
+// 读的是「data/LLM健康.json」。不隔离就会吃真实配额暂停状态（实测 pausedUntil 16:32
+// 时判官整段跳过 → 7 条断言时间敏感假红）。必须在 require 业务模块**之前**把数据根指到
+// 临时目录（与 test-memory-quality.cjs 同款），llm-health 会优先按 PET_DATA_ROOT 取状态文件。
+process.env.PET_DATA_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'pet-persona-ooc-'));
+
 const ROOT = path.join(__dirname, '..');
 const P = require(path.join(ROOT, '_incoming', 'my-neuro', 'live-2d', 'plugins', 'community', 'persona-guard', 'index.js'));
 

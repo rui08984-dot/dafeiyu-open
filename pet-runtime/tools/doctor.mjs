@@ -10,6 +10,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync, execFileSync } from 'node:child_process';
+// 纯判据单独放一个文件（不读文件/不发请求），doctor 与 _probe 测试共用同一份逻辑。
+import doctorJudge from './doctor-judge.cjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -163,17 +165,43 @@ async function checkModel() {
   try { cfg = JSON.parse(fs.readFileSync(path.join(APP, 'config.json'), 'utf8')); } catch (e) { cfg = {}; }
   const list = (prov.providers || []).filter((p) => p.enabled);
   if (!list.length) { add(false, '模型配置', '没有启用的 provider', '在控制中心「模型配置」里启用一个'); return; }
+  // 2026-11-24：端点按 provider 语义分级（主=红 / 可选本地=未验证 / 可选云=黄）。
+  // 背景：local-memory（11435）是**按需启动**的可选 provider，没起服务不该把整个体检判红。
+  // llm_providers.json 没有 required/role 字段，识别规则见 doctorJudge.classifyProvider。
+  const mainProviderId = String((cfg.llm && cfg.llm.provider_id) || '');
+  const firstEnabledId = String((list[0] && list[0].id) || '');
   for (const p of list) {
+    const { tier } = doctorJudge.classifyProvider(p, { mainProviderId, firstEnabledId });
+    const onFail = doctorJudge.judgeProviderEndpoint(tier);   // 'fail' | 'skip' | 'warn'
+    const tierNote = tier === 'main' ? '' : (tier === 'optional-local' ? '（可选本地 provider）' : '（可选云 provider）');
     // 2026-11-16 P0 教训：能力开关保存曾把 provider 的 api_url/key 覆盖成空串，
     // 症状是对话全挂 `Failed to fetch`。端点为空必须单独点名（不要只查 key）。
     const base0 = String(p.api_url || '').trim();
-    if (!base0) { add(false, '模型端点', p.id + ' 没有 api_url（对话会 Failed to fetch）', '在控制中心「模型」页填写接口地址，或从备份恢复 llm_providers.json'); continue; }
-    if (!p.api_key || String(p.api_key).startsWith('__INJECTED')) { add(false, '模型密钥', p.id + ' 的 key 没注入', 'node tools/sync-credentials.mjs'); continue; }
+    if (!base0) {
+      if (onFail === 'skip') add('skip', '模型端点', p.id + tierNote + ' 没有 api_url（未启用跳过）', '用到它时再在控制中心「模型」页填写接口地址');
+      else if (onFail === 'warn') add('warn', '模型端点', p.id + tierNote + ' 没有 api_url（当前不可用）', '在控制中心「模型」页填写接口地址');
+      else add(false, '模型端点', p.id + ' 没有 api_url（对话会 Failed to fetch）', '在控制中心「模型」页填写接口地址，或从备份恢复 llm_providers.json');
+      continue;
+    }
+    if (!p.api_key || String(p.api_key).startsWith('__INJECTED')) {
+      if (onFail === 'skip') add('skip', '模型密钥', p.id + tierNote + ' 的 key 没注入（未验证）', '用到它时再跑 node tools/sync-credentials.mjs');
+      else if (onFail === 'warn') add('warn', '模型密钥', p.id + tierNote + ' 的 key 没注入（当前不可用）', 'node tools/sync-credentials.mjs');
+      else add(false, '模型密钥', p.id + ' 的 key 没注入', 'node tools/sync-credentials.mjs');
+      continue;
+    }
     const base = String(p.api_url || '').replace(/\/+$/, '');
     let okPort = true;
     if (/^http:/.test(base)) { try { okPort = await tcp(Number(new URL(base).port || 80)); } catch (e) { okPort = false; } }
-    if (!okPort) { add(false, '模型端点', p.id + ' 本地端口连不上（' + base + '）', '启动本地网关，或改用云端 provider'); continue; }
-    const model = (cfg.llm && cfg.llm.model_id) || (p.models[0] && p.models[0].model_id) || '?';
+    if (!okPort) {
+      if (onFail === 'skip') add('skip', '模型端点', p.id + tierNote + ' 本地模型未启动（可选）· ' + base, '需要本地摘要/抽取时再启动；云端对话不受影响');
+      else if (onFail === 'warn') add('warn', '模型端点', p.id + tierNote + ' 端点连不上 · ' + base, '这个 provider 当前不可用，但主对话不依赖它；要恢复就起服务或改配置');
+      else add(false, '模型端点', p.id + ' 本地端口连不上（' + base + '）', '启动本地网关，或改用云端 provider');
+      continue;
+    }
+    // 每个 provider 显示自己的模型：非主 provider 用 cfg.llm.model_id 会把本地模型显示成主模型名。
+    const model = tier === 'main'
+      ? ((cfg.llm && cfg.llm.model_id) || (p.models && p.models[0] && p.models[0].model_id) || '?')
+      : ((p.models && p.models[0] && p.models[0].model_id) || '?');
     add(true, '模型端点', p.id + ' · ' + model);
   }
 }
@@ -1117,7 +1145,213 @@ async function checkPersonaKernel() {
       '手工修 JSON，或从 .corrupt-* 恢复');
   }
 }
+// ── 云端 LLM 健康 / 配额熔断（2026-11-24 P0-1）───────────────────────────
+// 429 的真因可能是「套餐周配额用完」（响应体里有 resets at）。旧代码把响应体丢了，
+// doctor 只能看到「请求过于频繁」。这里读后台写的健康状态，直接告诉人「停到几点」。
+async function checkLLMHealth() {
+  const file = path.join(RECORDS, 'LLM健康.json');
+  let st = null;
+  try { st = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { st = null; }
+  if (!st) { add('skip', 'LLM 配额', '还没有健康状态文件（升级后跑一次后台任务才会生成）', ''); return; }
+  const now = Date.now();
+  const pausedUntil = Number(st.pausedUntil) || 0;
+  const nextAttemptAt = Number(st.nextAttemptAt) || 0;
+  const fails = Number(st.consecutiveFailures) || 0;
+  const fmt = (ts) => {
+    try { return new Date(ts).toLocaleString('zh-CN', { hour12: false }); } catch (e) { return String(ts); }
+  };
+  const err = String(st.lastError || '').replace(/\s+/g, ' ').slice(0, 100);
+  if (pausedUntil > now) {
+    add('warn', 'LLM 配额', '暂停到 ' + fmt(pausedUntil) + '（' + (st.reason || 'quota') + '）'
+      + (err ? '：' + err : ''), '后台任务已自动暂停；等重置即可，不用手动关插件');
+    return;
+  }
+  if (nextAttemptAt > now) {
+    add(true, 'LLM 配额', '退避到 ' + fmt(nextAttemptAt) + '（连续失败 ' + fails + ' 次）'
+      + (err ? '：' + err : ''));
+    return;
+  }
+  add(true, 'LLM 配额', fails ? '正常（上次连续失败 ' + fails + ' 次，已恢复）' : '正常');
+}
+
+// ── 前缀缓存命中率（2026-11-24）──────────────────────────────────────────
+// 数据源是 llm-client 每次请求落的 llm.cache telemetry。判据用**加权**（sum cached/sum prompt），
+// 不用「平均每次命中率」——后者会被大量小请求（插件 callLLM <2k）拉高/拉低。
+// 注：重启后前 1–2 次 0% 是上游按进程重建缓存，属正常；只在整个窗口加权过低时告警。
+async function checkCacheHit() {
+  const file = path.join(APP, '.runtime', 'telemetry.jsonl');
+  let lines;
+  try {
+    lines = fs.readFileSync(file, 'utf8').trim().split('\n').slice(-4000)
+      .map((l) => { try { return JSON.parse(l); } catch (e) { return null; } })
+      .filter(Boolean);
+  } catch (e) { add('skip', '前缀缓存', '还没有 telemetry.jsonl（聊一句就会有）', ''); return; }
+  const inWindow = lines.filter((l) => l.cat === 'llm' && l.type === 'llm.cache' && l.metrics);
+  if (!inWindow.length) { add('skip', '前缀缓存', '还没有缓存记录（重启宿主后聊一句）', ''); return; }
+  // 只判主链样本（label/source = main 或空）：插件/本地小请求（prompt <2k）混进来会把
+  // 加权命中率拉偏，「轮内改写打穿前缀」这个结论就不成立。插件/本地样本只计数。
+  const picked = doctorJudge.pickCacheSamples(inWindow, 40);
+  if (!picked.samples.length) {
+    add('skip', '前缀缓存', '共 ' + picked.excluded + ' 条 llm.cache 全是插件/本地样本（主链 0 条）', '');
+    return;
+  }
+  // 判据在 doctor-judge.cjs（样本 <5 → skip；≥5 且加权 <40 → warn；0% 且 ≥5 必须 warn）。
+  const verdict = doctorJudge.judgeCacheHit(picked.samples.map((r) => ({
+    prompt: r.metrics.prompt_tokens,
+    cached: r.metrics.cached_tokens,
+    hitRate: r.metrics.hit_rate,
+    hasField: Number(r.metrics.has_cache_field) === 1,
+  })));
+  const note = picked.excluded ? '（已排除插件/本地 ' + picked.excluded + ' 条）' : '';
+  const detail = verdict.detail + note;
+  if (verdict.status === 'ok') { add(true, '前缀缓存', detail); return; }
+  add(verdict.status, '前缀缓存', detail, verdict.fix);
+}
+
+// ── 用量账本（ADR-014 轨道 1，2026-11-24）────────────────────────────────
+// llm-client 每次请求落一条 llm.usage。这里汇总今日/近 7 天的 prompt/completion、
+// 加权缓存命中、p50/p90、0% 请求数；`cost.weekly_token_budget` 可选（默认不设=只统计），
+// 近 7 天**云真账**用量 ≥80% 时黄警告 —— 用户拍板「先统计 + 80% 告警，不拦截」。
+// 估算行（metrics.estimated=1，上游没给 usage 时的本地兜底）单列计数，不进预算分母。
+// 聚合是纯函数（usage-ledger.js），doctor 只读文件 + 打印，方便单测离线喂行。
+async function checkUsageLedger() {
+  const file = path.join(APP, '.runtime', 'telemetry.jsonl');
+  let lines;
+  try {
+    lines = fs.readFileSync(file, 'utf8').trim().split('\n').slice(-4000)
+      .map((l) => { try { return JSON.parse(l); } catch (e) { return null; } })
+      .filter(Boolean);
+  } catch (e) { add('skip', '用量账本', '还没有 telemetry.jsonl（聊一句就会有）', ''); return; }
+  const usageRows = lines.filter((l) => l.cat === 'llm' && l.type === 'llm.usage' && l.metrics);
+  // 先判覆盖率（llm.usage 条数 vs turn.end 轮数）：账本一条都没写时，
+  // 旧逻辑会直接 skip（假绿）——遗漏账本本身就是最该报的故障。
+  const coverage = doctorJudge.judgeLedgerCoverage(lines);
+  if (coverage.status === 'warn') { add('warn', '用量账本', coverage.detail, coverage.fix); return; }
+  if (!usageRows.length) {
+    add('skip', '用量账本', coverage.status === 'skip'
+      ? coverage.detail
+      : '还没有 llm.usage 记录（重启宿主后聊一句；旧数据只有 llm.cache）', '');
+    return;
+  }
+  let agg, led;
+  try {
+    const mod = await import(new URL('../../_incoming/my-neuro/live-2d/js/core/usage-ledger.js', import.meta.url).href);
+    led = mod.default || mod;
+    agg = led.aggregateUsage(usageRows);
+  } catch (e) {
+    add('skip', '用量账本', '聚合模块不可用：' + ((e && e.message) || e), '');
+    return;
+  }
+  let cfg = {};
+  try { cfg = JSON.parse(fs.readFileSync(path.join(APP, 'config.json'), 'utf8')); } catch (e) { cfg = {}; }
+  const budget = (led && typeof led.weeklyBudgetOf === 'function')
+    ? led.weeklyBudgetOf(cfg)
+    : Number(cfg && cfg.cost && cfg.cost.weekly_token_budget);
+  // 真账 / 估算分离（2026-11-24）：估算行（上游没给 usage，本地兜底）不参与 80% 预算，
+  // 否则「大概花了多少」会把周配额提前打满；估算条数在 detail 里单列。
+  const usageVerdict = doctorJudge.judgeUsageBudget(usageRows, { budget });
+  const cache = agg.weightedCachePctCloud != null ? agg.weightedCachePctCloud + '%' : '不可测';
+  const cacheLocal = agg.weekLocal && agg.weekLocal.cachePrompt > 0
+    ? Math.round((agg.weekLocal.cached / agg.weekLocal.cachePrompt) * 1000) / 10 + '%' : '-';
+  // p50/p90 保留全量（含估算），文案注明；预算的严格口径见 usageVerdict。
+  const p50p90 = agg.p50Cloud == null
+    ? '-'
+    : Math.round(agg.p50Cloud) + '/' + Math.round(agg.p90Cloud)
+      + (usageVerdict.week.cloudEstimated > 0 ? '（全量含估算）' : '');
+  const labels = Object.entries(agg.byLabel).map(([k, v]) => k + ' ' + v).join('/');
+  const detail = usageVerdict.detail
+    + ' · 云缓存 ' + cache + '（本地 ' + cacheLocal + '）· 云 p50/p90 ' + p50p90
+    + ' · 0% ' + agg.zeros + '/' + agg.withCacheField
+    + (labels ? ' · ' + labels : '')
+    + (coverage.status !== 'warn' ? ' · ' + coverage.detail : '');
+  // 周预算只算云 + 只算真账：本地模型不消耗云端配额，估算行也不进分母（2026-11-24 ADR-014）
+  const budgetNote = ' · 周预算已用 ' + usageVerdict.pct + '%（分母=云真账，估算不计）';
+  if (usageVerdict.status === 'warn') {
+    add('warn', '用量账本', detail + budgetNote, usageVerdict.fix);
+    return;
+  }
+  if (usageVerdict.status === 'ok') {
+    add(true, '用量账本', detail + budgetNote);
+    return;
+  }
+  add(true, '用量账本', detail + '（未设 cost.weekly_token_budget，仅统计）');
+}
+
+// ── 本地记忆模型（ADR-014，2026-11-24）──────────────────────────────────
+// MemOperator-4B @ llama.cpp 11435；后台摘要/抽取走它，反思仍云。
+// 未启动只算「未验证」：required=false，主链和云端反思不受影响；但不能静默假装绿。
+async function checkLocalMemory() {
+  let cfg = {};
+  try { cfg = JSON.parse(fs.readFileSync(path.join(APP, 'config.json'), 'utf8')); } catch (e) { cfg = {}; }
+  const enabled = !(cfg && cfg.cost && cfg.cost.local_memory === false);
+  const r = await get('http://127.0.0.1:11435/health', 2500);
+  const healthError = (!r || r.error) ? String((r && r.error) || 'no-response') : false;
+  const models = [];
+  const modelItems = [];
+  let nCtx = null;
+  if (!healthError) {
+    // 端口活 ≠ 模型对（2026-11-24 §8.5）：11435 可能被别的 llama-server 占着。
+    try {
+      const m = await get('http://127.0.0.1:11435/v1/models', 2500);
+      const data = (m && m.json && Array.isArray(m.json.data)) ? m.json.data : [];
+      for (const item of data) {
+        const id = item && (item.id || item.model);
+        if (id) { models.push(String(id)); modelItems.push(item); }
+      }
+    } catch (e) { /* models 拿不到 → 空列表，由判据判黄 */ }
+    // 展示层要实际 n_ctx（2026-11-24）：写死「32K」已和 Daily 档的 28672 对不上。
+    // 首选 llama.cpp /props（字段位置随版本变，逐个候选取）；拿不到回退 /v1/models 的 meta，
+    // 都没有就只显示「在线」。
+    try {
+      const p = await get('http://127.0.0.1:11435/props', 2500);
+      const j = (p && p.json) || {};
+      const cand = [
+        j.default_generation_settings && j.default_generation_settings.n_ctx,
+        j.settings && j.settings.n_ctx,
+        j.n_ctx,
+      ];
+      for (const c of cand) {
+        const n = Number(c);
+        if (Number.isFinite(n) && n > 0) { nCtx = n; break; }
+      }
+    } catch (e) { /* /props 不在（旧版 llama-server）→ 走 /v1/models 回退 */ }
+    if (nCtx == null) {
+      for (const item of modelItems) {
+        const meta = (item && item.meta) || {};
+        const n = Number(meta.n_ctx != null ? meta.n_ctx : meta.n_ctx_train);
+        if (Number.isFinite(n) && n > 0) { nCtx = n; break; }
+      }
+    }
+  }
+  const verdict = doctorJudge.judgeLocalMemory({ enabled, healthError, models, nCtx, port: 11435 });
+  if (verdict.status === 'ok') { add(true, '本地记忆模型', verdict.detail); return; }
+  add(verdict.status, '本地记忆模型', verdict.detail, verdict.fix);
+}
+
+// ── 前缀冻结复用（本轮 P0 验收观测，2026-11-24）──────────────────────────
+// 契约以生产者代码为准（llm-handler.js 轮末 llm.freeze：reuse/rebuild/rewrite/requests，
+// 另有 llm.freeze.break 记录宿主改写）。判据在 doctor-judge.cjs：
+//   近24h requests<10 → skip；rewrite/requests>20% 或 reuse/requests<50% → warn。
+// ⚠ 只读 llm.freeze 的 rewrite（它已含 break 的那次），不叠加 llm.freeze.break，防双计。
+async function checkVolatileStability() {
+  const file = path.join(APP, '.runtime', 'telemetry.jsonl');
+  let lines;
+  try {
+    lines = fs.readFileSync(file, 'utf8').trim().split('\n').slice(-4000)
+      .map((l) => { try { return JSON.parse(l); } catch (e) { return null; } })
+      .filter(Boolean);
+  } catch (e) { add('skip', '易变稳定', '还没有 telemetry.jsonl（聊一句就会有）', ''); return; }
+  const verdict = doctorJudge.judgeFreezeReuse(lines);
+  if (verdict.status === 'ok') { add(true, '易变稳定', verdict.detail); return; }
+  add(verdict.status, '易变稳定', verdict.detail, verdict.fix);
+}
+
 await checkContextBudget();
+await checkLLMHealth();
+await checkCacheHit();
+await checkUsageLedger();
+await checkLocalMemory();
+await checkVolatileStability();
 await checkLatencyBudget();
 await checkTurnTelemetry();
 await checkGateStaleness();

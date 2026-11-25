@@ -30,6 +30,13 @@ const APP = path.join(ROOT, '_incoming', 'my-neuro', 'live-2d');
 // 必须在 require 业务模块之前设置：records-path 在模块加载时解析记录室路径。
 const tmpRoot = iso.setUpTempDataRoot('pet-scaffold-');
 
+// ⚠ 2026-11-24 ADR-014：MemOS 后端改成本地（llama.cpp:11435）后，待写队列的
+// _drainQueue 先过 _writeGateOpen → localLLM.isAvailable()。单测不依赖真 server：
+// 只桩探活本身，/add 仍由用例里的 mock 捕获。
+const localLLM = require(path.join(APP, 'js', 'core', 'local-llm.js'));
+const origIsAvailable = localLLM.isAvailable;
+localLLM.isAvailable = async () => true;
+
 let pass = 0;
 let fail = 0;
 function ok(name, cond, detail) {
@@ -352,10 +359,12 @@ function freshEvolve(messages) {
     }
 
     console.log('\n' + pass + '/' + (pass + fail) + ' 全过');
+    localLLM.isAvailable = origIsAvailable;
     iso.cleanup(tmpRoot);
     process.exit(fail === 0 ? 0 : 1);
 })().catch((e) => {
     console.error('  ✗ 测试自身异常：' + (e && e.stack || e));
+    localLLM.isAvailable = origIsAvailable;
     iso.cleanup(tmpRoot);
     process.exit(1);
 });

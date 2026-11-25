@@ -12,7 +12,8 @@
  * 约定：
  *   · 不点击桌面、不移动用户窗口。点击路径的后端一律被桩拦截；
  *   · Rust 回读用**自建**的临时记事本窗口（唯一文件名，标题不会和用户窗口撞），
- *     测完 close 并删临时文件；
+ *     测完 close 并删临时文件；Win11 若 System32\notepad.exe 被 Store 版接管
+ *     （进程镜像在 WindowsApps），close 运行时断言显式 SKIP（不判红），收尾仍保证无残留。
  *   · 优先用 target/stage/release/pet-core.exe（本次修复的产物），
  *     fallback 到 target/release（旧产物 —— 此时回读/黑名单断言会红，正是修复前应有的表现）。
  *
@@ -39,6 +40,7 @@ const CORE_OLD = path.join(ROOT, 'pet-core', 'target', 'release', 'pet-core.exe'
 
 let pass = 0;
 let fail = 0;
+let skipped = 0;   // 环境不满足时显式 SKIP（不判红，但必须在汇总里可见）
 const failures = [];
 function ok(name, cond, detail) {
     if (cond) { pass += 1; console.log('  ✓ ' + name + (detail ? ' — ' + detail : '')); return true; }
@@ -148,6 +150,46 @@ function coreBin() {
     if (process.env.PET_CORE_BIN && fs.existsSync(process.env.PET_CORE_BIN)) return process.env.PET_CORE_BIN;
     if (fs.existsSync(CORE_STAGE)) return CORE_STAGE;
     return fs.existsSync(CORE_OLD) ? CORE_OLD : '';
+}
+
+/**
+ * 进程镜像路径 + 命令行（自建窗口的版本判定用）。
+ * Win11 下 C:\Windows\System32\notepad.exe 可能只是转发器：真正跑的是 WindowsApps 里的
+ * Store 版 Notepad（单实例 + 会话还原），WM_CLOSE 目标会随会话状态漂移 → 必须先证实镜像。
+ */
+function procInfo(pid) {
+    const id = Number(pid) || 0;
+    if (!id) return null;
+    try {
+        const out = realExecFileSync('powershell.exe', [
+            '-NoProfile', '-NonInteractive', '-Command',
+            '[Console]::OutputEncoding=[Text.Encoding]::UTF8;'
+            + '$p=Get-CimInstance Win32_Process -Filter "ProcessId=' + id + '";'
+            + 'if($p){ ConvertTo-Json -Compress -InputObject @{ path=$p.ExecutablePath; cmd=$p.CommandLine } }',
+        ], { encoding: 'utf8', timeout: 15000, windowsHide: true });
+        const j = JSON.parse(String(out || '').replace(/^\uFEFF/, '').trim() || '{}');
+        return { path: String(j.path || ''), cmd: String(j.cmd || '') };
+    } catch (e) {
+        return null;
+    }
+}
+
+/** 命令行包含 substr 的进程（清理兜底；只传本次唯一 tag，绝不会命中用户进程）。 */
+function procsWithCmd(substr) {
+    try {
+        const out = realExecFileSync('powershell.exe', [
+            '-NoProfile', '-NonInteractive', '-Command',
+            '[Console]::OutputEncoding=[Text.Encoding]::UTF8;'
+            + '@(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains("' + substr + '") }'
+            + ' | ForEach-Object { [pscustomobject]@{ pid=$_.ProcessId; cmd=$_.CommandLine } }) | ConvertTo-Json -Compress',
+        ], { encoding: 'utf8', timeout: 20000, windowsHide: true });
+        const t = String(out || '').replace(/^\uFEFF/, '').trim();
+        if (!t) return [];
+        const j = JSON.parse(t);
+        return Array.isArray(j) ? j : [j];
+    } catch (e) {
+        return [];
+    }
 }
 
 (async () => {
@@ -363,63 +405,154 @@ function coreBin() {
 
     if (bin) {
         // 自建测试窗口：唯一文件名 → 标题不会撞用户窗口；不写入/不编辑 → 关掉不弹保存框。
+        // Win11 坑：C:\Windows\System32\notepad.exe 可能只是转发器，真正跑的是 WindowsApps 里的
+        // Store 版（单实例 + 会话还原）：窗口有时是外层 ApplicationFrameWindow，WM_CLOSE 关不掉，
+        // 每次门禁都残留一个 control-consistency-*.txt。所以：
+        //   ① 一律用 /w 开独立新窗（Store 版语义），classic 版也接受这个参数；
+        //   ② 起来后回读进程镜像，证实是 System32\notepad.exe（classic）才判 close 主断言；
+        //   ③ 证实不了（Store 版/没有 classic）→ 运行时用例 SKIP 并写明原因，不判红；
+        //   ④ 收尾无论如何都要干净：close 后仍在 → 只杀命令行含本次 tag 的自家进程并报出来。
         const tag = 'control-consistency-' + process.pid + '-' + Date.now();
         const tmpFile = path.join(os.tmpdir(), tag + '.txt');
+        const notepadExe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'notepad.exe');
         fs.writeFileSync(tmpFile, 'test window for control consistency\n', 'utf8');
         let myHwnd = 0;
+        let winPid = 0;
+        let winClass = '';
+        let spawnedPid = 0;
         let spawnedChild = null;
+        let skipWinOp = '';       // 非空 = 运行时用例 SKIP 的原因
+        let classic = false;      // 已证实 System32 classic notepad
         try {
-            spawnedChild = realSpawn('C:\\Windows\\System32\\notepad.exe', [tmpFile], {
-                detached: true, stdio: 'ignore', windowsHide: false,
-            });
-            spawnedChild.unref();
-            for (let i = 0; i < 24 && !myHwnd; i += 1) {
-                await sleep(400);
-                try {
-                    const wl = coreCall(bin, { cmd: 'windows', filter: tag, max: 50 }, 8000);
-                    const cands = (wl.windows || []).filter((w) => String(w.title || '').includes(tag));
-                    // 同名壳/真窗都可能有：按面积取最大（ApplicationFrameWindow 才是真窗口）
-                    cands.sort((a, b) => (b.w * b.h) - (a.w * a.h));
-                    if (cands.length) myHwnd = Number(cands[0].hwnd) || 0;
-                } catch (e) { /* 还没起来 */ }
-            }
-            ok('自建测试窗口已出现（不碰用户窗口）', myHwnd > 0, 'hwnd=' + myHwnd + ' tag=' + tag);
-            if (myHwnd > 0) {
-                const hw = String(myHwnd);
-                const rMin = coreCall(bin, { cmd: 'window_op', target: hw, op: 'min' }, 10000);
-                ok('min：ok 与 iconic 一致（ok=true ⇒ iconic=true）',
-                    (rMin.ok === true && rMin.iconic === true) || (rMin.ok === false && rMin.iconic === false),
-                    JSON.stringify(rMin).slice(0, 200));
-                ok('min：真的最小化了', rMin.ok === true && rMin.iconic === true, JSON.stringify({ ok: rMin.ok, iconic: rMin.iconic, error: rMin.error }));
+            if (!fs.existsSync(notepadExe)) {
+                skipWinOp = '本机没有 classic notepad（' + notepadExe + ' 不存在）';
+                console.log('  · SKIP window_op 运行时用例：' + skipWinOp + '（不判红）');
+            } else {
+                spawnedChild = realSpawn(notepadExe, ['/w', tmpFile], {
+                    detached: true, stdio: 'ignore', windowsHide: false,
+                });
+                spawnedChild.unref();
+                spawnedPid = Number(spawnedChild.pid) || 0;
+                for (let i = 0; i < 24 && !myHwnd; i += 1) {
+                    await sleep(400);
+                    try {
+                        const wl = coreCall(bin, { cmd: 'windows', filter: tag, max: 50 }, 8000);
+                        const cands = (wl.windows || []).filter((w) => String(w.title || '').includes(tag));
+                        // 同名壳/真窗都可能有：按面积取最大（ApplicationFrameWindow 才是真窗口）
+                        cands.sort((a, b) => (b.w * b.h) - (a.w * a.h));
+                        if (cands.length) {
+                            myHwnd = Number(cands[0].hwnd) || 0;
+                            winPid = Number(cands[0].pid) || 0;
+                            winClass = String(cands[0].class || '');
+                        }
+                    } catch (e) { /* 还没起来 */ }
+                }
+                ok('自建测试窗口已出现（不碰用户窗口）', myHwnd > 0,
+                    'hwnd=' + myHwnd + ' tag=' + tag + (winClass ? ' class=' + winClass : ''));
+                if (myHwnd > 0) {
+                    // 窗口所有者 pid 才是真正跑 notepad 的进程（Store 版会换 pid，spawn 的 pid 可能是转发器）。
+                    const info = procInfo(winPid || spawnedPid);
+                    const img = info ? info.path : '';
+                    classic = /\\Windows\\System32\\notepad\.exe$/i.test(img);
+                    if (classic) {
+                        ok('classic notepad 进程镜像在 System32（非 Store 版）', true, img);
+                    } else if (!img) {
+                        skipWinOp = '读不到 notepad 进程镜像路径（pid=' + (winPid || spawnedPid) + '）';
+                    } else {
+                        skipWinOp = 'notepad 被 Store 版接管（镜像 ' + img + '，不在 System32）';
+                    }
+                    if (skipWinOp) console.log('  · SKIP close 运行时断言：' + skipWinOp + '（不判红）');
+                }
 
-                const rRes = coreCall(bin, { cmd: 'window_op', target: hw, op: 'restore' }, 10000);
-                ok('restore：ok 与 iconic 一致（ok=true ⇒ iconic=false）',
-                    (rRes.ok === true && rRes.iconic === false) || (rRes.ok === false && rRes.iconic === true),
-                    JSON.stringify(rRes).slice(0, 200));
-                ok('restore：真的还原了', rRes.ok === true && rRes.iconic === false, JSON.stringify({ ok: rRes.ok, iconic: rRes.iconic, error: rRes.error }));
+                if (myHwnd > 0) {
+                    const hw = String(myHwnd);
+                    const rMin = coreCall(bin, { cmd: 'window_op', target: hw, op: 'min' }, 10000);
+                    ok('min：ok 与 iconic 一致（ok=true ⇒ iconic=true）',
+                        (rMin.ok === true && rMin.iconic === true) || (rMin.ok === false && rMin.iconic === false),
+                        JSON.stringify(rMin).slice(0, 200));
+                    ok('min：真的最小化了', rMin.ok === true && rMin.iconic === true, JSON.stringify({ ok: rMin.ok, iconic: rMin.iconic, error: rMin.error }));
 
-                const tClose = Date.now();
-                const rClose = coreCall(bin, { cmd: 'window_op', target: hw, op: 'close' }, 10000);
-                const closeMs = Date.now() - tClose;
-                let gone = false;
-                try {
-                    const wl2 = coreCall(bin, { cmd: 'windows', filter: tag, max: 50 }, 8000);
-                    gone = !(wl2.windows || []).some((w) => Number(w.hwnd) === myHwnd);
-                } catch (e) { gone = false; }
-                ok('close：ok 与窗口消失一致（ok=true ⇒ IsWindow=false）',
-                    (rClose.ok === true && gone) || (rClose.ok === false && !gone),
-                    JSON.stringify({ ok: rClose.ok, gone, error: rClose.error }).slice(0, 200));
-                ok('close：真的关掉了（≤1s 轮询）', rClose.ok === true && gone, '耗时 ' + closeMs + 'ms ' + JSON.stringify(rClose.error || ''));
-                ok('close 轮询预算 ≤1s（源码）', /1000/.test((rustSrc.match(/close 没生效[\s\S]{0,400}/) || [''])[0]));
+                    const rRes = coreCall(bin, { cmd: 'window_op', target: hw, op: 'restore' }, 10000);
+                    ok('restore：ok 与 iconic 一致（ok=true ⇒ iconic=false）',
+                        (rRes.ok === true && rRes.iconic === false) || (rRes.ok === false && rRes.iconic === true),
+                        JSON.stringify(rRes).slice(0, 200));
+                    ok('restore：真的还原了', rRes.ok === true && rRes.iconic === false, JSON.stringify({ ok: rRes.ok, iconic: rRes.iconic, error: rRes.error }));
+
+                    const tClose = Date.now();
+                    const rClose = coreCall(bin, { cmd: 'window_op', target: hw, op: 'close' }, 10000);
+                    const closeMs = Date.now() - tClose;
+                    let gone = false;
+                    try {
+                        const wl2 = coreCall(bin, { cmd: 'windows', filter: tag, max: 50 }, 8000);
+                        gone = !(wl2.windows || []).some((w) => Number(w.hwnd) === myHwnd);
+                    } catch (e) { gone = false; }
+                    if (skipWinOp) {
+                        // 不是 classic notepad：WindowOp 的 WM_CLOSE 语义不可靠，只记录实际结果不入账。
+                        skipped += 1;
+                        console.log('  · SKIP close：ok=' + rClose.ok + ' gone=' + gone + ' ' + closeMs + 'ms'
+                            + (rClose.error ? ' error=' + JSON.stringify(rClose.error) : '') + '（不判红）');
+                    } else {
+                        ok('close：ok 与窗口消失一致（ok=true ⇒ IsWindow=false）',
+                            (rClose.ok === true && gone) || (rClose.ok === false && !gone),
+                            JSON.stringify({ ok: rClose.ok, gone, error: rClose.error }).slice(0, 200));
+                        ok('close：真的关掉了（≤1s 轮询）', rClose.ok === true && gone, '耗时 ' + closeMs + 'ms ' + JSON.stringify(rClose.error || ''));
+                    }
+                    ok('close 轮询预算 ≤1s（源码）', /1000/.test((rustSrc.match(/close 没生效[\s\S]{0,400}/) || [''])[0]));
+                }
             }
         } finally {
-            // 收尾：只关我们自己起的窗口（按 hwnd），再删临时文件。
+            // 收尾：只关我们自己起的窗口（按 hwnd）；关不掉就兜底，并**把兜底动作打出来**（不静默）。
+            let closed = myHwnd <= 0;
             if (myHwnd > 0) {
                 try { coreCall(bin, { cmd: 'window_op', target: String(myHwnd), op: 'close' }, 10000); } catch (e) { /* ignore */ }
-            } else if (spawnedChild) {
+                await sleep(400);
+                try {
+                    const wl3 = coreCall(bin, { cmd: 'windows', filter: tag, max: 50 }, 8000);
+                    closed = !(wl3.windows || []).some((w) => Number(w.hwnd) === myHwnd);
+                } catch (e) { closed = false; }
+            }
+            if (!closed) {
+                const pid = winPid || spawnedPid;
+                const info = pid ? procInfo(pid) : null;
+                let killedAny = false;
+                // 只杀「命令行里带本次唯一 tag」的自家进程：绝不碰用户已开的记事本。
+                if (pid && info && String(info.cmd || '').includes(tag)) {
+                    try {
+                        realExecFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+                            encoding: 'utf8', timeout: 10000, windowsHide: true,
+                        });
+                        killedAny = true;
+                    } catch (e) { killedAny = false; }
+                    console.log('[清理] close 未生效（' + (skipWinOp || 'classic notepad') + '）→ 兜底 taskkill /PID '
+                        + pid + ' /T /F：' + (killedAny ? '已执行' : '失败'));
+                    if (!killedAny && spawnedChild) { try { spawnedChild.kill(); } catch (e) { /* ignore */ } }
+                } else {
+                    console.log('[清理] close 未生效，pid=' + pid + ' 的命令行无法证实是本次测试窗口 → 不按 pid 杀（避免误杀用户记事本），改按 tag 扫');
+                }
+                // pid 可能因 Store 单实例/转发器漂移：再按「命令行含本次 tag」扫一遍（tag 唯一，安全）。
+                if (!killedAny) {
+                    const leftovers = procsWithCmd(tag).filter((p) => Number(p.pid) !== process.pid);
+                    for (const p of leftovers) {
+                        try {
+                            realExecFileSync('taskkill', ['/PID', String(p.pid), '/T', '/F'], {
+                                encoding: 'utf8', timeout: 10000, windowsHide: true,
+                            });
+                            console.log('[清理] 按 tag 扫描兜底 taskkill /PID ' + p.pid + ' /T /F：已执行');
+                        } catch (e) {
+                            console.log('[清理] 按 tag 扫描兜底 taskkill /PID ' + p.pid + ' 失败：' + String((e && e.message) || e).slice(0, 120));
+                        }
+                    }
+                    if (!leftovers.length) console.log('[清理] 按 tag 扫描：没有残留进程');
+                }
+            } else if (myHwnd <= 0 && spawnedChild) {
                 try { spawnedChild.kill(); } catch (e) { /* ignore */ }
             }
-            try { fs.unlinkSync(tmpFile); } catch (e) { /* ignore */ }
+            // 进程退出后临时文件可能短暂被占用：重试几次，仍失败就报路径（别静默）。
+            let unlinked = false;
+            for (let i = 0; i < 3 && !unlinked; i += 1) {
+                try { fs.unlinkSync(tmpFile); unlinked = true; } catch (e) { await sleep(300); }
+            }
+            if (!unlinked) console.log('[清理] 临时文件删不掉（稍后可手删）：' + tmpFile);
         }
     }
 
@@ -646,7 +779,7 @@ function coreBin() {
         }
     }
 
-    console.log('\n' + pass + '/' + (pass + fail) + ' 全过');
+    console.log('\n' + pass + '/' + (pass + fail) + ' 全过' + (skipped ? '（SKIP ' + skipped + ' 项，环境不满足，不判红）' : ''));
     if (fail) {
         console.error('失败项：');
         for (const f of failures) console.error('  · ' + f);

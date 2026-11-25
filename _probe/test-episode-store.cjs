@@ -12,10 +12,25 @@
  */
 'use strict';
 
+// ⚠ 2026-11-24：memory-evolve 现在会在 LLM 失败时写共享熔断（llm-health）。
+// 本用例故意制造 LLM 失败，如果不隔离，会把真实的 data/LLM健康.json 写成
+// 「backoff 5 分钟」（实测污染过一次：lastError="boom"）。所以在 require 之前
+// 先把数据根指到临时目录；每个用例前再 reset 一次内存/磁盘状态。
+const os = require('os');
+const fs = require('fs');
 const path = require('path');
+const _TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'pet-episode-'));
+process.env.PET_DATA_ROOT = _TMP_DATA;
+
 const ROOT = path.join(__dirname, '..');
 const ES = require(path.join(ROOT, '_incoming', 'my-neuro', 'live-2d', 'js', 'core', 'episode-store.js'));
 const P = require(path.join(ROOT, '_incoming', 'my-neuro', 'live-2d', 'plugins', 'community', 'memory-evolve', 'index.js'));
+const { llmHealth } = require(path.join(ROOT, '_incoming', 'my-neuro', 'live-2d', 'js', 'core', 'llm-health.js'));
+// ⚠ 2026-11-24 ADR-014：片段卡改成本地模型（llama.cpp:11435），_maybeBuildEpisode 会先过
+// background-llm.canRunLocal（用户开关 + 代价开关 + 本地 /health）。单测不该依赖真 server，
+// 这里只桩闸门本身；真正的 LLM 调用仍由 mk() 的 context.callLLM 假实现提供。
+const BL = require(path.join(ROOT, '_incoming', 'my-neuro', 'live-2d', 'js', 'core', 'background-llm.js'));
+const origCanRunLocal = BL.canRunLocal;
 
 let pass = 0;
 let fail = 0;
@@ -43,13 +58,18 @@ function restoreUf() { UF.addFact = origAddFact; }
 
 function installFake() {
     fake.cursor = 0; fake.written = []; fake.readCalls = 0;
+    // 每个用例从「云端健康」开始：失败用例会写熔断，不能带到下一个用例
+    try { llmHealth.resetForTests(); } catch (e) { /* 旧版本没有这个接口也不影响 IO 假实现 */ }
+    // 本地闸桩成 ok（不探 11435）：本用例测的是「LLM 失败/输出坏/没内容时怎么处理」，
+    // 不是本地服务可达性；本地不可用的跳过行为由 test-local-llm 覆盖。
+    BL.canRunLocal = async () => ({ ok: true, reason: null, retryAt: null });
     ES.loadCursor = () => fake.cursor;
     ES.saveCursor = (n) => { fake.cursor = n; return true; };
     ES.readTurns = () => { fake.readCalls += 1; return { turns: fake.turns, consumed: fake.turns.length, total: fake.turns.length }; };
     ES.appendEpisode = (card) => { fake.written.push(card); return true; };
     ES.loadEpisodes = () => fake.written.slice();
 }
-function restore() { Object.assign(ES, orig); }
+function restore() { Object.assign(ES, orig); BL.canRunLocal = origCanRunLocal; }
 
 function mk(reply) {
     const p = new P();

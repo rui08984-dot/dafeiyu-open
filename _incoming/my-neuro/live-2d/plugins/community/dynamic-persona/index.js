@@ -2,6 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const { Plugin } = require('../../../js/core/plugin-base.js');
 const { recordFile } = require('../../../js/core/records-path.js');
+// 后台云端花费闸（2026-11-24 第三轮 P1）：唯一入口，内部走 canRun，不在这里重写判断。
+const backgroundLLM = require('../../../js/core/background-llm.js');
 
 /**
  * 动态人格（2026-11-15 五十八轮重写）
@@ -28,6 +30,11 @@ class DynamicPersonaPlugin extends Plugin {
         this.persona = '';
         this.personaAt = 0;
         this.msgCount = 0;
+        // 用户轮去重（2026-11-24 第四轮 P2 根因修）：轮内 host-shrank/外部改宿主会让
+        // llm-handler 重冻前缀并**重跑 onLLMRequest**，msgCount 于是二次自增 —— 每 N 轮
+        // 的口径整体漂移，N=1 时还会同一轮多发一次云调用。这里按「用户轮」去重：
+        // 同一个轮次键最多 +1（键优先取 turn_id，退回 turn-context / _turnFreeze.at）。
+        this._lastTurnKey = '';
         this._updating = false;
         const cfg = this.context.getPluginConfig() || {};
         this.updateFreq = Number(cfg.update_frequency) > 0 ? Number(cfg.update_frequency) : 3;
@@ -87,6 +94,34 @@ class DynamicPersonaPlugin extends Plugin {
         return !!this.persona && this._ageMs() <= this.staleHours * 3600000;
     }
 
+    /**
+     * 本轮的身份键（只用于「同一轮最多计一次」）。
+     * 优先级：request 里显式带的 turn_id/turnId → turn-context 的当前轮 →
+     * voiceChat._turnFreeze.at（同一轮重冻时间戳会变，但正常只有一次冻结；
+     * 这里只是极端兜底，取不到就返回 '' = 不去重）。
+     * @returns {string}
+     */
+    _turnKey(request) {
+        try {
+            const r = request || {};
+            const direct = r.turn_id || r.turnId;
+            if (direct) return 'id:' + String(direct);
+            const meta = (r.meta && typeof r.meta === 'object') ? r.meta : null;
+            const mv = meta && (meta.turn_id || meta.turnId);
+            if (mv) return 'id:' + String(mv);
+        } catch (e) { /* 请求形状不认识就继续找 */ }
+        try {
+            const tc = require('../../../js/core/turn-context.js');
+            const id = tc && typeof tc.currentTurnId === 'function' ? tc.currentTurnId() : '';
+            if (id) return 'id:' + String(id);
+        } catch (e) { /* 纯 Node 单测没有 turn-context 也正常 */ }
+        try {
+            const f = global.voiceChat && global.voiceChat._turnFreeze;
+            if (f && f.at) return 'freeze:' + f.at;
+        } catch (e) { /* 观测字段读不到不影响计数 */ }
+        return '';
+    }
+
     async onLLMRequest(request) {
         // ① 注入：每轮都注入（这是原实现最大的 bug —— 只在更新轮注入）
         //    2026-11-16：这段带「N 分钟前」时间戳、每轮都变，**不能再拼进 system** ——
@@ -114,8 +149,21 @@ class DynamicPersonaPlugin extends Plugin {
         try {
             if (!userText || require('../../../js/core/memory-scaffold.js').isScaffolding(userText, 'user')) return;
         } catch (e) { /* 过滤器不可用就按原行为（不放行会让她永远不更新） */ }
+        // 同一用户轮重跑钩子（重冻）→ 不重复计数，也就不重复触发「每 N 轮」的更新点
+        const turnKey = this._turnKey(request);
+        if (turnKey && turnKey === this._lastTurnKey) return;
+        if (turnKey) this._lastTurnKey = turnKey;
         this.msgCount += 1;
         if (this.msgCount % this.updateFreq !== 0 || this._updating) return;
+
+        // 后台云端闸：每 N 轮的状态生成本身是一次云调用，静默/预算关/配额熔断时不许发。
+        // 跳过时把游标退回去 —— 这段「已到更新点」的现场不能被吃掉；闸放开后下一轮就补上
+        // （否则要再白等 N 轮，用户看到的是「关了再开，状态还是旧的」）。
+        const gate = backgroundLLM.ensureCanRun(this.context, { kind: 'dynamic-persona' });
+        if (!gate.ok) {
+            this.msgCount -= 1;
+            return;
+        }
 
         const hour = new Date().getHours();
         const timeStr = hour < 6 ? '深夜' : hour < 12 ? '上午' : hour < 18 ? '下午' : hour < 22 ? '晚上' : '深夜';

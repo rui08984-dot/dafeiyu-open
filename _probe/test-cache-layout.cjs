@@ -29,6 +29,7 @@ function ok(name, cond, detail) {
     fail += 1;
     console.error('  ✗ ' + name + (detail ? ' — ' + detail : ''));
 }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function main() {
 // ── ① 纯函数 ─────────────────────────────────────────────────────────────
@@ -146,54 +147,216 @@ async function main() {
     ok('移除后收集为空', PC.collectVolatilePromptPatches().length === 0);
 }
 
-// ── ②b 上下文压缩必须带回差（不是每轮都压）────────────────────────────────
-// 实测真 bug：配置 24 条触发 / 保留 8 轮，压完却是 27 条 > 24 → 每轮都压，
-// 每轮改写 history → 缓存永远只剩 system+tools 那段。
+// ── ②b 上下文压缩：history-only token 触发 + token 回差（2026-11-24 P0-2）─────
+// 旧实现是条数触发 max(24,(sys+1+keep*2)*4)=72，配置写 24 是假值；
+// 新实现只算 history token（不含 system/tools/易变尾巴），并要求比上次压完再涨 4k。
 {
     const Compressor = require(path.join(LIVE, 'plugins', 'built-in', 'context-compressor', 'index.js'));
-    const mk = (nSys, nOther) => {
+    const mk = (nSys, nOther, chars) => {
         const msgs = [];
         for (let i = 0; i < nSys; i += 1) msgs.push({ role: 'system', content: 'S' + i });
-        for (let i = 0; i < nOther; i += 1) msgs.push({ role: i % 2 ? 'assistant' : 'user', content: 'M' + i });
+        for (let i = 0; i < nOther; i += 1) {
+            msgs.push({ role: i % 2 ? 'assistant' : 'user', content: 'M' + i + '长'.repeat(chars || 0) });
+        }
         return msgs;
     };
-    const probe = (nSys, nOther) => {
+    const probe = async (msgs, cfg, lastAfter) => {
         const p = new Compressor();
         let called = 0;
-        p._compress = async () => { called += 1; };
+        // ADR-014：onLLMResponse 现在调 _generate（生成 → 持有或应用），不再是 _compress
+        p._generate = async () => { called += 1; };
+        p._lastCompressedHistoryTokens = lastAfter || 0;
         p.context = {
-            getPluginFileConfig: () => ({ trigger_threshold: 24, keep_recent: 8 }),
+            getPluginFileConfig: () => Object.assign({ history_token_budget: 8000, history_growth_min: 4000, keep_recent: 8 }, cfg || {}),
+            getConfig: () => ({}),
             log: () => {},
         };
-        global.voiceChat = { messages: mk(nSys, nOther) };
-        return p.onLLMResponse({ text: 'x' }).then(() => called);
+        global.voiceChat = { messages: msgs };
+        await p.onLLMResponse({ text: 'x' });
+        return called;
     };
-    // trigger = max(24, (11+1+16) × 4) = 112
-    ok('压缩：56 条不触发（用户拍板再拉长一倍）', (await probe(11, 45)) === 0);
-    ok('压缩：112 条触发', (await probe(11, 101)) === 1);
-    ok('压缩：压完 28 条后下一轮不再触发', (await probe(11, 17)) === 0);
+    // 100 条短消息：条数很多但 history token 很低 → 不压（旧条数口径会在这里误压）
+    ok('压缩：100 条短消息不触发（只看 history token）', (await probe(mk(1, 100, 0), {}, 0)) === 0);
+    // 30 条 × 300 字 ≈ 9k token > 8k → 压
+    ok('压缩：history ≥8k 触发', (await probe(mk(1, 30, 300), {}, 0)) === 1);
+    // 压完 7.8k、现在 9k → 只涨 1.2k < 4k → 不压
+    ok('压缩：回差不足不压（防每轮都压）', (await probe(mk(1, 30, 300), {}, 7800)) === 0);
+    // 压完 4k、现在 12k → 涨 8k ≥ 4k → 压
+    ok('压缩：回差满足再压', (await probe(mk(1, 40, 300), {}, 4000)) === 1);
+    // 消息太少不压（一条超大粘贴不触发）
+    ok('压缩：少于 8 条不压', (await probe(mk(1, 5, 2000), {}, 0)) === 0);
 
     // 压缩写回必须同时更新 facade（否则下一轮看到的还是旧数组 → 每轮都压）
     {
         const p = new Compressor();
         let stored = null;
-        const vc = { messages: mk(11, 40) };
+        const vc = { messages: mk(1, 40, 50) };
         vc.conversationCore = {
             setMessages: (m) => { stored = m; },
             getMessages: () => stored || vc.messages,
         };
         p.context = {
-            getPluginFileConfig: () => ({ trigger_threshold: 24, keep_recent: 8 }),
+            getPluginFileConfig: () => ({ history_token_budget: 8000, keep_recent: 8 }),
+            getConfig: () => ({}),
             log: () => {},
             callLLM: async () => '这段是摘要',
         };
         global.voiceChat = vc;
-        await p._compress(vc, { trigger_threshold: 24, keep_recent: 8, prompt: 'x' });
+        await p._compress(vc, { history_token_budget: 8000, keep_recent: 8, prompt: 'x' },
+            { historyTokensBefore: 12345, trigger: 'history_tokens' });
         ok('压缩：facade 与 core 指向同一份历史', vc.messages === vc.conversationCore.getMessages(),
             'facade=' + vc.messages.length + ' core=' + vc.conversationCore.getMessages().length);
-        ok('压缩：压完条数 = 11 system + 1 总结 + 16 近期 = 28', vc.messages.length === 28, 'len=' + vc.messages.length);
+        ok('压缩：压完条数 = 1 system + 1 总结 + 16 近期 = 18', vc.messages.length === 18, 'len=' + vc.messages.length);
+        ok('压缩记账：historyTokensBefore 保留', vc._lastCompression.historyTokensBefore === 12345);
+        ok('压缩记账：historyTokensAfter > 0', vc._lastCompression.historyTokensAfter > 0,
+            String(vc._lastCompression.historyTokensAfter));
+        ok('压缩回差基准已更新为压后实测值', p._lastCompressedHistoryTokens === vc._lastCompression.historyTokensAfter,
+            'base=' + p._lastCompressedHistoryTokens + ' after=' + vc._lastCompression.historyTokensAfter);
+    }
+
+    // 压缩失败退避：_generate 抛错后，短时间内不再试（否则 429 期间每轮撞一次）
+    {
+        const p = new Compressor();
+        let called = 0;
+        p._generate = async () => { called += 1; throw new Error('LLM API error: 429'); };
+        p.context = {
+            getPluginFileConfig: () => ({ history_token_budget: 100, history_growth_min: 50 }),
+            getConfig: () => ({}),
+            log: () => {},
+        };
+        global.voiceChat = { messages: mk(1, 30, 100) };
+        await p.onLLMResponse({ text: 'x' });
+        await new Promise((r) => setTimeout(r, 20));
+        const first = called;
+        await p.onLLMResponse({ text: 'x' });
+        await new Promise((r) => setTimeout(r, 20));
+        ok('压缩失败后退避：短时间内不再调', called === first && p._nextAttemptAt > Date.now(),
+            'calls=' + called + ' next=' + p._nextAttemptAt);
     }
     delete global.voiceChat;
+}
+
+// ── ②b1 工具顺序稳定（ADR-014 轨道 1：tools 紧跟 system，换序会整段 miss）──────
+{
+    const AU = require(path.join(LIVE, 'js', 'api-utils.js'));
+    const t = (n) => ({ type: 'function', function: { name: n, description: 'desc-' + n } });
+    const names = (list) => list.map((x) => x.function.name);
+    const sorted = (arr) => arr.every((n, i) => i === 0 || arr[i - 1] <= n);
+
+    global.mcpManager = { isEnabled: true, getToolsForLLM: () => [t('zeta'), t('alpha')] };
+    global.pluginManager = { getAllTools: () => [t('mike'), t('bravo')] };
+    const a = AU.getMergedToolsList();
+
+    // 换输入顺序（模拟 MCP 连接顺序变化 / 插件热重载）
+    global.mcpManager.getToolsForLLM = () => [t('alpha'), t('zeta')];
+    global.pluginManager.getAllTools = () => [t('bravo'), t('mike')];
+    const b = AU.getMergedToolsList();
+
+    ok('工具排序：不同输入顺序 → 同一输出顺序', JSON.stringify(names(a)) === JSON.stringify(names(b)),
+        names(a).join(','));
+    ok('工具排序：按 function.name 升序', sorted(names(a)), names(a).join(','));
+    ok('工具排序：内容没被改写（名字集合/描述一致）',
+        JSON.stringify(a) === JSON.stringify(b) && a.length === 4 && a.find((x) => x.function.name === 'zeta').function.description === 'desc-zeta');
+    ok('工具排序：两次调用整体 hash 一致（热重载前后前缀不变）',
+        JSON.stringify(a) === JSON.stringify(b));
+
+    // 同名工具保持原有先后（稳定排序），不合并
+    global.mcpManager.getToolsForLLM = () => [t('same'), t('same2')];
+    global.pluginManager.getAllTools = () => [t('same')];
+    const c = AU.getMergedToolsList();
+    ok('工具排序：同名不合并、数量不变', c.length === 3 && names(c).join(',') === 'same,same,same2', names(c).join(','));
+
+    delete global.mcpManager;
+    delete global.pluginManager;
+    delete globalThis.__toolBudgetWarned;
+}
+
+// ── ②b1b 缓存感知压缩：热缓存只持有，到 12k 才替换 ─────────────────────────
+{
+    const Compressor = require(path.join(LIVE, 'plugins', 'built-in', 'context-compressor', 'index.js'));
+    const UL = require(path.join(LIVE, 'js', 'core', 'usage-ledger.js'));
+    const CB = require(path.join(LIVE, 'js', 'core', 'context-budget.js'));
+    const mk = (n) => {
+        const out = [{ role: 'system', content: 'S' }];
+        for (let i = 0; i < n; i += 1) out.push({ role: i % 2 ? 'assistant' : 'user', content: 'M' + i + '长'.repeat(300) });
+        return out;
+    };
+    const vc = { messages: mk(30) };
+    vc.conversationCore = { setMessages: (m) => { vc.messages = m; }, getMessages: () => vc.messages };
+    global.voiceChat = vc;
+
+    // 热缓存：把「上一轮真实响应」摆成当前消息的基线
+    const est = CB.measure({ messages: vc.messages, tools: [] });
+    UL.setLastUsage({
+        at: Date.now(), label: 'main', msgCount: vc.messages.length,
+        msgHashes: UL.fingerprints(vc.messages), toolHash: UL.toolHash([]),
+        estimated: est, prompt_tokens: est.total,
+    });
+
+    const p = new Compressor();
+    p.context = {
+        getPluginFileConfig: () => ({ history_token_budget: 8000, history_growth_min: 4000, apply_at: 12000, max_hold_turns: 3, keep_recent: 4 }),
+        getConfig: () => ({}),
+        log: () => {},
+        callLLM: async () => '摘要X',
+    };
+    const len0 = vc.messages.length;
+    const body0 = vc.messages.map((m) => m.content).join('\u0001');
+    await p.onLLMResponse({ text: 'x' });
+    await sleep(20);
+    ok('缓存感知：热缓存下 8k 只持有（messages 一字不改）',
+        vc.messages.length === len0 && vc.messages.map((m) => m.content).join('\u0001') === body0
+        && !!p._pending && !vc._lastCompression);
+
+    for (let i = 0; i < 12; i += 1) vc.messages.push({ role: i % 2 ? 'assistant' : 'user', content: '增' + i + '长'.repeat(300) });
+    await p.onLLMResponse({ text: 'x' });
+    await sleep(20);
+    const comp = vc._lastCompression;
+    ok('缓存感知：到 12k 应用（held/apply_at，结构=总结+尾部）',
+        !!comp && comp.trigger === 'held' && comp.reason === 'apply_at'
+        && vc.messages[1].content.startsWith('[历史对话总结]')
+        && comp.truePostTokens === comp.historyTokensAfter,
+        comp && (comp.trigger + '/' + comp.reason));
+
+    UL.clearLastUsage();
+    delete global.voiceChat;
+}
+
+// ── ②b2 易变尾巴行级去重（memos /search 与 memory-recall 双路重叠）──────────
+{
+    const msgs = [{ role: 'user', content: '问句' }];
+    const res = PL.appendVolatile(msgs, [
+        '【已知记忆A】\n1. 他对香菜过敏，不能吃\n2. 他下周三要去面试',
+        '【已知记忆B】\n1. 他对香菜过敏，不能吃\n3. 他养了一只猫',
+    ]);
+    const body = String(msgs[0].content);
+    ok('行级去重：重复记忆行只出现一次', (body.match(/他对香菜过敏/g) || []).length === 1,
+        body.slice(-200));
+    ok('行级去重：各自独有的行保留', body.includes('下周三要去面试') && body.includes('养了一只猫'));
+    ok('行级去重：段计数按剩余段（2 段都有独有内容）', res.count === 2, 'count=' + res.count);
+    const msgs2 = [{ role: 'user', content: '问' }];
+    PL.appendVolatile(msgs2, [
+        '【A】\n- 他下周三要去面试\n- 他养了一只猫',
+        '【B】\n1. 他下周三要去面试\n2. 他养了一只猫',
+    ]);
+    ok('行级去重：符号/序号不同也能认出同一行', (String(msgs2[0].content).match(/下周三要去面试/g) || []).length === 1,
+        String(msgs2[0].content).slice(-200));
+    delete global.voiceChat;
+}
+
+// ── ②b3 易变输入变化不得改 system 指纹（前缀缓存的地基）────────────────────
+{
+    const build = (vol) => {
+        const msgs = [{ role: 'system', content: '人设' + require(path.join(LIVE, 'js', 'ai', 'mood-line.js')).MOOD_INSTRUCTION },
+            { role: 'user', content: '问句' }];
+        PL.appendVolatile(msgs, [vol]);
+        return { sys: PL.systemText(msgs), hash: PL.hashText(PL.systemText(msgs)), user: String(msgs[1].content) };
+    };
+    const a = build('世界行：他在写代码');
+    const b = build('世界行：他在看视频');
+    ok('易变输入变化不影响 system 指纹（前缀缓存稳定）', a.hash === b.hash && a.sys === b.sys,
+        a.hash + ' vs ' + b.hash);
+    ok('两份易变输入确实不同（对照）', a.user !== b.user);
 }
 
 // ── ②c 滑动窗口裁剪也要带回差（否则每轮改写 history 前缀）────────────────
@@ -209,7 +372,8 @@ async function main() {
         return { vc, cm: new ContextManager(vc) };
     };
 
-    // hardTrigger = max(24+8, 96) = 96（总条数，含 system）
+    // 生产 max_messages=16：history >8k 时 48 条闸，否则 96 条闸 + 24k token 兜底。
+    // 本用例用 maxContextMessages=24（4× = 96），所以 30 条不动、100 条裁。
     const a = mk(30);
     a.cm.trimMessages();
     ok('裁剪：30 条不动（回差内，history 只增不改）', a.vc.messages.length === 31, 'len=' + a.vc.messages.length);

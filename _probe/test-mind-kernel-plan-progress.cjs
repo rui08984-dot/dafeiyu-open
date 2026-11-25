@@ -18,6 +18,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+// 数据根隔离（A2 同款，2026-11-24）：⑨ 的 generatePlan 要过后台花费闸（llm-health 读
+// RECORDS_DIR/LLM健康.json）。不隔离的话，宿主配额暂停期间本测试会整片变红。**先于 require**。
+process.env.PET_DATA_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'mk-plan-prog-root-'));
+
 const PLUGIN_DIR = path.join(__dirname, '..', '_incoming', 'my-neuro', 'live-2d', 'plugins', 'community', 'mind-kernel');
 const MindKernelPlugin = require(path.join(PLUGIN_DIR, 'index.js'));
 const planStore = require(path.join(PLUGIN_DIR, 'lib', 'plan-store.js'));

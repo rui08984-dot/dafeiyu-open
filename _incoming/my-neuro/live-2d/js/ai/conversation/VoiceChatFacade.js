@@ -96,8 +96,6 @@ class VoiceChatFacade {
         // 创建输入路由
         this.inputRouter = new InputRouter(
             this.conversationCore,
-            null,
-            null,
             this.memosClient,
             this.config
         );
@@ -116,15 +114,6 @@ class VoiceChatFacade {
 
         // 创建上下文管理器
         this.contextManager = new ContextManager(this);
-
-        // 创建上下文压缩器（此前从未实例化过——rolling summary / 阈值压缩两条路径从此激活）
-        try {
-            const { ContextCompressor } = require('../ContextCompressor.js');
-            this.contextCompressor = new ContextCompressor(this, this.config);
-        } catch (error) {
-            console.error('ContextCompressor 初始化失败（rolling summary 不可用）:', error.message);
-            this.contextCompressor = null;
-        }
 
         // 执行异步初始化
         this.initializeAsync();

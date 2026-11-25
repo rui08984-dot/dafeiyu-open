@@ -100,6 +100,13 @@ async function handleAPIError(response) {
     }
 
     let errorMessage = "";
+    // 429 优先显示上游原话：2026-11-24 实测 429 的真因是「套餐周配额用完」，
+    // 旧文案「请求过于频繁」会把人带向「等一会儿再试」，而实际要等到重置时刻。
+    let apiMsg = '';
+    try {
+        const j = JSON.parse(errorDetail);
+        apiMsg = String((j && j.error && j.error.message) || (j && j.message) || '');
+    } catch (e) { apiMsg = ''; }
     switch (response.status) {
         case 401:
             errorMessage = "API密钥验证失败，请检查你的API密钥";
@@ -111,7 +118,7 @@ async function handleAPIError(response) {
             errorMessage = "API接口未找到，请检查API地址";
             break;
         case 429:
-            errorMessage = "请求过于频繁，超出API限制";
+            errorMessage = apiMsg ? `额度/限流：${apiMsg.slice(0, 240)}` : "请求过于频繁，超出API限制";
             break;
         case 500:
         case 502:
@@ -123,7 +130,30 @@ async function handleAPIError(response) {
             errorMessage = `API错误: ${response.status} ${response.statusText}`;
     }
 
-    throw new Error(`${errorMessage}\n详细信息: ${errorDetail}`);
+    // 2026-11-24：把状态/响应体/重置时刻挂到 Error 上，让 llm-health 能区分
+    // 「周配额用完」和「普通限流」，也方便 doctor 直接显示。
+    const err = new Error(`${errorMessage}\n详细信息: ${errorDetail}`);
+    try {
+        err.status = response.status;
+        err.body = String(errorDetail).slice(0, 2000);
+        const m = /resets?\s+at\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)/i.exec(errorDetail);
+        if (m) {
+            const t = Date.parse(m[1]);
+            if (Number.isFinite(t)) err.quotaResetAt = t;
+        } else {
+            let sec = NaN;
+            try { sec = Number(JSON.parse(errorDetail)?.retry_after); } catch (e) { sec = NaN; }
+            if (!Number.isFinite(sec)) {
+                try { sec = Number(response.headers && response.headers.get && response.headers.get('retry-after')); } catch (e) { sec = NaN; }
+            }
+            if (Number.isFinite(sec) && sec > 0) err.retryAfterMs = Math.round(sec * 1000);
+        }
+    } catch (e) { /* 附加信息失败不影响抛错 */ }
+    if (response.status === 429 || response.status >= 500) {
+        try { require('./core/llm-health.js').llmHealth.noteFailure(err); } catch (e) { /* 健康模块不可用不影响主链 */ }
+    }
+
+    throw err;
 }
 
 // 统一的工具列表合并函数
@@ -145,6 +175,22 @@ function getMergedToolsList() {
             allTools.push(...pluginTools);
         }
     }
+
+    // 工具顺序稳定（ADR-014 轨道 1）：上游按字节前缀复用缓存，而 tools 紧跟在 system 之后。
+    // MCP 按连接顺序、插件按加载顺序拼出来的列表，在「插件热重载 / 两个 MCP 服务谁先连上」
+    // 时会换序 —— 每次换序，它后面的整段 messages 缓存全部 miss。
+    // 这里按工具名稳定排序（同名保持原有先后，Node 的 sort 是稳定的），
+    // 工具内容/别名/语义一律不动；排序失败就保持原顺序，绝不影响工具可用性。
+    try {
+        const nameOf = (t) => String((t && (t.function && t.function.name)) || (t && t.name) || '');
+        allTools.sort((a, b) => {
+            const na = nameOf(a);
+            const nb = nameOf(b);
+            if (na < nb) return -1;
+            if (na > nb) return 1;
+            return 0;
+        });
+    } catch (e) { /* 排序失败不影响工具列表 */ }
 
     // 工具面体积哨兵（2026-11-15 六十三轮）：
     // 实测 29 个工具 ≈14.4k 字符，其中描述只占 18%、参数字段占 66% —— 想靠删描述瘦身收效很小，

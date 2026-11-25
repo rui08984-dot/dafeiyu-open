@@ -3,6 +3,14 @@ const { Plugin } = require('../../../js/core/plugin-base.js');
 const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+// ADR-014 轨道 1（2026-11-24）：stdout/stderr 超限时全文落 artifact，回执给预览 + 路径。
+// 她可以再用 `file read`（支持 offset/limit）分段读全文，不靠「已截断」三个字。
+const toolArtifact = require('../../../js/ai/tool-result-artifact.js');
+
+// 与 js/ai/tool-result-cap.js 的单条上限对齐：不超过 12k 就不会被二次截断。
+const MAX_OUTPUT_CHARS = 12000;
+const PREVIEW_HEAD = Math.floor(MAX_OUTPUT_CHARS * 0.7);
+const PREVIEW_TAIL = MAX_OUTPUT_CHARS - PREVIEW_HEAD;
 
 class CodeExecutorPlugin extends Plugin {
 
@@ -25,7 +33,7 @@ class CodeExecutorPlugin extends Plugin {
             type: 'function',
             function: {
                 name: 'code',
-                description: '执行 AI 生成的 Python 代码或装包：run 跑代码（数据处理/文件/网络/计算等），install 用配置的解释器装 Python 包——install 会改环境，只在用户明确要求时装。',
+                description: '执行 AI 生成的 Python 代码或装包：run 跑代码（数据处理/文件/网络/计算等），install 用配置的解释器装 Python 包——install 会改环境，只在用户明确要求时装。输出超过 12000 字符会落盘到 tool-artifacts 并返回「预览 + 完整路径」，需要细节用 file read 按 offset 分段读。',
                 parameters: {
                     type: 'object',
                     properties: {
@@ -56,6 +64,26 @@ class CodeExecutorPlugin extends Plugin {
             case 'install_packages': return await this._installPackages(p);
             default: throw new Error(`[code-executor] 不支持的工具: ${name}`);
         }
+    }
+
+    /**
+     * 输出超限处理（ADR-014）：全文落 artifact，回执只留头 70% + 尾 30%。
+     * 返回值本身仍是一段字符串（工具返回形状不变），路径写在截断标记里。
+     */
+    _capOutput(text) {
+        const s = String(text == null ? '' : text);
+        if (s.length <= MAX_OUTPUT_CHARS) return { text: s, artifactPath: null };
+        const art = toolArtifact.writeArtifact('code', s, { turnId: '' });
+        const target = art ? art.path : 'runtime.log';
+        const rough = '[输出过长，已截断 ' + s.length + ' 字符；完整输出已落盘：' + target
+            + '，可用 file read + offset 分段读]';
+        // 预留标记 + '\n…' + '…\n' 共 4 个字符（多留 2 个余量，避免末尾被二次 slice 掉）
+        const room = Math.max(0, MAX_OUTPUT_CHARS - rough.length - 6);
+        const head = s.slice(0, Math.floor(room * 0.7));
+        const tail = s.slice(-(room - Math.floor(room * 0.7)));
+        const out = head + '\n…' + rough + '…\n' + tail;
+        // 再兜一次：标记长度估算可能因多字节字符偏小，绝不超过单条上限（避免被二次截断）
+        return { text: out.length > MAX_OUTPUT_CHARS ? out.slice(0, MAX_OUTPUT_CHARS) : out, artifactPath: art ? art.path : null };
     }
 
     async _executeCode({ code, description = '执行AI生成的代码' }) {
@@ -97,7 +125,7 @@ if __name__ == '__main__':
             const py = String(this._python || 'py').trim();
             const command = py + ' "' + tempScriptPath + '"';
 
-            exec(command, { timeout: 60000, shell: isWindows ? 'cmd.exe' : '/bin/bash', env: { ...process.env, CONDA_DLL_SEARCH_MODIFICATION_ENABLE: '1' } }, (error, stdout, stderr) => {
+            exec(command, { timeout: 60000, shell: isWindows ? 'cmd.exe' : '/bin/bash', maxBuffer: 16 * 1024 * 1024, env: { ...process.env, CONDA_DLL_SEARCH_MODIFICATION_ENABLE: '1' } }, (error, stdout, stderr) => {
                 try { fs.unlinkSync(tempScriptPath); } catch (e) { try { __silentAudit.audit('index.js:74', e); } catch (e2) {} }
                 if (error) return reject(new Error(`代码执行失败: ${error.message}`));
                 try {
@@ -106,11 +134,11 @@ if __name__ == '__main__':
                         let output = `✅ ${result.description}\n`;
                         if (result.stdout) output += `\n📄 输出内容:\n${result.stdout}`;
                         if (result.stderr) output += `\n⚠️ 警告信息:\n${result.stderr}`;
-                        resolve(output);
+                        resolve(this._capOutput(output).text);
                     } else {
-                        resolve(`❌ 代码执行出错: ${result.error}\n\n🔍 错误详情:\n${result.traceback}`);
+                        resolve(this._capOutput(`❌ 代码执行出错: ${result.error}\n\n🔍 错误详情:\n${result.traceback}`).text);
                     }
-                } catch { resolve(`✅ 代码执行完成\n\n📄 原始输出:\n${stdout}`); }
+                } catch { resolve(this._capOutput(`✅ 代码执行完成\n\n📄 原始输出:\n${stdout}`).text); }
             });
         });
     }
@@ -123,9 +151,9 @@ if __name__ == '__main__':
             const py = String(this._python || 'py').trim();
             const command = py + ' -m pip install ' + packages;
 
-            exec(command, { timeout: 300000, shell: isWindows ? 'cmd.exe' : '/bin/bash', env: { ...process.env, CONDA_DLL_SEARCH_MODIFICATION_ENABLE: '1' } }, (error, stdout, stderr) => {
+            exec(command, { timeout: 300000, shell: isWindows ? 'cmd.exe' : '/bin/bash', maxBuffer: 16 * 1024 * 1024, env: { ...process.env, CONDA_DLL_SEARCH_MODIFICATION_ENABLE: '1' } }, (error, stdout, stderr) => {
                 if (error) return reject(new Error(`安装包失败: ${error.message}`));
-                resolve(`✅ 成功安装包: ${packages}\n\n📄 安装日志:\n${stdout}${stderr}`);
+                resolve(this._capOutput(`✅ 成功安装包: ${packages}\n\n📄 安装日志:\n${stdout}${stderr}`).text);
             });
         });
     }

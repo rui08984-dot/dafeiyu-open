@@ -315,14 +315,32 @@ export const TASKS = [
       const plan = [['7', ${RE_SEVEN}], ['+', ${RE_PLUS}], ['8', ${RE_EIGHT}], ['=', ${RE_EQ}]];
       const clicks = [];
       for (const [label, re] of plan) {
-        const snap = await call('see', { mode: 'tree', window: '计算器' });
-        const els = (snap.elements || []).map(e => String(e.name || ''));
-        const i = els.findIndex(n => re.test(n)) + 1;
-        if (!i) { clicks.push({ label, i, ok: false, error: '按钮没找到' }); continue; }
-        // 带 window 不是为了聚焦（计算器本来就在前台），而是给熔断一个明确的指纹目标：
-        // 不带窗口就只能退化成「所有窗口的矩形」，点按钮永远不改矩形 → 第 3 下必被误判成卡死。
-        const r = await call('act', { action: 'click', target: '#' + i, window: '计算器' });
-        clicks.push({ label, i, ok: !!(r && r.ok), detail: r && r.detail, effect: r && r.effect });
+        // 每次点击都重新 see；若这次点击被拒为 STALE_SNAPSHOT（see 与 click 之间被别的
+        // 快照/门禁并发顶掉，编号已不属于模型看到的那份快照），重新 see 再点一次
+        // （最多 2 次尝试）。最终用的是哪一代快照记进 snapshot_id，便于排障。
+        let rec = null;
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+          const snap = await call('see', { mode: 'tree', window: '计算器' });
+          const els = (snap.elements || []).map(e => String(e.name || ''));
+          const i = els.findIndex(n => re.test(n)) + 1;
+          if (!i) {
+            rec = { label, i, ok: false, error: '按钮没找到', attempt, snapshot_id: (snap && snap.snapshot_id) || null };
+            break;
+          }
+          // 带 window 不是为了聚焦（计算器本来就在前台），而是给熔断一个明确的指纹目标：
+          // 不带窗口就只能退化成「所有窗口的矩形」，点按钮永远不改矩形 → 第 3 下必被误判成卡死。
+          const r = await call('act', { action: 'click', target: '#' + i, window: '计算器' });
+          const stale = !!(r && (r.code === 'STALE_SNAPSHOT' || r.staleSnapshot === true));
+          rec = {
+            label, i, ok: !!(r && r.ok), detail: r && r.detail, effect: r && r.effect,
+            attempt, stale,
+            snapshot_id: (r && r.snapshot_id) || (snap && snap.snapshot_id) || null,
+            snapshot_age_ms: r && r.snapshot_age_ms,
+          };
+          if (!stale) break;
+          await sleep(80);
+        }
+        clicks.push(rec);
         await sleep(150);
       }
       T.clicks = clicks;

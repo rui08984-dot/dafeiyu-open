@@ -84,6 +84,172 @@ function _toolName(t) {
     return String((t.function && t.function.name) || t.name || '').toLowerCase();
 }
 
+// ══ 会话级工具子集（ADR-014 轨道 2-7，2026-11-24）══════════════════════════
+// 为什么不是每轮重选：DeepSeek 的前缀缓存按 tools 段命中。每轮换一次工具列表 =
+// 每次都 miss 整段 tools + 后续所有历史。所以「选一次、整个会话保持」，只有**模式变化**
+// （闲聊 → 打游戏 → 看视频 → 操控桌面）才重选。
+//
+// 模式 → 复用域（不新增工具，只从现有 DOMAINS 里挑）：
+//   chat    —— 不预设域，靠 ALWAYS_KEEP + 通用组；闲聊轮本身多半被 intent-router 省掉工具
+//   game    —— game/see/act/app/batch/knowledge/skill
+//   watch   —— cowatch/see/timeline/memory/recall/note/web_search
+//   control —— 桌面操控：see/act/app/file/clipboard/code/batch/dispatch/check_dispatch/skill
+// 核心永在（比 pickTools 的 ALWAYS_KEEP 更宽）：记忆/画像/笔记/世界状态 + see/act/app
+// —— 「看得到、点得到」是所有模式的基础能力，裁掉了就是静默劣化。
+const CORE_SESSION = /memory|note|recall|profile|pet_care|(^|,)\s*world\s*(,|$)|^(?:see|act|app)$/i;
+
+const MODE_CONTEXT = Object.freeze({
+    chat: { screenState: '', lastUserText: '' },
+    game: { screenState: 'game:运行中', lastUserText: '游戏 关卡 打一局' },
+    watch: { screenState: 'video:播放中', lastUserText: '看视频 一起看 剧情' },
+    control: { screenState: '', lastUserText: '' },
+});
+
+// 每个模式的**显式**工具集：不依赖关键词打分，避免「进了游戏还要靠正则命中」。
+// 只在 pickForSession 里并入，不改 pickTools 的原行为。
+const MODE_EXTRA_TOOLS = Object.freeze({
+    chat: [],
+    game: ['game', 'batch', 'knowledge', 'skill'],
+    watch: ['cowatch', 'timeline', 'web_search'],
+    control: ['file', 'clipboard', 'code', 'batch', 'dispatch_to_dsh', 'check_dispatch',
+        'dispatch_cancel', 'hand_action', 'skill', 'knowledge'],
+});
+
+const MIN_KEEP = 8;
+
+/** 从上下文推断模式：屏幕状态优先，其次控制意图，最后闲聊。 */
+function deriveMode(ctx) {
+    const c = ctx || {};
+    const want = String(c.mode || '').toLowerCase();
+    if (MODE_CONTEXT[want]) return want;
+    const state = String(c.screenState || '');
+    if (/^game/i.test(state)) return 'game';
+    if (/^video/i.test(state)) return 'watch';
+    if (c.control === true || /操控|桌面|窗口|点击|输入|执行/.test(String(c.lastUserText || ''))) return 'control';
+    return 'chat';
+}
+
+const _sessions = new Map();   // sessionKey → { mode, names: string[], domains: string[], dropped: number }
+
+/** 测试/热重载用：清空会话缓存。 */
+function resetSessions() {
+    _sessions.clear();
+}
+
+/**
+ * 会话级选择：同一 sessionKey + 同一模式 → 直接复用（保证前缀稳定）；
+ * 模式变化才重新打分。结果不足 minKeep 时用通用组、再按原顺序补齐。
+ *
+ * @param {Array} allTools 合并后的工具 schema 数组
+ * @param {{sessionKey?:string, mode?:string, screenState?:string, lastUserText?:string, control?:boolean}} ctx
+ * @returns {{tools:Array, domains:string[], mode:string, dropped:number, reused:boolean}}
+ */
+function pickForSession(allTools, ctx) {
+    const tools = Array.isArray(allTools) ? allTools : [];
+    const c = ctx || {};
+    const key = String(c.sessionKey || '__default__');
+    const mode = deriveMode(c);
+    const cached = _sessions.get(key);
+
+    if (cached && cached.mode === mode) {
+        // 复用：按缓存的名字过滤**当前** allTools（热重载后 schema 以新对象为准）。
+        const byName = new Map();
+        for (const t of tools) {
+            const n = _toolName(t);
+            if (n && !byName.has(n)) byName.set(n, t);
+        }
+        const kept = [];
+        let missing = 0;
+        for (const n of cached.names) {
+            const t = byName.get(n);
+            if (t) kept.push(t); else missing += 1;
+        }
+        // 工具面变了（插件卸载/改名）→ 缓存作废，重选一次，避免一直少给
+        if (!missing) {
+            return {
+                tools: kept,
+                domains: cached.domains.slice(),
+                mode,
+                dropped: tools.length - kept.length,
+                reused: true,
+            };
+        }
+        _sessions.delete(key);
+    }
+
+    const mctx = Object.assign({}, MODE_CONTEXT[mode] || {}, {
+        // 显式传来的上下文优先（屏幕状态/用户这句话比模式模板更具体）
+        screenState: c.screenState !== undefined && c.screenState !== '' ? c.screenState : (MODE_CONTEXT[mode] || {}).screenState,
+        lastUserText: c.lastUserText !== undefined && c.lastUserText !== '' ? c.lastUserText : (MODE_CONTEXT[mode] || {}).lastUserText,
+    });
+    const picked = pickTools(tools, mctx);
+
+    // 核心工具永在：pickTools 已经保证 ALWAYS_KEEP；这里再补 see/act/app + 本模式显式工具集。
+    const modeAllow = new Set((MODE_EXTRA_TOOLS[mode] || []).map((n) => n.toLowerCase()));
+    const out = [];
+    const have = new Set();
+    for (const t of picked.tools) {
+        const n = _toolName(t);
+        out.push(t);
+        if (n) have.add(n);
+    }
+    const addIfMissing = (t) => {
+        const n = _toolName(t);
+        if (!n) { out.push(t); return; }
+        if (have.has(n)) return;
+        // 只补核心或本模式显式工具，不把整张工具面倒回来
+        if (!CORE_SESSION.test(n) && !modeAllow.has(n)) return;
+        out.push(t);
+        have.add(n);
+    };
+    for (const t of tools) addIfMissing(t);
+
+    // 保底 minKeep：先通用组，再按原顺序补（绝不因筛选把工具面削到不可用）
+    if (out.length < MIN_KEEP) {
+        const byName = new Map();
+        for (const t of tools) {
+            const n = _toolName(t);
+            if (n && !byName.has(n)) byName.set(n, t);
+        }
+        for (const n of GENERIC_FILL) {
+            if (out.length >= MIN_KEEP) break;
+            if (have.has(n) || !byName.has(n)) continue;
+            out.push(byName.get(n));
+            have.add(n);
+        }
+        for (const t of tools) {
+            if (out.length >= MIN_KEEP) break;
+            const n = _toolName(t);
+            if (n && have.has(n)) continue;
+            out.push(t);
+            if (n) have.add(n);
+        }
+    }
+
+    // 保持 allTools 原顺序（顺序稳定 = 前缀稳定）
+    const order = new Map();
+    tools.forEach((t, i) => order.set(t, i));
+    out.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
+
+    const names = out.map(_toolName).filter(Boolean);
+    _sessions.set(key, { mode, names, domains: picked.domains.slice(), dropped: tools.length - out.length });
+    return { tools: out, domains: picked.domains.slice(), mode, dropped: tools.length - out.length, reused: false };
+}
+
+module.exports = {
+    pickTools,
+    pickForSession,
+    deriveMode,
+    resetSessions,
+    DOMAINS,
+    ALWAYS_KEEP,
+    GENERIC_FILL,
+    CORE_SESSION,
+    MIN_KEEP,
+    MODE_CONTEXT,
+    MODE_EXTRA_TOOLS,
+};
+
 /**
  * @param {Array} allTools 合并后的工具 schema 数组
  * @param {object} ctx { screenState, lastUserText }
@@ -124,5 +290,3 @@ function pickTools(allTools, ctx) {
     }
     return { tools: out, domains: active, dropped: allTools.length - out.length };
 }
-
-module.exports = { pickTools, DOMAINS, ALWAYS_KEEP, GENERIC_FILL };

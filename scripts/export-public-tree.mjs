@@ -303,6 +303,56 @@ function mustReplace(s, from, to, tag) {
 // ── JSON 净化 ───────────────────────────────────────────────────────────
 const clone = (v) => JSON.parse(JSON.stringify(v));
 
+// 模板实例值中性化：与 scripts/gen-config-example.mjs 同规则。
+// 公开发布时即便源 config.example.json 是旧产物，也要再兜一遍 ——
+// 个人隧道地址（natapp/ngrok…）、窗口坐标、界面/语音开关都不能进公开树。
+const TPL_ALLOWED_HOSTS = new Set(['example.com', '127.0.0.1', 'localhost', '::1', '0.0.0.0']);
+const TPL_INSTANCE_DEFAULTS = {
+  'ui.pet_window.x': 0,
+  'ui.pet_window.y': 0,
+  'ui.click_through_default': false,
+  'voice.duplex.backchannel_gate': false,
+  'ui.screen_extend.extend': false,
+  'ui.screen_extend.left': false,
+  'ui.screen_extend.right': true,
+};
+
+function tplHostAllowed(host) {
+  if (!host) return false;
+  return TPL_ALLOWED_HOSTS.has(host) || /(^|\.)example\.(com|org|net)$/.test(host);
+}
+
+function setDottedPath(obj, dotted, val) {
+  const parts = dotted.split('.');
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    if (!cur[parts[i]] || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
+    cur = cur[parts[i]];
+  }
+  cur[parts[parts.length - 1]] = val;
+}
+
+/** 遍历所有 http(s) 值：host 不在白名单的一律换成示例地址；再压实例键。 */
+function neutralizeTemplate(obj) {
+  const walk = (val) => {
+    if (Array.isArray(val)) return val.map(walk);
+    if (val && typeof val === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(val)) out[k] = walk(v);
+      return out;
+    }
+    if (typeof val === 'string' && /^https?:\/\//i.test(val)) {
+      let host = null;
+      try { host = new URL(val).hostname.replace(/^\[|\]$/g, '').toLowerCase(); } catch (e) { host = null; }
+      if (!tplHostAllowed(host)) return 'https://api.example.com/v1';
+    }
+    return val;
+  };
+  const out = walk(obj);
+  for (const [dotted, val] of Object.entries(TPL_INSTANCE_DEFAULTS)) setDottedPath(out, dotted, val);
+  return out;
+}
+
 function emptyForType(type) {
   const t = String(type || '').toLowerCase();
   if (t === 'bool' || t === 'boolean') return false;
@@ -359,6 +409,8 @@ function purifyJson(rel, text) {
   }
 
   if (/\/config\.example\.json$/.test(rel)) {
+    // 先中性化个人 URL / 窗口坐标 / 界面与语音实例开关（旧模板兜底），再整理工作区等字段。
+    obj = neutralizeTemplate(obj);
     if (!obj.dispatch || typeof obj.dispatch !== 'object') obj.dispatch = {};
     obj.dispatch.workspaces = { pet: '.' };
     obj.dispatch.defaultWorkspace = '.';

@@ -51,7 +51,7 @@ ok(!/toast\(`已保存：\$\{meta \? meta\.name : key\}\$\{meta && meta\.hot \? 
 // 审计更正（2026-11-23）：持有启动时配置快照的三项必须标「需重启」，不能再谎报热
 ok(/key:\s*'voice_style\.enabled'[^}\n]*hot:\s*false/.test(caps), 'voice.style 更正为需重启（TTS 缓存快照）');
 ok(/key:\s*'world_sense\.enabled'[^}\n]*hot:\s*false/.test(caps), 'vision.world_sense 更正为需重启（插件快照）');
-ok(/key:\s*'context\.token_budget'[^}\n]*hot:\s*false/.test(caps), 'ctx.token_budget 更正为需重启（插件快照）');
+ok(/key:\s*'context\.history_token_budget'[^}\n]*hot:\s*false/.test(caps), '上下文 history 压缩预算更正为需重启（插件快照）');
 
 // ② B5 语音四态门
 ok(/id: 'voice\.backchannel_gate'/.test(caps), 'B5 已登记能力项');

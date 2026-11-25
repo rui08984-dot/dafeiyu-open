@@ -85,6 +85,7 @@ export const UNITS = [
   { label: '回归 人格 OOC 判官（自嘲放行/具体纠正）', file: '_probe/test-persona-ooc.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '回归 主动性预算（成本/结算/反馈）', file: '_probe/test-speech-budget.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '回归 前缀缓存布局（易变不进 system）', file: '_probe/test-cache-layout.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '回归 轮内前缀冻结（工具循环逐字节复用/轮末清空/只增不改）', file: '_probe/test-volatile-freeze.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '回归 世界感知（状态机/TTL/世界行预算）', file: '_probe/test-world-store.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 RSS 去重与两阶段投递（URL/合簇/MMR/delivered）', file: '_probe/test-rss-dedup.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '回归 复读护栏+打断提示（易变尾巴）', file: '_probe/test-loop-guard.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
@@ -93,6 +94,7 @@ export const UNITS = [
   { label: '单测 对话现场（TTL/来源/接触锚点/E8 元数据）', file: '_probe/test-conversation-scene.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 对话连续性（她说完→你回复不判重逢）', file: '_probe/test-conversation-continuity.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 记忆脚手架过滤（主动提示词不写进记忆）', file: '_probe/test-memory-scaffold-filter.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 LLM 健康熔断（配额重置/指数退避/停当天/跨实例）', file: '_probe/test-llm-health.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 遗忘墓碑（忘掉后重建不再注入）', file: '_probe/test-forget-tombstones.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 落盘历史不按内容去重（同句话隔天也保留）', file: '_probe/test-history-dedupe.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 看屏上下文新鲜度（摘要 90s/离开 video 摘补丁/不补旧剧情）', file: '_probe/test-watch-staleness.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
@@ -146,6 +148,28 @@ export const UNITS = [
   { label: '单测 屏幕时间线（去重/跨天/搜索/7 天）', file: '_probe/test-screen-timeline.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 任务账本三态（自述≠已证实/终态保护）', file: '_probe/test-task-ledger.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 上下文预算（分层/估算/增长源）', file: '_probe/test-context-budget.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 用量账本（真账基线/缓存miss/7天聚合/80%边界）', file: '_probe/test-usage-ledger.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 缓存感知压缩（8k持有/12k应用/tail作废/冷缓存）', file: '_probe/test-compressor-cache-aware.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 工具回执上限（单条12k/单轮32k/幂等/成对）', file: '_probe/test-tool-result-cap.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 工具续读（artifact/file offset/see 分页/code/web）', file: '_probe/test-tool-continuation.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 工具子集（会话稳定/模式切换/核心保底/默认关）', file: '_probe/test-tool-subset.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 画像渲染预算（10/字段/按需全文/看屏90）', file: '_probe/test-profile-render-budget.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 看屏预算（唯一数字源/配置优先/旧220归一）', file: '_probe/test-watch-screen-budget.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 doctor 判据（缓存样本/账本覆盖/本地模型/易变稳定/端点分级）', file: '_probe/test-doctor-judge.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 本地记忆模型（provider/probe/chat/episode本地反思云/写队列闸）', file: '_probe/test-local-llm.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 片段卡结构化输出（schema/严格校验/response_format 透传/400 降级）', file: '_probe/test-episode-schema.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  // 2026-11-24 第三轮（HANDOFF §8.3/§8.5）：云端调用收口到账本 + retry 真接线 + 单一压缩器。
+  { label: '单测 LLM 账本覆盖（ai-log 走 callLLM/流式无 usage 估算/本地 source=local）', file: '_probe/test-llm-usage-coverage.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 LLM 重试（5xx 重试/429 不重试/流式中途不重放/退避/配置生效）', file: '_probe/test-llm-retry.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 发送前清理不截断工具回执（12k 原样/控制字符/配对/name 语义）', file: '_probe/test-llm-tool-passthrough.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '回归 单一压缩器（rolling 已删/只有插件写历史总结/走 callLLM）', file: '_probe/test-single-compressor.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  // 2026-11-24 第三轮（HANDOFF §8.5）：闸/补丁/快照身份。
+  { label: '单测 provider fail-closed（指定不存在→throw/不降级/非回环 warn）', file: '_probe/test-provider-fail-closed.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 后台花费闸（四插件不发请求/游标不动/quiet≠花钱）', file: '_probe/test-background-gates.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  // 2026-11-24 第四轮 P2：陪伴提示时间戳必须绕过节流立即落盘（重启后不重复提示）
+  { label: '单测 陪伴提示落盘（节流窗口内立即写 lastPromptAt/重启读回）', file: '_probe/test-companion-prompt-persist.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 可见补丁 volatile（system 不变/可撤）', file: '_probe/test-visible-patches-volatile.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 快照身份（sid/hwnd 不一致拒绝/超龄/夹具重试）', file: '_probe/test-snapshot-identity.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   // ── D 系列体验（2026-11-22）──
   { label: '单测 每日成绩单（四源/≤120字/可撤销调整/无数据0token）', file: '_probe/test-daily-report.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 待发意图队列（容量/TTL/情境指纹/补说≤1）', file: '_probe/test-intent-queue.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
@@ -154,7 +178,12 @@ export const UNITS = [
   { label: '单测 策略门（高危表/无人值守/覆盖/留痕无明文）', file: '_probe/test-policy.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 MCP 策略门下沉（拒绝回执/审计一次/无明文）', file: '_probe/test-mcp-policy.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   // ── D5–D9（2026-11-22，子代理交付）──
-  { label: '单测 记忆兑现率（片段命中/90天降权/索引稳定）', file: '_probe/test-memory-usage.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 记忆兑现率（片段命中/实体共现/索引稳定）', file: '_probe/test-memory-usage.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 用户画像候选池归档（promoted 超龄/复活去重/闸）', file: '_probe/test-user-profile-archive.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  // ── F 系列本地模型质量收口（2026-11-24，HANDOFF §8.5）──
+  { label: '单测 画像类别归一化（枚举串/大小写/复数/同义词/兜底可观测）', file: '_probe/test-profile-category.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 日记通道（默认云/local_enabled/闸/空输出/不跨通道回退）', file: '_probe/test-diary-provider.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 记忆库卫生（惰性交互头/空占位清理/判官闸）', file: '_probe/test-memory-hygiene.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 导演调参（倍率夹幅/样本门/降太多回退）', file: '_probe/test-choreo-tune.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 交互状态机 shadow（只记 mismatch/不写回）', file: '_probe/test-interaction-state.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   // ── E3/E5/E6/E7/E4（2026-11-22，子代理交付 + 延迟预算）──
@@ -169,8 +198,18 @@ export const UNITS = [
   { label: '回归 aim 模拟闭环（真 provider+事实表）', file: '_probe/aim-sim-loop.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '回归 语义问答（注入覆盖 + 召回类）', file: '_probe/semantic-eval.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 自我身份清理（旧称/角色标签/迁移幂等/食物防误改）', file: '_probe/test-identity-clean.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  // ── 2026-11-25 第二轮审查 + 深测新增（此前未注册；实测均 <2s、离线）──
+  { label: '单测 前缀冻结风暴面（30 次工具迭代真 runTurn/上游字节稳定/兜底）', file: '_probe/test-freeze-storm.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 重试纯度（请求体逐字节一致/不改调用方数组/不污染账本）', file: '_probe/test-retry-purity.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 账本归因（turn_id/双写/200 错误体/doctor 覆盖回退）', file: '_probe/test-usage-attribution.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 工具回执续读组合（12k 截断×artifact 通道/code/MCP）', file: '_probe/test-tool-result-continuation.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 上下文背压（关条数限制也按 token 裁/优先级/审计账）', file: '_probe/test-context-backpressure.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 易变尾巴边界（确定性截断/行级去重/代理对/幂等）', file: '_probe/test-volatile-edge.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 插件契约（provider 解析不到 fail-closed/本地走 resolve 真相源）', file: '_probe/test-plugin-contracts.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 模板 URL 白名单（泛域名/凭据绕过/实例值中性化）', file: '_probe/test-template-url-whitelist.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
 
   // ── core：自起服务 / 真实数据 / 中速（默认串行）────────────────────────
+  { label: '单测 UI 配置接线（能力页↔config↔控制中心/真盘键与模板一致）', file: '_probe/test-ui-config-wiring.cjs', tier: 'core', needsHost: null, parallelSafe: false },
   { label: '回归 语义语气默认关闭（真实请求体无 prosody_gain）', file: '_probe/voice-style-inert.mjs', tier: 'core', needsHost: null, parallelSafe: false },
   { label: '验收 LumenAct 语义服务端到端（自启+延迟+映射）', file: '_probe/lumen-semantic-e2e.mjs', tier: 'core', needsHost: null, parallelSafe: false },
   { label: '单测 游戏检测（合成图）', file: '_probe/test-game-detector.cjs', tier: 'core', needsHost: null, parallelSafe: false },

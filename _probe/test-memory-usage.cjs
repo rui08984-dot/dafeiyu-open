@@ -300,6 +300,94 @@ function injectMany(usage, items) {
   ok('回复结算接线仍在（memoryUsage.noteUsed）', llmSrc.includes('memoryUsage.noteUsed'));
   ok('插件 onTTSStart 兜底仍在', recallSrc.includes('async onTTSStart') && recallSrc.includes('memoryUsage.noteUsed'));
 
+  // ── ⑧ 双路判定（2026-11-24）：fragment / entity / unknown ──────────────
+  // 动机（§9.3-⑤）：提示词要求「不要逐条复述」，旧判定却只认 ≥6 字原样片段 →
+  // 148 条记录 used 恒 0。现在原样片段仍是强信号，但内容 token 共现也算用上。
+  {
+    // 纯函数口径：entity 能认「换了个说法但提到同一个东西」
+    const v1 = MU.judgeUsage('我对香菜过敏', '你上次说吃香菜会难受');
+    ok('entity：记忆「我对香菜过敏」+ 回复提「香菜」→ used', v1.used && v1.method === 'entity',
+      JSON.stringify(v1));
+    const v2 = MU.judgeUsage('下周三要去面试', '面试准备得怎么样');
+    ok('entity：记忆「下周三要去面试」+ 回复「面试准备」→ used', v2.used && v2.method === 'entity',
+      JSON.stringify(v2));
+    const v3 = MU.judgeUsage('今天天气晴', '我不太清楚');
+    ok('entity：无共现实词（天气晴 vs 不清楚）→ 不是 used', v3.used === false && v3.verdict === 'not-used',
+      JSON.stringify(v3));
+    const v4 = MU.judgeUsage('今天天气晴', '好的我知道了谢谢你');
+    ok('entity：回复全是停用词/寒暄 → 不是 used', v4.used === false, JSON.stringify(v4));
+    const v5 = MU.judgeUsage('我对香菜过敏', '');
+    ok('空回复 → unknown（不算 miss）', v5.verdict === 'unknown' && v5.reason === 'empty-text', JSON.stringify(v5));
+    const v6 = MU.judgeUsage('我对香菜过敏', '哦');
+    ok('过短回复 → unknown（不算 miss）', v6.verdict === 'unknown' && v6.reason === 'too-short', JSON.stringify(v6));
+    const v7 = MU.judgeUsage('我对香菜过敏', '你上次说我对香菜过敏吧', MU.extractFragments('我对香菜过敏'));
+    ok('原样 ≥6 字片段仍然是 used(fragment)', v7.used && v7.method === 'fragment' && v7.fragment === '我对香菜过敏',
+      JSON.stringify(v7));
+    const v8 = MU.judgeUsage('约在下周三下午三点在城西咖啡馆见', '周三下午三点那家店');
+    ok('数字/时间类强实体命中即 used', v8.used && v8.method === 'entity', JSON.stringify(v8));
+
+    // 停用词表覆盖需求点名的那批词
+    const need = ['今天', '我们', '可以', '什么', '就是', '知道', '一个', '这个', '那个', '时候',
+      '然后', '因为', '所以', '但是', '还是', '已经', '现在', '自己', '觉得', '应该',
+      '可能', '不是', '没有', '这样', '那样', '一点', '有点', '真的', '其实', '如果', '东西', '事情'];
+    ok('停用词覆盖需求清单（32 词）', need.every((w) => MU.ENTITY_STOPWORDS.has(w)),
+      need.filter((w) => !MU.ENTITY_STOPWORDS.has(w)).join(',') || '全覆盖');
+    const toks = MU.entityTokens('今天我们自己觉得这个真的有点东西');
+    ok('停用词不会进记忆 token', toks.length === 0, toks.map((t) => t.text).join(',') || '(空)');
+
+    // 走实例：matched 记录带 method/tokens，且 used 会真的加一
+    const u9 = makeUsage('entity.json', { now: () => T0 });
+    injectMany(u9, [
+      { source: '事实', text: '我对香菜过敏', at: T0, role: 'fact' },
+      { source: '事实', text: '下周三要去面试', at: T0, role: 'fact' },
+    ]);
+    const r9 = u9.noteUsed({ text: '你上次说吃香菜会难受，面试准备得怎么样？', at: T0 + 1000 });
+    ok('实例结算：两条 entity 命中都记 used', r9.used === 2, JSON.stringify(r9.matched));
+    ok('matched 记录带 method=entity 与 tokens',
+      r9.matched.every((m) => m.method === 'entity' && Array.isArray(m.tokens) && m.tokens.length > 0),
+      JSON.stringify(r9.matched));
+    ok('matched 保留旧字段 source/fragment（fragment 为 null）',
+      r9.matched.every((m) => typeof m.source === 'string' && m.fragment === null), JSON.stringify(r9.matched));
+
+    // unknown 不污染分母/分子
+    const u10 = makeUsage('unknown.json', { now: () => T0 });
+    inject(u10, '事实', '我对香菜过敏', T0, 'fact');
+    const r10 = u10.noteUsed({ text: '嗯', at: T0 + 1000 });
+    const s10 = u10.stats({ at: T0 + 2000 });
+    ok('unknown 不增 used、仍只记注入 1 次', r10.verdict === 'unknown' && s10.bySource['事实'].used === 0
+      && s10.bySource['事实'].injected === 1, JSON.stringify({ r10, 事实: s10.bySource['事实'] }));
+
+    // 落盘重启后 tokens 仍在：entity 判定不依赖内存里的全文
+    const u11 = makeUsage('persist-entity.json', { now: () => T0 });
+    inject(u11, '事实', '我对香菜过敏', T0, 'fact');
+    u11.noteUsed({ text: '吃香菜会难受吗', at: T0 + 1000 });
+    const u11b = MU.createMemoryUsage({ file: path.join(ROOT, 'persist-entity.json'), now: () => T0 });
+    const stored = Object.values(JSON.parse(fs.readFileSync(path.join(ROOT, 'persist-entity.json'), 'utf8')).entries)[0];
+    ok('tokens 随条目落盘（重启后仍可判）', Array.isArray(stored.tokens) && stored.tokens.includes('c:香菜'),
+      JSON.stringify(stored.tokens));
+    ok('落盘条目记录了 lastMethod', stored.lastMethod === 'entity' && u11b.stats({ at: T0 }).total.used === 1,
+      String(stored.lastMethod));
+
+    // 老记录兼容：没有 tokens/lastMethod 字段的条目也能读、能判（退回 preview 抽 token）
+    const legacyFile = path.join(ROOT, 'legacy-usage.json');
+    iso.assertIsolated(legacyFile);
+    fs.writeFileSync(legacyFile, JSON.stringify({
+      version: 1, createdAt: T0, updatedAt: T0,
+      entries: {
+        old1: {
+          id: 'old1', src: '事实', role: 'fact', preview: MU.normalizeText('我对香菜过敏'),
+          fragments: MU.extractFragments('我对香菜过敏'), injected: 3, used: 0,
+          firstAt: T0, lastInjectedAt: T0, lastUsedAt: 0, decayed: false, batch: '', usedBatch: '',
+        },
+      },
+    }), 'utf8');
+    const u12 = MU.createMemoryUsage({ file: legacyFile, now: () => T0 });
+    u12.noteInjected({ entries: [{ id: 'old1', source: '事实', role: 'fact' }], at: T0 });
+    const r12 = u12.noteUsed({ text: '香菜吃多了会难受', at: T0 + 1000 });
+    ok('老记录（无 tokens 字段）仍能读并能判', r12.used === 1 && r12.matched[0].method === 'entity',
+      JSON.stringify(r12));
+  }
+
   iso.cleanup(TMP);
   console.log('\n  记忆兑现率：' + pass + ' 通过 / ' + fail + ' 失败');
   process.exit(fail ? 1 : 0);

@@ -19,6 +19,10 @@
 //   ⑦ 每个 provider 的 api_key 都是占位符
 //   ⑧ 模板全文不含任何实盘密钥值（逐值比对；只报字段路径，绝不打印值）
 //   ⑨ 模板里没有 sk- / JWT 形态的密钥串
+//   ⑩ 模板里所有 http(s) URL 的 host 在白名单（example.com/127.0.0.1/localhost…）
+//   ⑪ 已知实例键等于代码默认值（不是实盘快照：窗口坐标/点击穿透/语音四态/多屏延伸）
+//   ⑫ 生成器 URL 兜底：键名不像 URL（proxy）但值是 URL 也会被中性化
+//   ⑬ 生成器 URL 兜底：嵌套在 callback 等任意键下的 URL 同样会被中性化
 //
 // 为什么不用「长度>40 且高熵」的通用启发式：实盘里的
 // `cloud.tts.voice` / `cloud.aliyun_tts.voice` 是语音 ID（本身就是长随机串），
@@ -30,6 +34,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  scrubInstanceUrls as scrubInstanceUrlsForTest,
+  URL_PLACEHOLDER,
+} from '../scripts/gen-config-example.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const APP = path.join(ROOT, '_incoming', 'my-neuro', 'live-2d');
@@ -47,6 +55,25 @@ const SENSITIVE = /key|token|secret|password|credential/i;
 const SENSITIVE_EXCEPTIONS = new Set(['ptt_key']);
 const IGNORE_ROOT = '_deprecated';
 const MIN_SECRET_LEN = 6;
+
+// ── 实例值中性化（2026-11-24 P0）──────────────────────────────────────
+// 模板可以公开，但**不能是「这台机器」的快照**：个人隧道地址、窗口坐标、
+// 界面/语音开关都属于运行实例，clone 的人照抄只会莫名其妙。
+// 门禁两条：⑩ 所有 http(s) URL 的 host 必须在白名单；⑪ 已知实例键必须等于代码默认。
+// 与 scripts/gen-config-example.mjs 的 ALLOWED_URL_HOSTS / INSTANCE_DEFAULTS 同步。
+// 2026-11-25 P2-11：生成器已改为「扫所有 string 值里的 http(s)」，不再依赖 URL 键名；
+// ⑫⑬ 用合成样本直接断言 proxy/callback 这类键也会被替换。
+const ALLOWED_URL_HOSTS = new Set(['example.com', '127.0.0.1', 'localhost', '::1', '0.0.0.0']);
+const TUNNEL_RE = /natapp|ngrok|trycloudflare|localtunnel|serveo/i;
+const INSTANCE_DEFAULTS = {
+  'ui.pet_window.x': 0,
+  'ui.pet_window.y': 0,
+  'ui.click_through_default': false,
+  'voice.duplex.backchannel_gate': false,
+  'ui.screen_extend.extend': false,
+  'ui.screen_extend.left': false,
+  'ui.screen_extend.right': true,
+};
 
 let pass = 0;
 let fail = 0;
@@ -94,6 +121,34 @@ function getPath(obj, dotted) {
   return String(dotted)
     .split('.')
     .reduce((acc, k) => (acc === null || acc === undefined ? undefined : acc[k]), obj);
+}
+
+/** 收集所有 http(s) 叶子值（路径 + host）；值本身不打印。 */
+function collectHttpUrls(value, p = '', out = []) {
+  if (isPlainObject(value)) {
+    for (const [k, v] of Object.entries(value)) collectHttpUrls(v, p ? `${p}.${k}` : k, out);
+    return out;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((v, i) => collectHttpUrls(v, `${p}[${i}]`, out));
+    return out;
+  }
+  if (typeof value === 'string' && /^https?:\/\//i.test(value)) {
+    let host = null;
+    try {
+      host = new URL(value).hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    } catch (err) {
+      host = null;
+    }
+    out.push({ path: p, host });
+  }
+  return out;
+}
+
+function hostAllowed(host) {
+  if (!host) return false;
+  if (ALLOWED_URL_HOSTS.has(host)) return true;
+  return /(^|\.)example\.(com|org|net)$/.test(host);
 }
 
 function loadJson(file) {
@@ -366,6 +421,62 @@ if (!have.provReal || !have.provTpl) {
     logFail('模板无 sk-/JWT 形态密钥', `${hits.length} 处（值不打印）`, hits);
   } else {
     logPass('模板无 sk-/JWT 形态密钥', '未发现 sk- 前缀或 JWT 形态字符串');
+  }
+}
+
+// ── ⑩ 模板 URL 的 host 在允许集（不含个人隧道/私有域名）──────────────────
+{
+  if (!configTpl) {
+    logSkip('模板 URL host 在允许集', 'config.example.json 不存在或解析失败');
+  } else {
+    const urls = collectHttpUrls(configTpl, 'config.example');
+    const bad = urls.filter((u) => !hostAllowed(u.host));
+    if (bad.length) {
+      const items = bad.map((u) => {
+        const tunnel = u.host && TUNNEL_RE.test(u.host) ? '（个人隧道）' : '';
+        return `${u.path} 的 host=${u.host || '(无法解析)'}${tunnel} 不在允许集`;
+      });
+      logFail('模板 URL host 在允许集', `${bad.length}/${urls.length} 个 URL 需中性化`, items);
+    } else {
+      logPass('模板 URL host 在允许集', `${urls.length} 个 URL 均指向 example.com/本机`);
+    }
+  }
+}
+
+// ── ⑪ 已知实例键等于代码默认值（不是实盘快照）────────────────────────────
+{
+  if (!configTpl) {
+    logSkip('实例键为代码默认值', 'config.example.json 不存在或解析失败');
+  } else {
+    const bad = Object.entries(INSTANCE_DEFAULTS).filter(([p, want]) => {
+      const got = getPath(configTpl, p);
+      return JSON.stringify(got) !== JSON.stringify(want);
+    });
+    if (bad.length) {
+      logFail(
+        '实例键为代码默认值',
+        `${bad.length}/${Object.keys(INSTANCE_DEFAULTS).length} 个实例键仍是个人值`,
+        bad.map(([p, want]) => `${p} 期望 ${JSON.stringify(want)}，模板不是该值`),
+      );
+    } else {
+      logPass('实例键为代码默认值', `${Object.keys(INSTANCE_DEFAULTS).length} 个键均为中性默认`);
+    }
+  }
+}
+
+// ── ⑫–⑬ URL 兜底：键名不匹配也必须中性化（与 ⑩ 扫所有 URL 对称）──────────
+{
+  const cases = [
+    ['proxy', { proxy: 'http://ominifn.natapp1.cc/api' }, (o) => o.proxy],
+    ['callback', { callback: { notify: 'https://api.internal-corp.cn/hook' } }, (o) => o.callback.notify],
+  ];
+  for (const [label, sample, pick] of cases) {
+    const got = pick(scrubInstanceUrlsForTest(sample));
+    if (got === URL_PLACEHOLDER) {
+      logPass(`URL 兜底：${label} 键的值被中性化`, '键名不在 URL 白名单也会替换');
+    } else {
+      logFail(`URL 兜底：${label} 键的值被中性化`, '仍保留个人/私有 URL（生成器漏扫）');
+    }
   }
 }
 

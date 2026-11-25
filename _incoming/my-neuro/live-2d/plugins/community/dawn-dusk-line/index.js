@@ -23,6 +23,10 @@ const path = require('path');
 const http = require('http');
 const { createRequire } = require('module');
 const { Plugin } = require('../../../js/core/plugin-base.js');
+// 后台云端花费闸（2026-11-25 契约）：主动问候 / 话题重访 / 自主节目每一句都走
+// context.sendMessage（完整云调用）。quiet 只表示「不说话」，不是「不花钱」；
+// cost.background_llm=false 才是后台花费总开关 —— 两者必须都过。
+const backgroundLLM = require('../../../js/core/background-llm.js');
 
 const PATCH_ID = 'dawn-dusk-line-greeting';
 
@@ -267,18 +271,24 @@ class DawnDuskLinePlugin extends Plugin {
         return `发送时间: ${timestr} | ${calParts.join(', ')}`;
     }
 
-    _prependToLastUserMessage(messages, prefix) {
+    /**
+     * 旧宿主兜底：把环境行**追加到末尾**（2026-11-25 P2-6）。
+     * 历史缓存只允许尾部追加，禁止前插 —— 往最后一条 user 的**开头**插字会让
+     * usage-ledger 的易变块剥离（只剥 VOLATILE_HEADER 之后）失效，压缩触发退回估算。
+     * 新宿主走 request.addVolatile（prompt-layout 统一拼到尾），根本不用这个函数。
+     */
+    _appendToLastUserMessage(messages, suffix) {
         for (let i = messages.length - 1; i >= 0; i--) {
             if (messages[i].role !== 'user') continue;
             const msg = messages[i];
             if (typeof msg.content === 'string') {
-                msg.content = prefix + msg.content;
+                msg.content = msg.content + (msg.content ? '\n' : '') + suffix;
             } else if (Array.isArray(msg.content)) {
-                const textBlock = msg.content.find(c => c.type === 'text');
+                const textBlock = [...msg.content].reverse().find(c => c.type === 'text');
                 if (textBlock) {
-                    textBlock.text = prefix + (textBlock.text || '');
+                    textBlock.text = (textBlock.text || '') + '\n' + suffix;
                 } else {
-                    msg.content.unshift({ type: 'text', text: prefix });
+                    msg.content.push({ type: 'text', text: suffix });
                 }
             }
             return;
@@ -286,10 +296,14 @@ class DawnDuskLinePlugin extends Plugin {
     }
 
     async onLLMRequest(request) {
-        if (this._injectPerception && request.messages?.length) {
-            const line = this._buildPerceptionLine();
-            this._prependToLastUserMessage(request.messages, `[${line}]\n`);
+        if (!this._injectPerception || !request.messages?.length) return;
+        const line = `[${this._buildPerceptionLine()}]`;
+        // 时间/时段每轮都在变：只能走易变尾巴，禁止改最后一条 user 的开头。
+        if (typeof request.addVolatile === 'function') {
+            request.addVolatile(line);
+            return;
         }
+        this._appendToLastUserMessage(request.messages, line);
     }
 
     // ==================== 工具注册（取代 FC 工具） ====================
@@ -403,6 +417,16 @@ class DawnDuskLinePlugin extends Plugin {
                 this.context.log('info', '[晨昏之线] 静默模式，跳过主动问候');
                 return;
             }
+            // 后台花费闸（quiet 管「说不说」，这里管「花不花」）。跳过时**退回本小时的
+            // 已触发标记**：整点窗口只有 5 分钟，闸在这期间放开还能补发。
+            const bgGate = backgroundLLM.ensureCanRun(this.context, { kind: 'dawn-dusk-line' });
+            if (!bgGate.ok) {
+                try {
+                    const z = getZonedComponents(new Date(), this._timezone || 'Asia/Shanghai');
+                    if (this._firedHours) this._firedHours.delete(z.dateKey + '-' + hour);
+                } catch (e) { try { __silentAudit.audit('index.js:greeting-gate', e); } catch (e2) {} }
+                return;
+            }
             const arbiter = global.proactiveArbiter;
             const externalPolicy = arbiter?.externalSourcePolicy?.('dawn-dusk-line');
             if (externalPolicy === 'block') {
@@ -432,6 +456,8 @@ class DawnDuskLinePlugin extends Plugin {
     async _revisitSweep() {
         try {
             if (global.__petQuiet) return;   // 静默闸（省钱）
+            // 后台花费闸：话题重访会发一次完整 sendMessage（云 token）。
+            if (!backgroundLLM.ensureCanRun(this.context, { kind: 'dawn-dusk-line' }).ok) return;
             if (Date.now() - this._lastInteractionTime < Math.max(this._activeThreshold, 10 * 60 * 1000)) return;   // 正聊着不插嘴
             const items = await this._memosList();
             const candidates = this._pickRevisitTopics(items);
@@ -513,6 +539,9 @@ class DawnDuskLinePlugin extends Plugin {
         const idleMs = Date.now() - this._lastInteractionTime;
         if (idleMs < this._idleMinutes * 60 * 1000) return;
         if (global.__petQuiet) return;   // 静默版不排节目（排了也发不出，白烧调度）
+        // 后台花费闸也必须在这里判：_showPlayedForIdle 一旦置 true，本次空闲期就作废
+        // （用户再开口才翻开新一期）。闸关时不占坑，放开后仍能排这一期。
+        if (!backgroundLLM.ensureCanRun(this.context, { kind: 'dawn-dusk-line' }).ok) return;
         this._showPlayedForIdle = true;  // 先占坑，防止下个 tick 重复排期
         this._startShow();
     }
@@ -555,6 +584,10 @@ class DawnDuskLinePlugin extends Plugin {
     _showGate(segName) {
         if (global.__petQuiet) return '静默模式已开启';
         if (this._showInterrupted) return '用户插话，节目让位';
+        // 节目每段都是一次云调用（表演段除外，纯本地）。闸在段间关闭时整轮收场，
+        // 不把剩下的段落半截发出去（也不为下一段再请求一次）。
+        const bgGate = backgroundLLM.ensureCanRun(this.context, { kind: 'dawn-dusk-line' });
+        if (!bgGate.ok) return '后台 LLM 暂停（' + (bgGate.reason || 'paused') + '）';
         this.context.log('info', `[节目] 闸门放行 → ${segName}段（静默=${!!global.__petQuiet}）`);
         return null;
     }
@@ -580,6 +613,12 @@ class DawnDuskLinePlugin extends Plugin {
     async _sendShowLine(hint, topicKey) {
         if (global.__petQuiet) {
             const err = new Error('发送前静默闸命中');
+            err.gate = true;
+            throw err;
+        }
+        // 段间隔默认 90s：闸可能在两段之间被关掉，发送前再问一次（最终闸）。
+        if (!backgroundLLM.ensureCanRun(this.context, { kind: 'dawn-dusk-line' }).ok) {
+            const err = new Error('后台 LLM 暂停，节目收场');
             err.gate = true;
             throw err;
         }

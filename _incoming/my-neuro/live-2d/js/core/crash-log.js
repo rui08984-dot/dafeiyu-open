@@ -53,9 +53,24 @@ function install(opts) {
             }
             fs.appendFileSync(file, head + '\n' + stack + '\n\n', 'utf8');
         } catch (e) { /* 写不了日志也绝不能二次抛 */ }
-        try { console.error(head); } catch (e) { /* 控制台也坏了就算了 */ }
+        // EPIPE 自激防护（2026-11-25）：宿主被强杀/父进程先退出时 stdout 管道已关，
+        // console.* 的写入**异步**触发 stream 'error'（try/catch 抓不到）→ 又进
+        // uncaughtException → note() 再写 → 无限级联（实测一次关停写了 834 条）。
+        // 控制台只是方便，日志文件已独立落盘：只在明确可写时打，并吞掉管道错误。
+        try {
+            if (process.stdout && process.stdout.writable !== false) console.error(head);
+        } catch (e) { /* 控制台也坏了就算了 */ }
         return head;
     }
+
+    // 只注册一次：把 stdout/stderr 的管道错误（EPIPE 等）吞掉，别让它们变成新的崩溃事件。
+    try {
+        for (const s of [process.stdout, process.stderr]) {
+            if (s && typeof s.on === 'function' && typeof s.listenerCount === 'function' && s.listenerCount('error') === 0) {
+                s.on('error', () => { /* 管道已关：日志已落盘，静默放弃控制台镜像 */ });
+            }
+        }
+    } catch (e) { /* 极端环境拿不到 stream：忽略 */ }
 
     process.on('uncaughtException', (err) => { note('uncaughtException', err); });
     process.on('unhandledRejection', (reason) => { note('unhandledRejection', reason); });

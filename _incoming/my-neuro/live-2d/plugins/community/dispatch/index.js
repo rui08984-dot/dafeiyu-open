@@ -8,11 +8,16 @@
 // 所以工具立刻返回一份回执，任务在后台跑，跑完她主动说一句结果。
 const __silentAudit = require('../../../js/core/silent-audit.js');
 const { Plugin } = require('../../../js/core/plugin-base.js');
+// 后台云端花费闸（2026-11-25 契约）：任务回执是主动 sendMessage（一次云调用）。
+// quiet 管「说不说」，cost.background_llm=false 管「花不花」。
+const backgroundLLM = require('../../../js/core/background-llm.js');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const _gcApi = require('./game-control');
+// ADR-014 轨道 1（2026-11-24）：大结果全文落盘 + 分页续读。
+const toolArtifact = require('../../../js/ai/tool-result-artifact.js');
 // B1（2026-11-21）：任务结案三态判定（纯函数，单独可测）
 const taskLedger = require('./task-ledger.js');
 const { runGameAction, rateGate, rateGateGame, SEMANTIC_GENERIC } = _gcApi;
@@ -209,6 +214,143 @@ function probeAppSync(context, name) {
     }
 }
 
+// ══ 大结果分页（ADR-014 轨道 1-6，2026-11-24）════════════════════════════
+// see / act snapshot / see windows / app list 的返回是 JSON，其中 elements / windows / apps
+// 数组可能一口气几十项（快照 60 项 ≈ 6–15k 字符）。原则：
+//   · **小结果原样返回**（不传 offset/limit 且 ≤12k）→ 默认返回形状零变化，历史调用方不受影响；
+//   · 大结果或显式分页时才切页：保留全局编号（elements 的 idx/rid 不变，click #编号照旧），
+//     返回 page/next/artifactPath，detail 只描述当前页；
+//   · 全文落 `data/tool-artifacts/`，模型可以继续 offset 取下一页，或 `file read` 读全文。
+const ARTIFACT_THRESHOLD_CHARS = 12000;
+const PAGE_DEFAULTS = Object.freeze({ elements: 20, windows: 10, apps: 30 });
+// 单页硬上限的历史值（也是缺省值）：config.context.tool_result_max_chars 改小后，
+// 「单页 12000」会把刚改小的回执又撑回去，且 cap 再截一遍 → 「可续读」读不全。
+// 2026-11-24 第四轮 P2：单页上限改为跟随 config（钳 1000–12000）。
+const PAGE_HARD_CAP_DEFAULT = 12000;
+const PAGE_HARD_CAP_MIN = 1000;
+
+/**
+ * file read 的单页硬上限：读 config.context.tool_result_max_chars（缺省 12000，钳 1000–12000）。
+ * @param {object} [hostConfig] 宿主 config（插件里传 this.context.getConfig()；测试直接给对象）
+ */
+function fileReadPageCap(hostConfig) {
+    let v = 0;
+    try {
+        const c = hostConfig || {};
+        const ctxCfg = (c.context && typeof c.context === 'object') ? c.context : {};
+        v = Math.floor(Number(ctxCfg.tool_result_max_chars)) || 0;
+    } catch (e) { v = 0; }
+    if (!Number.isFinite(v) || v <= 0) v = PAGE_HARD_CAP_DEFAULT;
+    return Math.max(PAGE_HARD_CAP_MIN, Math.min(PAGE_HARD_CAP_DEFAULT, v));
+}
+
+
+function _intOr(v, fallback) {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
+}
+
+/** 从契约对象里找可分页数组。返回 key 或 null。 */
+function _pageArrayKey(obj) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+    if (Array.isArray(obj.elements)) return 'elements';
+    if (Array.isArray(obj.windows)) return 'windows';
+    if (Array.isArray(obj.apps)) return 'apps';
+    return null;
+}
+
+function _pageLine(key, item, idx) {
+    if (key === 'elements') {
+        const n = item && item.idx != null ? item.idx : idx;
+        return '#' + n + '[' + String((item && item.type) || '?') + ']'
+            + String((item && item.name) || '').slice(0, 24)
+            + (item && item.x != null ? '(@' + item.x + ',' + item.y + ')' : '');
+    }
+    if (key === 'windows') {
+        const title = (item && (item.title || item.MainWindowTitle || item.name)) || '';
+        const pid = (item && (item.Id || item.pid)) || '';
+        return String(title) + '（#' + pid + '）';
+    }
+    return String(item);
+}
+
+function _pageHeader(name, key, total) {
+    if (key === 'elements') return '可交互元素 ' + total + ' 个（分页）';
+    if (key === 'windows') return '当前可见窗口 ' + total + ' 个（分页）';
+    return '可启动的应用 ' + total + ' 个（分页）';
+}
+
+/**
+ * 把一条 dispatch 结果按页切（纯函数，测试可直接调）。
+ * @param {string} name 工具名（see / act / app / file）
+ * @param {object} params 调用参数（读 offset / limit）
+ * @param {string} raw 原始 JSON 字符串
+ * @param {{writeArtifact?:boolean}} [opts]
+ * @returns {string} 处理后的 JSON 字符串（不可分页/小结果原样返回）
+ */
+function paginateToolResult(name, params, raw, opts) {
+    if (typeof raw !== 'string' || !raw) return raw;
+    const s = raw.trim();
+    if (s[0] !== '{' && s[0] !== '[') return raw;
+    let obj = null;
+    try { obj = JSON.parse(s); } catch (e) { return raw; }
+    // SoM 标注图（som_snapshot / see image）的 elements 与 base64 图像绑在一起：
+    //   切页会丢编号、落 artifact 还会把屏幕截图写进磁盘（PII）。这类结果一律不分页。
+    if (obj && (obj.image || obj.imageIsBase64)) return raw;
+    const key = _pageArrayKey(obj);
+    if (!key) return raw;
+
+    const p = params || {};
+    const arr = obj[key];
+    const wantOffset = p.offset !== undefined && p.offset !== null && String(p.offset).trim() !== '';
+    const wantLimit = p.limit !== undefined && p.limit !== null && String(p.limit).trim() !== '';
+    const offset = Math.min(_intOr(p.offset, 0), Math.max(0, arr.length));
+    let pageSize = Math.max(1, Math.min(200, _intOr(p.limit, PAGE_DEFAULTS[key] || 20)));
+    // 兼容：小结果、没显式分页 → 原样返回（不新增字段、不改 detail）
+    if (!wantOffset && !wantLimit && raw.length <= ARTIFACT_THRESHOLD_CHARS) return raw;
+
+    let artifactPath = null;
+    if (raw.length > ARTIFACT_THRESHOLD_CHARS && (!opts || opts.writeArtifact !== false)) {
+        const art = toolArtifact.writeArtifact(String(name || 'tool'), raw, { turnId: (opts && opts.turnId) || '' });
+        if (art) artifactPath = art.path;
+    }
+    const header = _pageHeader(name, key, arr.length);
+    // P1-3（2026-11-25 风暴压测）：**回执整体（数组 + detail + 元数据）必须留在上限内**。
+    //   旧实现只按条数切页：详情文本 + 同一页数组 ≈ 体积翻倍，序列化后轻松 >12k，
+    //   发送前再被 tool-result-cap 盲切一刀 → 模型拿到无法 JSON.parse 的半截回执，
+    //   next/artifactPath 还可能被切没。这里按实际序列化长度收紧 pageSize 重切，
+    //   next.offset 始终 = 这一页真正返回到的位置（续读无丢失段）。
+    let payload = '';
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+        const page = arr.slice(offset, offset + pageSize);
+        const nextOffset = offset + page.length < arr.length ? offset + page.length : null;
+        const lines = page.map((it, i) => _pageLine(key, it, offset + i + 1));
+        let detail = header + '：第 ' + (offset + 1) + '–' + (offset + page.length) + ' 项：\n' + lines.join('\n');
+        if (nextOffset != null) {
+            detail += '\n…还有 ' + (arr.length - nextOffset) + ' 项；续读传 offset=' + nextOffset
+                + ' limit=' + pageSize + '（同 action 再调一次即可）';
+        }
+        if (artifactPath) detail += '\n完整结果已落盘：' + artifactPath + '（可用 file read + offset 读全文）';
+
+        obj[key] = page;
+        obj.page = {
+            offset, limit: pageSize, total: arr.length, returned: page.length,
+            next_offset: nextOffset,
+        };
+        obj.next = nextOffset == null ? null : { offset: nextOffset, limit: pageSize };
+        if (artifactPath) obj.artifactPath = artifactPath;
+        obj.detail = detail;
+        payload = JSON.stringify(obj);
+        if (payload.length <= ARTIFACT_THRESHOLD_CHARS || page.length <= 1) break;
+        const over = payload.length - ARTIFACT_THRESHOLD_CHARS;
+        const perItem = Math.max(1, Math.ceil((payload.length - 200) / Math.max(1, page.length)));
+        const nextSize = Math.max(1, pageSize - Math.ceil(over / perItem) - 1);
+        if (nextSize >= pageSize) break;   // 收敛不了（单条 item 本身就超预算）：保留一条可读回执
+        pageSize = nextSize;
+    }
+    return payload;
+}
+
 class DispatchPlugin extends Plugin {
 
     async onInit() {
@@ -318,19 +460,21 @@ class DispatchPlugin extends Plugin {
             } },
             { type: 'function', function: {
                 name: 'see',
-                description: '看屏幕：tree（默认，可交互元素编号清单）｜image（画了编号的标注图，UIA 扫不到的自绘窗口用）｜text（整窗文字）｜state（游戏画面里的数值）｜windows（开着的窗口，可按 window 过滤）。先看再点：tree 拿编号 → act click #编号。',
+                description: '看屏幕：tree（默认，可交互元素编号清单）｜image（画了编号的标注图，UIA 扫不到的自绘窗口用）｜text（整窗文字）｜state（游戏画面里的数值）｜windows（开着的窗口，可按 window 过滤）。先看再点：tree 拿编号 → act click #编号。**编号只属于这一份快照**：回执带 snapshot_id/snapshot_age_ms；中间又拍过快照、换了窗口或快照超过 120 秒，旧编号会被 STALE_SNAPSHOT 拒发（绝不静默点到别处），按回执 nextIfFailed 重新 see 即可。window 请尽量传完整标题或 hwnd（短于 4 字的标题必须写全；标题匹配只认精确相等或「前缀+分隔符」，不做任意子串/后缀模糊匹配）。结果太长时会分页：回执里有 next（offset/limit），照它再调一次即可续读，detail 里也会给 artifactPath（全文落盘）。',
                 parameters: {
                     type: 'object',
                     properties: {
                         mode: { type: 'string', enum: ['tree', 'image', 'text', 'state', 'windows'], description: '怎么看' },
-                        window: { type: 'string', description: '窗口标题的一部分；留空=当前前台窗口' },
+                        window: { type: 'string', description: '窗口标题的一部分；留空=当前前台窗口。建议用 see windows 回执里的完整标题或 hwnd（短标题必须写全，不匹配任意子串）' },
+                        offset: { type: 'integer', description: '（可续读）从第几项开始返回，默认 0；下一次用回执里的 next.offset' },
+                        limit: { type: 'integer', description: '（可续读）本页最多几项（tree 默认 20，windows 默认 10）' },
                     },
                     required: [],
                 },
             } },
             { type: 'function', function: {
                 name: 'act',
-                description: '操作电脑：click（target 可以是 #编号、文字:确定、图片:按钮名、或 x,y 屏幕坐标）｜som_click（arg=#SoM编号，点 see image 标注图）｜type（文字）｜key（w/ctrl+s）｜hold（键,秒）｜scroll（down 5）｜drag（x1,y1,x2,y2）｜paste｜set_value（rid|值）｜get_value（rid）｜select_text（rid|文字）｜perform（rid）｜read（rid）｜snapshot（看可交互元素清单，等同 see tree，省一次往返）。按编号点是 UIA 直调，不动你的鼠标。',
+                description: '操作电脑：click（target 可以是 #编号、文字:确定、图片:按钮名、或 x,y 屏幕坐标）｜som_click（arg=#SoM编号，点 see image 标注图）｜type（文字）｜key（w/ctrl+s）｜hold（键,秒）｜scroll（down 5）｜drag（x1,y1,x2,y2）｜paste｜set_value（rid|值）｜get_value（rid）｜select_text（rid|文字）｜perform（rid）｜read（rid）｜snapshot（看可交互元素清单，等同 see tree，省一次往返；结果长时同样可传 offset/limit 续读）。**#编号只属于最近一次 see/snapshot 的快照**：回执带 snapshot_id/snapshot_age_ms；跨快照、换了窗口或超龄（默认 120 秒）会被 STALE_SNAPSHOT 拒发（点击一次都不发），按 nextIfFailed 重新 see 再点。传了 pid 当 hwnd 时不会死循环：回执的 identityNote 会指明真正的 hwnd。som_click 用自己的编号空间，同窗 hwnd 可放宽到 300 秒，且是**坐标点击（会动真实鼠标）**；UIA #编号直调不动鼠标。',
                 parameters: {
                     type: 'object',
                     properties: {
@@ -340,13 +484,15 @@ class DispatchPlugin extends Plugin {
                         window: { type: 'string', description: '窗口标题的一部分（动作前先聚焦到它；按键/输入类强烈建议带）' },
                         verify: { type: 'boolean', description: '（可选）动作前后对比 UIA 摘要（窗口标题/元素树），把 effect 写回回执；结论不可验证时会如实标注' },
                         confirm_destructive: { type: 'boolean', description: '确认丢弃未保存内容（破坏性按钮如「不保存/放弃」）；不传真会被安全守卫拒绝' },
+                        offset: { type: 'integer', description: '（snapshot 可续读）从第几项开始，默认 0；下一次用回执里的 next.offset' },
+                        limit: { type: 'integer', description: '（snapshot 可续读）本页最多几项，默认 20' },
                     },
                     required: ['action'],
                 },
             } },
             { type: 'function', function: {
                 name: 'app',
-                description: '管程序窗口。launch=启动（白名单里的：记事本/计算器/PCL/植物大战僵尸…）；focus=切到前台；list=看有哪些可启动的。窗口生命周期（2026-11-15 新增）：min/max/restore/close=最小化/最大化/还原/关闭（close 等同点 X，应用可能弹保存框）；move/size=挪到 x,y / 改成 w×h；all_min=一次最小化全部可见窗口（给 name 就只收标题匹配的）。',
+                description: '管程序窗口。launch=启动（白名单里的：记事本/计算器/PCL/植物大战僵尸…）；focus=切到前台；list=看有哪些可启动的（多时按 offset/limit 分页，回执带 next）。窗口生命周期（2026-11-15 新增）：min/max/restore/close=最小化/最大化/还原/关闭（close 等同点 X，应用可能弹保存框）；move/size=挪到 x,y / 改成 w×h；all_min=一次最小化全部可见窗口（给 name 就只收标题匹配的）。',
                 parameters: {
                     type: 'object',
                     properties: {
@@ -356,20 +502,24 @@ class DispatchPlugin extends Plugin {
                         y: { type: 'number', description: '（move）左上角 y' },
                         w: { type: 'number', description: '（size）宽' },
                         h: { type: 'number', description: '（size）高' },
+                        offset: { type: 'integer', description: '（list 可续读）从第几项开始，默认 0' },
+                        limit: { type: 'integer', description: '（list 可续读）本页最多几项，默认 30' },
                     },
                     required: ['action'],
                 },
             } },
             { type: 'function', function: {
                 name: 'file',
-                description: '看本地文件（只读，不会改任何东西）：list=列目录；read=读文本文件（默认前 4000 字符，二进制会明确拒绝）；search=按文件名在目录里递归找。要绝对路径；.ssh/凭据/Cookie 这类敏感目录会被拒。',
+                description: '看本地文件（只读，不会改任何东西）：list=列目录（多时按 offset/limit 分页）；read=读文本文件（按**字符**分页：默认第 0–4000 字符，单页上限取 context.tool_result_max_chars（默认 12000，可被配置调小）；回执给 next.offset，大文件还会落 artifactPath）；search=按文件名在目录里递归找（按 offset/limit 分页）。要绝对路径；.ssh/凭据/Cookie 这类敏感目录会被拒。',
                 parameters: {
                     type: 'object',
                     properties: {
                         action: { type: 'string', enum: ['list', 'read', 'search'], description: 'list 默认' },
                         path: { type: 'string', description: '绝对路径（目录或文件），如 <project-root>/docs' },
                         keyword: { type: 'string', description: '（search）文件名里包含的关键字' },
-                        max_chars: { type: 'integer', description: '（read）最多返回多少字符，默认 4000，上限 20000' },
+                        offset: { type: 'integer', description: '（read/list/search 可续读）起始位置：read 是字符下标，list/search 是条目序号；默认 0' },
+                        limit: { type: 'integer', description: '（read/list/search 可续读）本页条数/字符数：read 默认 4000（上限取 context.tool_result_max_chars，默认 12000），list 默认 60，search 默认 30' },
+                        max_chars: { type: 'integer', description: '（read，旧参数）等同 limit；保留兼容' },
                     },
                     required: ['action', 'path'],
                 },
@@ -699,6 +849,18 @@ class DispatchPlugin extends Plugin {
     // 为什么补：工具面此前只能「打开文件」，或让 code 执行器跑任意 Python ——
     // 日常最常说的「看看这个文件/这个目录里有什么」既没有专用原语、也不可验证。
     // 第一版刻意只读：写/删/移动的风险与收益不对称，先不给。
+    /**
+     * file read 单页硬上限（第四轮 P2）：读 config.context.tool_result_max_chars。
+     * 没有 context / 拿不到 config（旧调用方、单测用 Object.create）→ 缺省 12000。
+     */
+    _fileReadPageCap() {
+        try {
+            const cfg = (this.context && typeof this.context.getConfig === 'function')
+                ? this.context.getConfig() : null;
+            return fileReadPageCap(cfg || null);
+        } catch (e) { return PAGE_HARD_CAP_DEFAULT; }
+    }
+
     async _fileTool(p) {
         const fs = require('fs');
         const path = require('path');
@@ -729,14 +891,26 @@ class DispatchPlugin extends Plugin {
             try { entries = fs.readdirSync(abs, { withFileTypes: true }); } catch (e) {
                 return JSON.stringify(VC.notSent('目录读不了（权限？）：' + abs + ' — ' + (e && e.message || e), { error: 'EACCES', path: abs }));
             }
-            const rows = entries.slice(0, 200).map((d) => {
+            const rows = entries.map((d) => {
                 let size = null;
                 try { if (d.isFile()) size = fs.statSync(path.join(abs, d.name)).size; } catch (e) { /* 单个取不到大小不影响列目录 */ }
                 return { name: d.name, type: d.isDirectory() ? 'dir' : (d.isFile() ? 'file' : 'other'), size };
             }).sort((x, y) => ((x.type === 'dir' ? 0 : 1) - (y.type === 'dir' ? 0 : 1)) || x.name.localeCompare(y.name));
-            const lines = rows.map((r) => (r.type === 'dir' ? '[D] ' : '[F] ') + r.name + (r.size != null ? ' (' + r.size + 'B)' : ''));
-            return JSON.stringify(VC.readonly('「' + abs + '」共 ' + entries.length + ' 项' + (entries.length > 200 ? '（只列前 200）' : '') + '：\n' + lines.join('\n'),
-                { path: abs, count: entries.length, entries: rows }));
+            // 分页（ADR-014）：目录可能有几百项，一页最多 200；不传 offset/limit 时默认 60。
+            const offset = Math.max(0, Math.floor(Number(p && p.offset) || 0));
+            const limit = Math.max(1, Math.min(200, Math.floor(Number(p && p.limit) || 60)));
+            const page = rows.slice(offset, offset + limit);
+            const nextOffset = offset + page.length < rows.length ? offset + page.length : null;
+            const lines = page.map((r) => (r.type === 'dir' ? '[D] ' : '[F] ') + r.name + (r.size != null ? ' (' + r.size + 'B)' : ''));
+            let detail = '「' + abs + '」共 ' + rows.length + ' 项（第 ' + (rows.length ? offset + 1 : 0) + '–'
+                + (offset + page.length) + ' 项）' + (rows.length > page.length ? '：' : '：') + '\n' + lines.join('\n');
+            if (nextOffset != null) detail += '\n…还有 ' + (rows.length - nextOffset) + ' 项；续读传 offset=' + nextOffset + ' limit=' + limit;
+            return JSON.stringify(VC.readonly(detail,
+                {
+                    path: abs, count: rows.length, entries: page,
+                    offset, limit, next_offset: nextOffset,
+                    next: nextOffset == null ? null : { action: 'list', offset: nextOffset, limit },
+                }));
         }
 
         if (a === 'read') {
@@ -756,11 +930,54 @@ class DispatchPlugin extends Plugin {
                 return JSON.stringify(VC.notSent('看起来是二进制文件（含 NUL），不返回内容：' + abs, { error: 'EBINARY', path: abs }));
             }
             const text = buf.toString('utf8');
-            const cap = Math.max(200, Math.min(20000, Number(p && p.max_chars) || 4000));
-            const out = text.slice(0, cap);
-            return JSON.stringify(VC.readonly(
-                '「' + path.basename(abs) + '」共 ' + text.length + ' 字符，返回前 ' + out.length + (text.length > out.length ? '（已截断）' : '') + '：\n' + out,
-                { path: abs, total_chars: text.length, truncated: text.length > out.length }));
+            // 分页语义（ADR-014，2026-11-24）：**按字符**切，offset 是起始字符下标，
+            // limit 是这一页最多多少字符（默认 4000）。单页硬上限跟随
+            // config.context.tool_result_max_chars（缺省 12000，钳 1000–12000）——
+            // 早先写死 12000，配置改小后每页又被 cap 截一刀，「可续读」读不全。
+            // 旧参数 max_chars 仍认，等同 limit。
+            const pageCap = this._fileReadPageCap();
+            const rawLimit = (p && p.limit !== undefined && p.limit !== null && String(p.limit).trim() !== '')
+                ? p.limit : (p && p.max_chars);
+            let limit = Math.max(200, Math.min(pageCap, Math.floor(Number(rawLimit) || 4000)));
+            const offset = Math.max(0, Math.min(text.length, Math.floor(Number(p && p.offset) || 0)));
+            // 全文 > 12k 时落 artifact：模型既能继续 offset，也能用 file read 读全文分段。
+            let art = null;
+            if (text.length > ARTIFACT_THRESHOLD_CHARS) {
+                art = toolArtifact.writeArtifact('file', text, { turnId: '' });
+            }
+            // P1-3（2026-11-25 风暴压测）：**信封也要算进上限**。
+            //   旧实现只按正文 limit 切页，JSON 信封（detail 重复一遍正文 + path/total_chars/next/
+            //   artifactPath 元数据）会把结果推到 12k 以上，发送前再被 tool-result-cap 盲切一刀 ——
+            //   模型拿到无法 JSON.parse 的半截回执，next/artifactPath 还可能被切没。
+            //   这里对**序列化后的整页**做预检：超了就按超出量收 limit 重切，直到整页 < cap；
+            //   next_offset 始终指向真实未读位置，续读拿得到完整内容。
+            let out = '';
+            let nextOffset = null;
+            let payload = '';
+            for (let attempt = 0; attempt < 4; attempt += 1) {
+                out = text.slice(offset, offset + limit);
+                nextOffset = offset + out.length < text.length ? offset + out.length : null;
+                let detail = '「' + path.basename(abs) + '」共 ' + text.length + ' 字符，返回第 '
+                    + offset + '–' + (offset + out.length) + ' 字符'
+                    + (text.length > out.length ? (nextOffset != null ? '（未读完）' : '（已截断）') : '') + '：\n' + out;
+                if (nextOffset != null) {
+                    detail += '\n…还有 ' + (text.length - nextOffset) + ' 字符；续读传 offset=' + nextOffset + ' limit=' + limit;
+                }
+                if (art) detail += '\n完整内容已落盘：' + art.path + '（可用 file read + offset 分段读）';
+                payload = JSON.stringify(VC.readonly(detail, {
+                    path: abs, total_chars: text.length, offset, limit, returned_chars: out.length,
+                    truncated: nextOffset != null,
+                    next_offset: nextOffset,
+                    next: nextOffset == null ? null : { action: 'read', offset: nextOffset, limit },
+                    artifactPath: art ? art.path : undefined,
+                }));
+                if (payload.length <= pageCap || out.length <= 200) break;
+                const over = payload.length - pageCap;
+                const nextLimit = Math.max(200, limit - over - 32);
+                if (nextLimit >= limit) break;      // 收敛不了（信封本身太大）：不再硬切
+                limit = nextLimit;
+            }
+            return payload;
         }
 
         if (a === 'search') {
@@ -785,9 +1002,20 @@ class DispatchPlugin extends Plugin {
                 }
             };
             walk(abs, 0);
+            // 分页（ADR-014）：默认一页 30 条。
+            const offset = Math.max(0, Math.floor(Number(p && p.offset) || 0));
+            const limit = Math.max(1, Math.min(50, Math.floor(Number(p && p.limit) || 30)));
+            const page = hits.slice(offset, offset + limit);
+            const nextOffset = offset + page.length < hits.length ? offset + page.length : null;
             return JSON.stringify(VC.readonly(
-                '在「' + abs + '」下找到 ' + hits.length + ' 个名字含「' + kw + '」的' + (hits.length >= 50 ? '（到上限 50 停止）' : '') + (hits.length ? '：\n' + hits.map((h) => h.path).join('\n') : ''),
-                { path: abs, keyword: kw, hits }));
+                '在「' + abs + '」下找到 ' + hits.length + ' 个名字含「' + kw + '」的'
+                + (hits.length >= 50 ? '（到上限 50 停止）' : '')
+                + (hits.length ? '（第 ' + (offset + 1) + '–' + (offset + page.length) + ' 条）：\n' + page.map((h) => h.path).join('\n') : ''),
+                {
+                    path: abs, keyword: kw, hits: page, count: hits.length,
+                    offset, limit, next_offset: nextOffset,
+                    next: nextOffset == null ? null : { action: 'search', offset: nextOffset, limit },
+                }));
         }
 
         return JSON.stringify(VC.notSent('file：action 只能是 list / read / search', { error: 'bad-action' }));
@@ -827,7 +1055,13 @@ class DispatchPlugin extends Plugin {
         // 这里只做一件事：失败却没给 detail 的返回补一句原因并留 `_backfilled` 痕迹
         // （验收要求 backfilled=0）。已合规的返回**原样透传** —— 不重排字段、不换形状，
         // 下游（模型/评测/控制中心）看到的还是同一个 JSON 字符串。
-        return this._ensureResult(name, await this._executeToolRaw(name, params));
+        // ADR-014（2026-11-24）：see/act snapshot/app 的结果在契约修正**之前**分页，
+        // 这样 detail 是分页版、ensure 只补失败原因（小结果原样不动）。
+        let raw = await this._executeToolRaw(name, params);
+        if (name === 'see' || name === 'act' || name === 'app') {
+            try { raw = paginateToolResult(name, params, raw); } catch (e) { /* 分页失败不影响原结果 */ }
+        }
+        return this._ensureResult(name, raw);
     }
 
     /** A3：把 dispatch 的返回过一遍契约（只在需要补失败原因时才改写）。 */
@@ -921,7 +1155,7 @@ class DispatchPlugin extends Plugin {
             // 模型带上也被上游 schema 吃掉 → 守卫永远拒绝。schema 补上后，这条计数用来
             // 抓「模型又传了 schema 里没有的键」的下一次回归。
             if (name === 'act' && p && typeof p === 'object') {
-                const ACT_SCHEMA_KEYS = new Set(['action', 'target', 'arg', 'window', 'win', 'verify', 'confirm_destructive']);
+                const ACT_SCHEMA_KEYS = new Set(['action', 'target', 'arg', 'window', 'win', 'verify', 'confirm_destructive', 'offset', 'limit']);
                 const unknown = Object.keys(p).filter((k) => !ACT_SCHEMA_KEYS.has(k));
                 if (unknown.length) {
                     bumpControlStat('schemaUnknownKeys', unknown.length);
@@ -1874,6 +2108,9 @@ class DispatchPlugin extends Plugin {
     async _receipt(id) {
         if (!this._autoReceipt) return;
         try { if (global.__petQuiet) return; } catch (e) { try { __silentAudit.audit('index.js:298', e); } catch (e2) {} }   // 省钱模式：不主动回执
+        // 后台花费闸：回执同样是一次完整 sendMessage。闸关时这条回执不发（与 quiet
+        // 同一语义：主动消息可以不发；任务结果仍能在任务列表/账本里查到）。
+        if (!backgroundLLM.ensureCanRun(this.context, { kind: 'dispatch-receipt' }).ok) return;
         const row = this._tasks.get(id);
         if (!row) return;
         let line;
@@ -2099,5 +2336,13 @@ DispatchPlugin.__testHooks = {
     GAME_INPUT_ACTIONS,
     GAME_READONLY_ACTIONS,
 };
+
+// ADR-014：分页是纯函数，挂到类上供 _probe/test-tool-continuation.cjs 直接断言
+// （不实例化插件、不碰 UIA/窗口，也不需要 Electron）。
+DispatchPlugin.paginateToolResult = paginateToolResult;
+DispatchPlugin.ARTIFACT_THRESHOLD_CHARS = ARTIFACT_THRESHOLD_CHARS;
+DispatchPlugin.PAGE_DEFAULTS = PAGE_DEFAULTS;
+// 第四轮 P2：file read 单页上限（纯函数，测试可直接断言 config → 上限映射）
+DispatchPlugin.fileReadPageCap = fileReadPageCap;
 
 module.exports = DispatchPlugin;

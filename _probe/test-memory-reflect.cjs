@@ -14,15 +14,22 @@
 'use strict';
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 
+const iso = require('./lib/test-isolation.cjs');
+
 const ROOT = path.join(__dirname, '..');
+// 数据隔离必须发生在任何业务模块 require 之前：records-path 在 require 时就把
+// RECORDS_DIR 定下来了。设了 PET_DATA_ROOT，memory-evolve 的 onInit（记忆整理目录、
+// 待写队列）和 llm-health 的默认状态文件都落在临时目录，不写真实 data。
+const TMP_ROOT = iso.setUpTempDataRoot('dafeiyu-reflect-');
+
 const PLUG = path.join(ROOT, '_incoming', 'my-neuro', 'live-2d', 'plugins', 'community', 'memory-evolve');
 const IMP = require(path.join(PLUG, 'lib', 'importance.js'));
 const REF = require(path.join(PLUG, 'lib', 'reflect.js'));
 const STORE = require(path.join(PLUG, 'lib', 'insights-store.js'));
 const P = require(path.join(PLUG, 'index.js'));
+const { llmHealth } = require(path.join(ROOT, '_incoming', 'my-neuro', 'live-2d', 'js', 'core', 'llm-health.js'));
 
 let pass = 0;
 let fail = 0;
@@ -32,7 +39,6 @@ function ok(name, cond, detail) {
     console.error('  ✗ ' + name + (detail ? ' — ' + detail : ''));
 }
 
-const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'dafeiyu-reflect-'));
 let seq = 0;
 function newDir() {
     seq += 1;
@@ -81,6 +87,9 @@ function setIdle() { global.__lastUserInputAt = Date.now() - OLD_IDLE; }
 
 async function mkPlugin(opts) {
     const o = opts || {};
+    // 熔断状态是进程级单例：每个用例前指到临时路径并清空，避免上一个用例的失败
+    // 把下一个用例的 LLM 调用挡在门外（也让断言能确定地看到本轮状态）。
+    llmHealth.resetForTests({ path: path.join(o.dir || TMP_ROOT, 'LLM健康.json') });
     const logs = [];
     const calls = [];
     const p = new P();
@@ -485,10 +494,128 @@ const GOOD = JSON.stringify({
             ok('CAS 冲突 → 保留对方更远的游标', cur && cur.lastEpisodeLine === 1, JSON.stringify(cur));
             ok('CAS 冲突 → 日配额不少计（基准 1 + 对方 1 + 本轮 1）', cur && cur.runsToday === 3, JSON.stringify(cur));
         }
+        // ═══════════════════════════════════════════════════════════════
+        // ⑫ 反思触发持久化（2026-11-24 审计 §9.3-③）
+        //    remain/pending 原来只在内存：今天重启 8 次 → 永远攒不到 60。
+        //    现在写进 insights-cursor.json（与 runsToday/day/游标同文件），onInit 恢复。
+        // ═══════════════════════════════════════════════════════════════
+        {
+            const trg = IMP.createTrigger({ threshold: 10 });
+            ok('setRemain 正常夹取', trg.setRemain(7) === 7 && trg.remain === 7, 'remain=' + trg.remain);
+            ok('setRemain 0 → 1（不把触发器设成永久点火）', trg.setRemain(0) === 1, 'remain=' + trg.remain);
+            ok('setRemain 超阈值 → threshold', trg.setRemain(99) === 10, 'remain=' + trg.remain);
+            ok('setRemain 非法输入保持原值', trg.setRemain(NaN) === 10, 'remain=' + trg.remain);
+            // 旧版游标没有这两个字段：必须读成 null（不能是 1，否则一重启就立刻反思）
+            const legacy = STORE.normalizeCursor({ lastEpisodeLine: 3, runsToday: 1, day: '2026-11-24' });
+            ok('旧版游标缺字段 → reflectRemain/reflectPending = null',
+                legacy.reflectRemain === null && legacy.reflectPending === null,
+                JSON.stringify({ remain: legacy.reflectRemain, pending: legacy.reflectPending }));
+            ok('标准化不丢弃原有字段', legacy.lastEpisodeLine === 3 && legacy.runsToday === 1);
+        }
+        {
+            const dir = newDir();
+            const fresh = await mkPlugin({ dir, reply: GOOD });
+            ok('无游标文件时 onInit 保持默认阈值（不误恢复成 1）',
+                fresh.p._reflectTrigger.remain === 60 && fresh.p._reflectPending === false,
+                'remain=' + fresh.p._reflectTrigger.remain);
+        }
+        {
+            const dir = newDir();
+            const a = await mkPlugin({ dir, reply: GOOD });
+            writeCursor(dir, {
+                lastEpisodeLine: 0, lastEpisodeId: null, lastRunAt: 0,
+                runsToday: 2, day: STORE.todayStr(Date.now()), lastError: null,
+            });
+            a.p._reflectTrigger.setRemain(7);
+            a.p._reflectState.remain = 7;
+            a.p._reflectPending = true;
+            const saved = a.p._persistReflectTrigger('test');
+            const cur = readCursor(dir);
+            ok('触发状态写进 insights-cursor.json',
+                saved === true && cur.reflectRemain === 7 && cur.reflectPending === true,
+                JSON.stringify({ remain: cur.reflectRemain, pending: cur.reflectPending }));
+            ok('写触发状态不覆盖 runsToday/day/片段游标',
+                cur.runsToday === 2 && cur.lastEpisodeLine === 0 && cur.day === STORE.todayStr(Date.now()),
+                JSON.stringify({ runsToday: cur.runsToday, line: cur.lastEpisodeLine }));
+
+            const b = await mkPlugin({ dir, reply: GOOD });
+            ok('新实例 onInit 从游标恢复 remain', b.p._reflectTrigger.remain === 7,
+                'remain=' + b.p._reflectTrigger.remain);
+            ok('新实例 onInit 从游标恢复 pending', b.p._reflectPending === true);
+            ok('恢复时留日志（可观测）', b.logs.some((l) => /从游标恢复触发状态/.test(l)),
+                b.logs.filter((l) => /恢复/.test(l)).slice(-1)[0]);
+
+            // onStop 必须强制写一次：不能把最后 2 秒的累计丢掉
+            b.p._reflectTrigger.setRemain(4);
+            b.p._reflectPending = true;
+            await b.p.onStop();
+            const cur2 = readCursor(dir);
+            ok('onStop 强制写触发状态', cur2.reflectRemain === 4 && cur2.reflectPending === true,
+                JSON.stringify({ remain: cur2.reflectRemain, pending: cur2.reflectPending }));
+        }
+        {
+            const d2 = await mkPlugin({ dir: newDir(), cfg: { reflect_threshold: 5 }, reply: GOOD });
+            d2.p._noteImportance('我今天崩溃了，哭了很久，特别难受');
+            ok('触发变化排一次 debounce 落盘', d2.p._reflectPersistTimer != null);
+            if (d2.p._reflectPersistTimer) { clearTimeout(d2.p._reflectPersistTimer); d2.p._reflectPersistTimer = null; }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // ⑬ 429 熔断接线（2026-11-24 审计 P0-1）
+        //    首轮失败 → 熔断记配额暂停；之后同一 5 分钟节拍不再调 LLM、不刷屏。
+        // ═══════════════════════════════════════════════════════════════
+        {
+            const dir = newDir();
+            writeEpisodes(dir, [EP1]);
+            const resetAt = Date.now() + 7 * 24 * 3600 * 1000;   // 未来一周，保证暂停窗口有效
+            const resetIso = new Date(resetAt).toISOString();
+            const body = JSON.stringify({
+                error: { message: "You've reached your weekly usage limit for your plan. Your limit resets at " + resetIso },
+            });
+            // 与 plugin-context 改造后的形态一致：message 带 body 摘要，err 上挂 status/body/quotaResetAt。
+            const qErr = new Error('LLM API error: 429 — ' + body.replace(/\s+/g, ' ').slice(0, 160));
+            qErr.status = 429;
+            qErr.body = body;
+            qErr.quotaResetAt = resetAt;
+
+            const { p, logs, calls } = await mkPlugin({ dir, reply: qErr });
+            setIdle();
+            p._reflectPending = true;
+            const r1 = await p._maybeReflect();
+            ok('429 首轮：调用失败且日志带 body 摘要',
+                r1 && r1.ok === false && calls.length === 1 &&
+                logs.some((l) => /^warn/.test(l) && /429/.test(l) && /weekly usage limit/.test(l)),
+                logs.filter((l) => /429/.test(l)).slice(-1)[0]);
+            ok('429 首轮：游标不前进（下次重试）', readCursor(dir).lastEpisodeLine === 0);
+            ok('429 首轮：共享熔断记为 quota_exhausted',
+                p.inspect('').background.health.source === 'quota_exhausted',
+                JSON.stringify(p.inspect('').background.health));
+
+            const r2 = await p._maybeReflect();
+            ok('429 后第二次 tick 不再调 LLM',
+                r2 && r2.skipped === 'llm_paused' && calls.length === 1, JSON.stringify(r2));
+            ok('429 后待反思标记保留（恢复后还能跑）', p._reflectPending === true);
+            ok('暂停期间不占日配额', Number(readCursor(dir).runsToday) === 1,
+                'runsToday=' + readCursor(dir).runsToday);
+
+            const pauseLogs1 = logs.filter((l) => /LLM 暂停中/.test(l)).length;
+            const r3 = await p._maybeReflect();
+            ok('暂停日志只喊一次（不每 5 分钟刷屏）',
+                pauseLogs1 === 1 && logs.filter((l) => /LLM 暂停中/.test(l)).length === 1 && calls.length === 1,
+                'pauseLogs=' + pauseLogs1 + ' calls=' + calls.length);
+            ok('inspect() 暴露 background.enabled/health',
+                (() => {
+                    const ins = p.inspect('你好');
+                    return ins.background && typeof ins.background.enabled === 'boolean' && !!ins.background.health;
+                })());
+            ok('第三轮仍被熔断拦住', r3 && r3.skipped === 'llm_paused');
+        }
+
     } finally {
         delete global.__lastUserInputAt;
         delete globalThis.__worldSenseState;
-        try { fs.rmSync(TMP_ROOT, { recursive: true, force: true }); } catch (e) { /* 临时目录清不掉不影响结论 */ }
+        delete process.env.PET_DATA_ROOT;
+        iso.cleanup(TMP_ROOT);
     }
 
     console.log('\n' + pass + '/' + (pass + fail) + ' 全过');

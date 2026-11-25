@@ -62,10 +62,10 @@ class ContextManager {
     // 以「assistant+tool_calls 及其 tool 响应」为不可分割单元从后向前保留，
     // 保证裁剪永远不会切断工具调用链（避免严格模式 API 报 400）
     trimMessages() {
-        if (!this.enableContextLimit) {
-            console.log('上下文限制已禁用，不裁剪消息');
-            return;
-        }
+        // P1-4（2026-11-24 对抗审查）：`enable_limit` 只控制**条数**闸（max_messages）。
+        // 「按 token 硬上限」是独立的**紧急背压** —— 关掉条数限制后历史仍可能被单轮工具循环
+        // 顶到几十 k；没有上限就会一路涨到上游 400 / 费用失控。所以 token 闸不看这个开关。
+        const countGateEnabled = !!this.enableContextLimit;
 
         // ── 回差：不要**每轮**都裁（2026-11-16 六十二轮实测）────────────────
         // 滑动窗口每轮丢掉最老的一条 → 后面所有消息整体前移 →
@@ -74,20 +74,74 @@ class ContextManager {
         // 现在攒到 4 倍上限再一次性裁回上限：裁剪从「每轮」变成「隔很多轮」，
         // 中间那些轮次 history 只增不改 → 命中率能爬到 98%+。
         // ⚠ 2026-11-22（E8）：阈值必须**高于压缩插件的触发线**，否则裁剪会先把 context 砍掉、
-        //   压缩永远轮不到。压缩插件的触发线 = max(24, (sys+1+keep*2)×4)，keep_recent=8 时 ≈72–76；
-        //   这里保留原来的 4× 回差并加一个 96 的下限作为紧急背压 —— 正常应先走压缩（保留总结+现场），
-        //   只有压缩连续失败/被禁用时才会到 96 条被硬裁（默认 max_messages=16 时旧公式只有 64，会抢跑）。
-        const hardTrigger = Math.max(this.maxContextMessages + 8, this.maxContextMessages * 4, 96);
-        if (this.voiceChat.messages && this.voiceChat.messages.length <= hardTrigger) return;
+        //   压缩永远轮不到。压缩插件现在按 history token 触发（8k 起、增长 4k 再压）。
+        //   条数闸按 history 大小分两档（见下），保证短对话不会被提前裁。
+        // ⚠ 2026-11-24（P0-2）：条数闸从 96 降到 48，但**只在 history 已经不小的时候**生效：
+        //   · history > 8k（与压缩插件同口径）→ 48 条就可能硬裁，作为压缩失败/被禁用后的背压；
+        //   · history ≤ 8k → 仍用 96 条（一串短问候 48 条才一两千 token，提前裁只会白丢现场、
+        //     还会把前缀缓存打穿 —— 11-16 的教训）。
+        //   再加一条 **history token 兜底**（默认 24k）：单轮工具循环能在 30 条内把 history
+        //   顶到 68k，条数闸根本到不了；超了就从最旧开始裁，并按 token 继续减半到 4 条下限。
+        const cfgCtx = (this.voiceChat && this.voiceChat.config && this.voiceChat.config.context) || {};
+        const softFloor = (() => {
+            const n = Number(cfgCtx.history_token_budget);
+            return Number.isFinite(n) && n > 0 ? Math.floor(n) : 8000;
+        })();
+        const hardTokenLimit = (() => {
+            const n = Number(cfgCtx.hard_trim_tokens);
+            return Number.isFinite(n) && n > 0 ? Math.floor(n) : 24000;
+        })();
+        let tokensBefore = 0;
+        let historyTokensBefore = 0;
+        let historySource = 'estimate';
+        try {
+            // ADR-014 轨道 1：优先用 provider 真账做基线（前缀没变 → 只估新增消息），
+            // 对不上（压缩插过 summary / 裁剪过）自动回退全量估算。
+            const m = contextBudget.measureWithBaseline({ messages: this.voiceChat.messages });
+            tokensBefore = m.total;
+            historyTokensBefore = m.history;
+            historySource = m.source;
+        } catch (e) { tokensBefore = 0; historyTokensBefore = 0; }
+
+        const hardTrigger = historyTokensBefore > softFloor
+            ? Math.max(this.maxContextMessages + 8, 48)
+            : Math.max(this.maxContextMessages + 8, this.maxContextMessages * 4, 96);
+        const overCount = countGateEnabled
+            && !!(this.voiceChat.messages && this.voiceChat.messages.length > hardTrigger);
+        const overTokens = historyTokensBefore > hardTokenLimit;
+        if (!overCount && !overTokens) {
+            if (!countGateEnabled) {
+                console.log('上下文条数限制已禁用，且 history 未超 token 硬上限，不裁剪消息');
+            }
+            return;
+        }
+        if (!countGateEnabled) {
+            // 日志必须写明「开关关了也生效」：否则用户以为 enable_limit=false 就完全没有裁剪
+            console.log('⚠️ 紧急背压（enable_limit=false 也生效）：history ' + historyTokensBefore
+                + ' token > 硬上限 ' + hardTokenLimit + '，只按 token 裁、不按条数');
+        }
 
         const systemMessages = this.voiceChat.messages.filter(msg => msg.role === 'system');
         const nonSystemMessages = this.voiceChat.messages.filter(msg => msg.role !== 'system');
 
-        console.log(`裁剪前: 系统消息 ${systemMessages.length} 条, 非系统消息 ${nonSystemMessages.length} 条`);
+        console.log(`裁剪前: 系统消息 ${systemMessages.length} 条, 非系统消息 ${nonSystemMessages.length} 条`
+            + `（history ${historyTokensBefore} token，触发=${overTokens ? 'token' : '条数'}）`);
 
-        let tokensBefore = 0;
-        try { tokensBefore = contextBudget.measure({ messages: this.voiceChat.messages }).total; } catch (e) { tokensBefore = 0; }
-        const recentMessages = trimMessagesPreservingToolRounds(nonSystemMessages, this.maxContextMessages);
+        // 先按条数裁回上限；若 token 仍超，继续减半（工具轮不可分割，可能停在 >keep 条）。
+        // enable_limit=false 时没有条数目标：从全量开始减半，只满足 token 硬上限（下限 4 条）。
+        let keep = countGateEnabled ? this.maxContextMessages : Math.max(1, nonSystemMessages.length);
+        let recentMessages = trimMessagesPreservingToolRounds(nonSystemMessages, keep);
+        let historyTokensAfter = 0;
+        try {
+            historyTokensAfter = contextBudget.measure({ messages: [...systemMessages, ...recentMessages] }).history;
+        } catch (e) { historyTokensAfter = 0; }
+        while (historyTokensAfter > hardTokenLimit && keep > 4) {
+            keep = Math.max(4, Math.floor(keep / 2));
+            recentMessages = trimMessagesPreservingToolRounds(nonSystemMessages, keep);
+            try {
+                historyTokensAfter = contextBudget.measure({ messages: [...systemMessages, ...recentMessages] }).history;
+            } catch (e) { historyTokensAfter = 0; }
+        }
         this.voiceChat.messages = [...systemMessages, ...recentMessages];
 
         // E8：丢了多少、第一条保留的是哪条，必须留账（否则「她忘了前面」只能靠猜）
@@ -96,6 +150,13 @@ class ContextManager {
             this.voiceChat._lastTrim = {
                 at: Date.now(),
                 tokensBefore,
+                historyTokensBefore,
+                historyTokensAfter,
+                historySource,
+                hardTokenLimit,
+                reason: overTokens ? 'tokens' : 'count',
+                // enable_limit=false 时仍可能因 token 背压裁：账里标出来，别让人以为是条数闸干的
+                countGateEnabled,
                 messagesBefore: systemMessages.length + nonSystemMessages.length,
                 messagesAfter: this.voiceChat.messages.length,
                 dropped: nonSystemMessages.length - recentMessages.length,

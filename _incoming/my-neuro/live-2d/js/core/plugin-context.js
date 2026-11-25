@@ -119,6 +119,199 @@ function buildSystemContent(base, patches, moodInstruction = MOOD_INSTRUCTION) {
     return String(base == null ? '' : base) + patchText + String(moodInstruction || '');
 }
 
+// ── LLM 错误透出（2026-11-24 审计 P0-1）───────────────────────────────────
+// 原来 !response.ok 只抛 `LLM API error: 429`：响应体里写着「Your limit resets at
+// 2026-11-24T08:30:32.238Z」，被整段丢掉，后台任务只能每 5 分钟盲重试。
+// 这里把「状态码 + 响应体摘要 + 重试/配额重置时刻」挂到 Error 上，
+// 由 llm-health 决定退避还是停到重置时刻。
+// ⚠ 不打印、不记录 apiKey：响应体来自服务端，请求头从不进入 message。
+const ERROR_BODY_MAX = 2000;
+const ERROR_EXCERPT_MAX = 160;
+const RESET_AT_RE = /(?:resets?|reset)\s+at\s*[:：]?\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))/i;
+const ISO_TIME_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})/;
+
+function parsePositiveMs(v) {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function isoToMs(text) {
+    const m = String(text == null ? '' : text).match(ISO_TIME_RE);
+    if (!m) return 0;
+    const t = Date.parse(m[0]);
+    return Number.isFinite(t) && t > 0 ? t : 0;
+}
+
+/**
+ * 从失败响应里提取「人话」与「什么时候能再试」。
+ * 纯函数，便于单测；不抛错（调用方正处在错误路径上，不能再叠一层异常）。
+ * @param {string} body 响应体文本（已截断到 ERROR_BODY_MAX）
+ * @param {Headers|object} [headers] 响应头
+ * @returns {{message:string, retryAfterMs:number, quotaResetAt:number}}
+ */
+function extractLlmErrorInfo(body, headers) {
+    const text = String(body == null ? '' : body);
+    let parsed = null;
+    try { parsed = text.trim() ? JSON.parse(text) : null; } catch (e) { parsed = null; }
+
+    let message = '';
+    let retryAfterMs = 0;
+    let quotaResetAt = 0;
+
+    if (parsed && typeof parsed === 'object') {
+        const errObj = parsed.error && typeof parsed.error === 'object' ? parsed.error : null;
+        const cand = [errObj && errObj.message, parsed.message, typeof parsed.error === 'string' ? parsed.error : ''];
+        for (const c of cand) {
+            if (typeof c === 'string' && c.trim()) { message = c; break; }
+        }
+        retryAfterMs = parsePositiveMs(parsed.retry_after_ms) || parsePositiveMs(parsed.retryAfterMs) ||
+            parsePositiveMs(parsed.retry_after) * 1000 || 0;
+        if (errObj) {
+            retryAfterMs = retryAfterMs || parsePositiveMs(errObj.retry_after_ms) ||
+                parsePositiveMs(errObj.retry_after) * 1000 || 0;
+        }
+        const resetCand = [
+            parsed.resets_at, parsed.reset_at, parsed.quota_reset_at,
+            errObj && errObj.resets_at, errObj && errObj.reset_at, errObj && errObj.message, message,
+        ];
+        for (const c of resetCand) {
+            if (typeof c === 'number' && Number.isFinite(c) && c > 0) {
+                quotaResetAt = c > 1e12 ? Math.floor(c) : Math.floor(c * 1000);
+                break;
+            }
+            if (typeof c === 'string') {
+                const t = isoToMs(c) || 0;
+                if (t) { quotaResetAt = t; break; }
+            }
+        }
+    }
+    if (!message) message = text;
+    if (!quotaResetAt) {
+        const m = text.match(RESET_AT_RE);
+        if (m) quotaResetAt = isoToMs(m[1]);
+    }
+
+    if (!retryAfterMs && headers) {
+        let header = null;
+        try {
+            header = typeof headers.get === 'function'
+                ? headers.get('retry-after')
+                : (headers['retry-after'] ?? headers['Retry-After']);
+        } catch (e) { header = null; }
+        if (header != null) {
+            const sec = Number(header);
+            if (Number.isFinite(sec) && sec > 0) retryAfterMs = sec * 1000;
+            else {
+                const t = Date.parse(String(header));
+                if (Number.isFinite(t)) retryAfterMs = Math.max(0, t - Date.now());
+            }
+        }
+    }
+
+    return { message: String(message || ''), retryAfterMs, quotaResetAt };
+}
+
+// ── provider fail-closed（2026-11-24 第三轮 · 堵隐式回云）──────────────────────
+// 事实：`resolveProviderOrFallback(providerId)` 找不到 provider 时会**降级到默认（云端）
+// provider**（llm-provider.js:194-228），所以旧 callLLM 拿到的「provider」其实可能是云。
+// `memory-evolve` 用 `provider_id:'local-memory'`，一旦配置丢失/manager 未初始化，
+// 旧代码会把片段卡**静默打到云端**（审计 §8.5 最后一条）。
+//
+// 规则（本函数只有一个出口，别在调用点各写一份）：
+//   · providerId 非空且解析不到**同一个 id** → 抛 PROVIDER_NOT_FOUND，绝不回退；
+//   · providerId 为空 → 保留旧行为（legacy api_url → voiceChat 全局模型）；
+//   · `local-memory` 解析到非回环地址只 warn（配置责任在人，但不许静默）。
+const _warnedProviderUrls = new Set();
+
+/** 从 api_url 取 host（够用即可：provider 都是 http(s) URL）；取不到返回 ''。 */
+function urlHost(apiUrl) {
+    const m = String(apiUrl == null ? '' : apiUrl).match(/^[a-z][a-z0-9+.-]*:\/\/([^/?#]+)/i);
+    if (!m) return '';
+    return String(m[1]).replace(/^[^@]*@/, '').replace(/:\d+$/, '').toLowerCase();
+}
+
+/**
+ * 回环判定（纯函数）：回环 = 请求没出本机 = **不消耗云端周配额**。
+ * 调用点唯一：callLLM 落 llm.usage 时据此决定 source=local 还是 plugin
+ * （doctor 的 80% 周预算只算 source≠local 的云端真账）。判错只会「多算钱」，
+ * 不会漏拦——所以这里宁可把本机别名认全。
+ *
+ * 为什么放宽到整个 127/8 与任意端口（2026-11-24）：本地 provider 不止 11435 ——
+ * 本机 wb 在 127.0.0.1:20128，之前只认 127.0.0.1:11435，wb 的调用被记成
+ * source=plugin 而进了云端 80% 预算。
+ * 2026-11-25 补齐 IPv6/别名变体（旧版只认裸 `::1`）：
+ *   · `[::1]` / `[::1%25lo0]`：方括号 + RFC 6874 zone id（URL 里 `%` 编码成 `%25`）；
+ *   · `[::ffff:127.0.0.1]`：IPv4-mapped IPv6，剥掉 `::ffff:` 后按内层 IPv4 再判一次；
+ *   · `0.0.0.0`：监听地址（客户端理论上不用，但模板/旧配置里出现过），按本机算。
+ * 口径与 local-llm.isLocalUrl（只认 11435 的「本地记忆模型」）不同层级：
+ * 那里判的是「是不是 MemOperator」，这里判的是「出没出本机」。
+ * @param {string} host 仅 host（可带方括号/zone id），不要传端口
+ * @returns {boolean}
+ */
+function isLoopbackHost(host) {
+    let h = String(host == null ? '' : host).trim().toLowerCase();
+    if (!h) return false;
+    // ① 去 IPv6 方括号：[::1] → ::1
+    h = h.replace(/^\[/, '').replace(/\]$/, '');
+    // ② 去 zone id：`::1%25lo0`（URL 编码的 %25）与 `fe80::1%eth0`（原始形式）
+    const pct = h.indexOf('%');
+    if (pct >= 0) h = h.slice(0, pct);
+    // ③ IPv4-mapped IPv6：::ffff:127.0.0.1 → 127.0.0.1
+    if (h.startsWith('::ffff:')) h = h.slice('::ffff:'.length);
+    if (!h) return false;
+    if (h === 'localhost' || h === '::1' || h === '0.0.0.0') return true;
+    return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
+}
+
+function isLoopbackUrl(apiUrl) {
+    const host = urlHost(apiUrl);
+    if (host) return isLoopbackHost(host);
+    // 没有 scheme 的裸 host:port（旧插件字段可能这么写）也要认
+    const bare = String(apiUrl == null ? '' : apiUrl).trim().split(/[/?#]/)[0];
+    return isLoopbackHost(String(bare).replace(/^[^@]*@/, '').replace(/:\d+$/, ''));
+}
+
+/**
+ * 指定了 provider_id 却拿不到它 → 构造可识别的错误（调用方按 code 分支）。
+ * @param {string} providerId
+ * @returns {Error & {code:string, providerId:string, availableProviders:string[]}}
+ */
+function providerNotFoundError(providerId) {
+    let available = [];
+    let initialized = false;
+    try {
+        initialized = llmProviderManager.isInitialized() === true;
+        available = llmProviderManager.getAllProviders()
+            .filter((p) => p && p.id && p.enabled !== false && p.api_url)
+            .map((p) => String(p.id));
+    } catch (e) { available = []; }
+    const err = new Error(
+        `LLM 提供商不可用：${providerId}（未配置或已禁用）` +
+        (initialized ? '' : '；provider 管理器尚未初始化') +
+        `。按 fail-closed 规则不回退到全局云模型。` +
+        `可用提供商：${available.length ? available.join(', ') : '无'}`
+    );
+    err.code = 'PROVIDER_NOT_FOUND';
+    err.providerId = String(providerId);
+    err.availableProviders = available;
+    err.managerInitialized = initialized;
+    return err;
+}
+
+/** 本地 provider 指到非回环地址：warn 一次（按 URL 去重），不阻断。 */
+function warnIfLocalProviderNotLoopback(providerId, apiUrl) {
+    if (String(providerId) !== 'local-memory') return;
+    if (!apiUrl || isLoopbackUrl(apiUrl)) return;
+    const key = String(apiUrl);
+    if (_warnedProviderUrls.has(key)) return;
+    _warnedProviderUrls.add(key);
+    try {
+        const { logToTerminal } = require('../api-utils.js');
+        logToTerminal('warn', `⚠️ 本地记忆 provider "local-memory" 指向非回环地址 ${apiUrl}`
+            + '（期望 127.0.0.1/localhost:11435）——该地址会按普通云端调用计费，请核对 llm_providers.json');
+    } catch (e) { /* 日志失败不影响调用 */ }
+}
+
 // 人格导演仲裁本体（dawn-dusk-line 消费端约定早已存在但一直没人实现——
 // global.proactiveArbiter 恒 undefined，节目实际无仲裁直发）。
 // 说话协调器单例补上：时间协调即仲裁决策。core 模块加载早于插件，挂 global 安全。
@@ -310,7 +503,8 @@ class PluginContext {
      * 插件自己调用 LLM（独立请求，不进入对话历史）
      * @param {string} prompt
      * @param {object} options - { provider_id, model/model_id, timeout_ms, temperature, ... }
-     *   provider_id: 指定提供商；留空则跟随当前全局对话模型
+     *   provider_id: 指定提供商；**给了就必须解析到它本身**，解析失败抛 PROVIDER_NOT_FOUND
+     *                （fail-closed，绝不回退到全局云模型）；留空才跟随当前全局对话模型
      *   api_url/api_key: 仅旧插件兼容；provider_id 为空时用作连接，不进请求体
      *   timeout_ms: 可选请求超时
      */
@@ -332,15 +526,23 @@ class PluginContext {
         let model = '';
         let resolvedProvider = null;
 
-        // 优先使用插件显式指定的提供商
+        // 优先使用插件显式指定的提供商。
+        // ⚠ fail-closed（2026-11-24 第三轮）：指定了 provider_id 就必须**真的是它**。
+        //   resolveProviderOrFallback 找不到会降级到默认（云端）provider；如果在这里
+        //   接受降级结果，memory-evolve 的 local-memory 一丢配置就会静默烧云配额。
+        //   只有 providerId 为空时才允许走下面的 legacy / 全局回退。
         if (providerId) {
             const provider = this.resolveLLM(providerId, requestedModel);
-            if (provider) {
-                resolvedProvider = provider;
-                apiUrl = provider.api_url;
-                apiKey = provider.api_key;
-                model = provider.model;
-            }
+            const matched = provider
+                && provider.id !== '_empty'
+                && String(provider.id) === String(providerId)
+                && !!provider.api_url;
+            if (!matched) throw providerNotFoundError(providerId);
+            resolvedProvider = provider;
+            apiUrl = provider.api_url;
+            apiKey = provider.api_key;
+            model = provider.model;
+            warnIfLocalProviderNotLoopback(providerId, apiUrl);
         }
 
         // provider 留空时兼容旧插件字段；这些字段只决定连接，不进入请求体
@@ -414,8 +616,52 @@ class PluginContext {
                 signal: requestSignal
             });
 
-            if (!response.ok) throw new Error(`LLM API error: ${response.status}`);
+            if (!response.ok) {
+                // 读响应体（上限 2000 字）：失败给空串，绝不因读 body 把原始状态码弄丢。
+                let body = '';
+                try {
+                    const text = await response.text();
+                    body = String(text == null ? '' : text).slice(0, ERROR_BODY_MAX);
+                } catch (e) { body = ''; }
+                const info = extractLlmErrorInfo(body, response.headers);
+                const detail = String(info.message || body || '').replace(/\s+/g, ' ').trim().slice(0, ERROR_EXCERPT_MAX);
+                const error = new Error(`LLM API error: ${response.status}` + (detail ? ` — ${detail}` : ''));
+                error.status = response.status;
+                error.body = body;
+                if (info.retryAfterMs) error.retryAfterMs = info.retryAfterMs;
+                if (info.quotaResetAt) error.quotaResetAt = info.quotaResetAt;
+                throw error;
+            }
             const data = await response.json();
+            // ADR-014：插件走的是裸 fetch，不经过 LLMClient；这里补一条 llm.usage，
+            // 否则成本账本漏掉 context-compressor / persona-guard / memory-evolve 这些调用。
+            // source='local' 的（本地 llama.cpp）不消耗云端周配额，doctor 的 80% 只算云。
+            try {
+                const usage = data && data.usage;
+                if (usage) {
+                    const promptLayout = require('./prompt-layout.js');
+                    const r = promptLayout.cacheRate(usage);
+                    // 2026-11-24：任意回环地址/端口都算本地（wb=127.0.0.1:20128），
+                    // 只有出本机的调用才进云端 80% 预算。
+                    const isLocal = isLoopbackUrl(apiUrl);
+                    const telemetry = require('./telemetry.js');
+                    telemetry.emitTelemetry({
+                        cat: 'llm',
+                        type: 'llm.usage',
+                        title: '插件调用用量',
+                        source: isLocal ? 'local' : 'plugin',
+                        metrics: {
+                            prompt_tokens: r.prompt == null ? 0 : r.prompt,
+                            cached_tokens: r.cached == null ? 0 : r.cached,
+                            prompt_cache_miss_tokens: r.miss == null ? 0 : r.miss,
+                            completion_tokens: Number(usage.completion_tokens) || 0,
+                            reasoning_tokens: Number(usage.completion_tokens_details && usage.completion_tokens_details.reasoning_tokens) || 0,
+                            has_cache_field: r.cached == null ? 0 : 1,
+                            hit_rate: r.rate == null ? 0 : r.rate,
+                        },
+                    });
+                }
+            } catch (e) { /* 账本失败不影响返回 */ }
             return data.choices[0].message.content;
         } finally {
             if (deadline) deadline.cleanup();
@@ -665,5 +911,11 @@ module.exports = {
     collectVolatilePromptPatches,
     promptPatchLayoutStats,
     resolvePluginEnabled,
-    __test: { snapshotValue, deriveSystemBase, buildSystemContent, stripLastPluginBlock, stripMoodInstruction },
+    __test: {
+        snapshotValue, deriveSystemBase, buildSystemContent, stripLastPluginBlock, stripMoodInstruction,
+        extractLlmErrorInfo,
+        // 回环判定是「本地=不消耗云端配额」的唯一判据，单测直接验纯函数（见
+        // _probe/test-provider-fail-closed.cjs ⑤），不用每次都造一轮假请求。
+        isLoopbackHost, isLoopbackUrl, urlHost,
+    },
 };

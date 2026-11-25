@@ -129,59 +129,68 @@ class AiLogPlugin extends Plugin {
 
     // ===== API 调用 =====
 
-    async _callAPI(systemPrompt, userContent) {
-        const mainApiUrl = global.voiceChat?.API_URL || '';
-        const apiUrl = this._apiUrl || (mainApiUrl ? `${mainApiUrl.replace(/\/chat\/completions\/?$/, '')}/chat/completions` : '');
-        const apiKey = this._apiKey || global.voiceChat?.API_KEY;
-        const model = this._model || global.voiceChat?.MODEL;
+    /**
+     * callLLM 只接受一条 user 消息，所以把插件里的系统提示词拼到同一条 prompt 前面。
+     * 留空的一侧自动省略，不产生空段落。
+     */
+    _composePrompt(systemPrompt, userContent) {
+        const sys = String(systemPrompt || '').trim();
+        const user = String(userContent == null ? '' : userContent);
+        return sys ? `${sys}\n\n${user}` : user;
+    }
 
-        if (!apiUrl || !apiKey) {
-            throw new Error('API 配置缺失，请在 plugin_config.json 中配置或确保主 LLM 可用');
+    /**
+     * 调一次云端 LLM。
+     *
+     * 2026-11-24 审计（HANDOFF §8.3）：这里原本自己 `fetch(global.voiceChat.API_URL)` ——
+     * 单次 8000 max_tokens 的日记调用既**不进 llm.usage 账本**，也**不吃 provider 路由/配额熔断**，
+     * 是账本外最贵的一次云端调用。现在统一走 `context.callLLM`：
+     *   · 落 llm.usage（source=plugin，doctor 的今日/7 天与 80% 告警才算得全）；
+     *   · 走通讯录 provider 解析（插件显式配了 api_url/api_key/model 才覆盖连接，语义与旧版一致）；
+     *   · 非 2xx 时由 plugin-context 统一挂 status/body/重置时刻，并由 llm-health 记熔断。
+     * 另外补一道 background-llm 闸：配额暂停 / 用户关掉后台 LLM 时直接跳过，
+     * 不再"先打 3 次 429 再放弃"（ADR-014：日记属后台花钱）。
+     */
+    async _callAPI(systemPrompt, userContent) {
+        // 唯一入口（2026-11-25 契约）：内部 = cost.background_llm + 云端熔断。
+        // 插件不再自己读配置、不再自己判 reason 字符串。
+        const gate = require('../../../js/core/background-llm.js').ensureCanRun(this.context, { kind: 'ai-log' });
+        if (!gate.ok) {
+            this.context.log('info', `AI 日志跳过：后台 LLM 暂停（${gate.reason}）`);
+            const err = new Error(`后台 LLM 已暂停（${gate.reason}），本次未调用云端`);
+            err.code = 'BG_LLM_PAUSED';
+            throw err;
+        }
+
+        const prompt = this._composePrompt(systemPrompt, userContent);
+        // 与旧请求体逐项对齐：max_tokens 8000 / temperature 0.7 / thinking / reasoning_effort
+        const options = { max_tokens: 8000, temperature: 0.7 };
+        if (this._apiUrl) options.api_url = this._apiUrl;
+        if (this._apiKey) options.api_key = this._apiKey;
+        if (this._model) options.model = this._model;
+
+        const thinkingMode = String(this._thinkingMode || '').toLowerCase();
+        if (thinkingMode === 'enabled' || thinkingMode === 'disabled') {
+            options.thinking = { type: thinkingMode };
+        }
+        if (this._reasoningEffort) {
+            options.reasoning_effort = this._reasoningEffort;
         }
 
         for (let attempt = 1; attempt <= this._maxRetries; attempt++) {
             try {
-                const requestBody = {
-                    model,
-                    messages: [
-                        { role: 'system', content: systemPrompt },
-                        { role: 'user', content: userContent }
-                    ],
-                    max_tokens: 8000,
-                    temperature: 0.7
-                };
-
-                const thinkingMode = String(this._thinkingMode || '').toLowerCase();
-                if (thinkingMode === 'enabled' || thinkingMode === 'disabled') {
-                    requestBody.thinking = { type: thinkingMode };
-                }
-                if (this._reasoningEffort) {
-                    requestBody.reasoning_effort = this._reasoningEffort;
-                }
-
-                this.context.log('info', `调用 API 第 ${attempt} 次... | 模型: ${model} | thinking: ${thinkingMode || 'default'} | reasoning_effort: ${this._reasoningEffort || 'default'}`);
-
-                const response = await fetch(apiUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${apiKey}`
-                    },
-                    body: JSON.stringify(requestBody)
-                });
-
-                const data = await response.json();
-
-                if (data.choices?.[0]?.message) {
+                this.context.log('info', `调用 API 第 ${attempt} 次... | 模型: ${this._model || '(主 LLM)'} | thinking: ${thinkingMode || 'default'} | reasoning_effort: ${this._reasoningEffort || 'default'}`);
+                const content = await this.context.callLLM(prompt, options);
+                if (typeof content === 'string' && content.trim()) {
                     this.context.log('info', 'API 调用成功');
-                    return data.choices[0].message.content;
+                    return content;
                 }
-                if (data.error) {
-                    throw new Error(`API 错误: ${data.error.message || JSON.stringify(data.error)}`);
-                }
-                throw new Error('API 响应格式异常');
+                throw new Error('API 响应为空');
             } catch (error) {
+                if (error && error.code === 'BG_LLM_PAUSED') throw error;
                 this.context.log('error', `第 ${attempt} 次尝试失败: ${error.message}`);
+                // 429 = 配额/限流：重试只会把受限请求再打一遍，交给 llm-health 的暂停窗口
+                if (error && Number(error.status) === 429) throw error;
                 if (attempt === this._maxRetries) throw error;
                 await new Promise(r => setTimeout(r, 1000));
             }
@@ -399,7 +408,8 @@ class AiLogPlugin extends Plugin {
                 diaryContent = await this._callAPI(this._dailyPrompt, userContent);
             }
         } catch (error) {
-            return `生成AI日志失败：${error.message}（已重试${this._maxRetries}次）`;
+            const retried = error && error.code === 'BG_LLM_PAUSED' ? '' : `（已重试${this._maxRetries}次）`;
+            return `生成AI日志失败：${error.message}${retried}`;
         }
 
         const savedPath = this._saveDiaryFile(filename, diaryContent);
@@ -497,7 +507,8 @@ ${trimmedEvents}
                 `以下是这个月的所有AI日志，请根据这些内容生成月度总结：\n\n${diaries}`
             );
         } catch (error) {
-            return `生成月度总结失败：${error.message}（已重试${this._maxRetries}次）`;
+            const retried = error && error.code === 'BG_LLM_PAUSED' ? '' : `（已重试${this._maxRetries}次）`;
+            return `生成月度总结失败：${error.message}${retried}`;
         }
 
         const filename = this._getMonthlyFilename(lastMonth);

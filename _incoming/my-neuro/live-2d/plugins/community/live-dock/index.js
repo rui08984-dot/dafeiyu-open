@@ -11,6 +11,8 @@ const { Plugin } = require('../../../js/core/plugin-base.js');
 const { resolvePluginEnabled } = require('../../../js/core/plugin-context.js');
 const http = require('http');
 const speechCoordinator = require('../../../js/core/speech-coordinator.js').get({});
+// 后台云端花费闸（2026-11-24 第三轮 P1）：回弹幕 = sendMessage = 一次云调用。
+const backgroundLLM = require('../../../js/core/background-llm.js');
 // 弹幕是外部可控文本（观众名/内容都可能带伪指令）：统一走数据封装
 const { wrapUntrusted, ensureBoundaryPatch } = require('../../../js/core/untrusted-data.js');
 
@@ -205,6 +207,11 @@ class LiveDockPlugin extends Plugin {
             this._loggedLiveBypass = true;
             this.context.log('info', '[直播] 检测到正在直播（blivedm 有真实弹幕）→ 临时放行静默，下播自动恢复');
         }
+        // 后台云端闸（2026-11-24 第三轮 P1）：回弹幕是一条完整云调用。
+        // 必须在**取出弹幕之前**判：buffer 一旦 splice 就丢了，等于把「这条没回」变成永久的。
+        // 跳过时 _lastSeq/buffer 都不动，闸放开后还能回积压的弹幕。
+        const gate = backgroundLLM.ensureCanRun(this.context, { kind: 'live-dock' });
+        if (!gate.ok) return;
         if (!this._buffer.length) return;
         const items = this._buffer.splice(0, this._buffer.length);
         const { best, unsafe } = this._selectOne(items);
@@ -257,8 +264,11 @@ class LiveDockPlugin extends Plugin {
     /** 漏掉的弹幕摘要进上下文（aituber-onair：她知道刚才漏了什么） */
     _updateDroppedPatch(count) {
         try {
+            // volatile（2026-11-24 第三轮 P1）：条数每 30s 都在变，是「此刻状态」不是人格条款。
+            // 写进 system 等于每次弹幕窗口都让整段历史前缀缓存作废（实测每次触发改两次）。
             this.context.addSystemPromptPatch(PATCH_ID,
-                '（刚才有 ' + count + ' 条弹幕你没回——正常，弹幕太快。有人问起就说「弹幕太多看不过来啦」。）');
+                '（刚才有 ' + count + ' 条弹幕你没回——正常，弹幕太快。有人问起就说「弹幕太多看不过来啦」。）',
+                { volatile: true });
         } catch (e) { try { __silentAudit.audit('index.js:128', e); } catch (e2) {} }
     }
 

@@ -19,6 +19,12 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
+// ⚠ 2026-11-24：本测试会调 memory-recall.onUserInput()，它会经 memory-usage 写
+// 「记忆兑现.json」。不设 PET_DATA_ROOT 时写的是**真实记录室** —— 实测 08:22/13:15
+// 多次把测试夹具（香菜/布丁）写进生产数据。必须在 require 业务模块之前把数据根指到临时目录。
+const _TEST_DATA_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'mem-quality-root-'));
+process.env.PET_DATA_ROOT = _TEST_DATA_ROOT;
+
 const ROOT = path.join(__dirname, '..');
 const P = require(path.join(ROOT, '_incoming', 'my-neuro', 'live-2d', 'plugins', 'community', 'memory-recall', 'index.js'));
 const AUDIT = path.join(__dirname, 'profile-audit.cjs');

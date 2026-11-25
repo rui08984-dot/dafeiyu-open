@@ -7,11 +7,19 @@
 //   ② 她的回复里**真的引用**了哪几条 —— 用「关键片段命中」而不是 LLM 判断，
 //      保证可解释、可复现、零额外调用。
 //
-// 「用上」的判定为什么保守：
-//   · 从注入正文（实际进 prompt 的那段，已截断）里抽 ≥6 字的片段；
-//   · 片段至少 60% 的字不是高频虚字，且不含「我觉得/我知道了」这类通用壳；
-//   · 回复文本归一化（去标点/空白）后必须**原样包含**某个片段才算命中；
-//   · 不做模糊匹配、不做同义判断 —— 宁可漏记，也不虚报命中率。
+// 「用上」的判定（2026-11-24 双路，修 §9.3-⑤ 口径矛盾）：
+//   旧口径只认「回复里原样出现 ≥6 字片段」，但注入提示词又要求「不要逐条复述、
+//   自然用在回答里」—— 两条要求互相打架，实测 148 条记录 used 恒 0，指标失去意义。
+//   现在任一条成立即 used：
+//     ① fragment（强信号）：旧的 ≥6 字原样片段命中，保留不变；
+//     ② entity（实体共现）：记忆正文与回复各自抽内容 token（CJK 二元组 + ASCII ≥2 词 +
+//        数字/日期），去停用词后取不同 token 交集；交集 ≥2，或命中 1 个强实体
+//        （数字/日期/英文词/两个连续 CJK 实字）→ used。
+//   回复为空或过短（<4 字）→ verdict='unknown'，**不算 miss**（没有可判的内容）。
+//   仍然是纯函数、零 LLM：只看文本，不改召回打分。
+//
+//   注意：entity 不是「同义理解」。CJK 侧仍是字面二元组共现，只是不再要求整段复述，
+//   所以「香菜过敏」与「吃香菜会难受」能对上，而「今天天气晴」与「我不太清楚」对不上。
 //
 // 轮次绑定（U5，2026-11-22）：pending 记下注入时的 turnId；noteUsed 时若当前轮次
 // 非空且与 pending.turnId 不同 → 整批丢弃（reason='stale-turn'，计 staleDropped），
@@ -38,6 +46,8 @@ const DECAY_MS = DECAY_DAYS * 24 * 60 * 60 * 1000;
 const MIN_INJECTED_FOR_DECAY = 5;
 const MIN_FRAGMENT_CHARS = 6;
 const MAX_FRAGMENTS = 12;
+// 每条目最多留多少个内容 token（只用于判定，不进 prompt；24 足够覆盖一段 90 字记忆）
+const MAX_TOKENS = 24;
 // 一轮注入的 pending 最多留 10 分钟：LLM 工具循环可能慢，但再晚的回复不该算到
 // 上一轮注入头上（宁可漏记，不虚报）。
 const PENDING_TTL_MS = 10 * 60 * 1000;
@@ -61,6 +71,156 @@ const COMMON_PHRASES = Object.freeze([
 // 片段长度配额：长片段更稳，但短片段（6 字）才能扛住轻微改写。
 // 每个长度取若干「均匀分布」的窗口，避免全挤在句子开头。
 const LEN_QUOTA = Object.freeze({ 12: 2, 10: 2, 8: 3, 6: 5 });
+
+// ── 实体共现判定（2026-11-24）────────────────────────────────────────────
+// 停用词：这些词在回复里天天出现，命中它们不能说明「想起了这条记忆」。
+// 需求给的最小集合 + 实测常客（寒暄/壳/泛指）都在这里；只对 CJK 二元组做整词比对。
+const ENTITY_STOPWORDS = new Set([
+  '今天', '我们', '可以', '什么', '就是', '知道', '一个', '这个', '那个', '时候',
+  '然后', '因为', '所以', '但是', '还是', '已经', '现在', '自己', '觉得', '应该',
+  '可能', '不是', '没有', '这样', '那样', '一点', '有点', '真的', '其实', '如果',
+  '东西', '事情',
+  // ── 补充（寒暄/助词壳/泛指）──
+  '你好', '您好', '谢谢', '好的', '好吧', '行的', '对的', '是的', '嗯嗯', '哈哈',
+  '嘿嘿', '呵呵', '拜拜', '再见', '晚安', '早安', '早上', '晚上', '中午', '昨天',
+  '明天', '最近', '刚才', '刚刚', '一直', '还是', '一定', '肯定', '应该', '需要',
+  '希望', '感觉', '认为', '起来', '出来', '过来', '下来', '上去', '进去', '回去',
+  '一起', '一下', '一些', '一样', '很多', '多少', '几个', '怎么样', '为什么',
+  '什么时候', '是不是', '有没有', '会不会', '能不能', '要不要', '对不起', '没关系',
+  '没问题', '不客气', '原来', '而已', '之类', '这种', '那种', '那些', '这些',
+]);
+
+// ASCII 词最短长度：2 字（AI/PC…）算「弱 token」，3 字以上算强实体（专名/型号）。
+const MIN_ASCII_TOKEN = 2;
+const MIN_ASCII_STRONG = 3;
+// 回复归一化后少于这么多字 → 判不了，返回 unknown（不算 miss）。
+const MIN_REPLY_CHARS = 4;
+
+// 一次切出 CJK 连续段 / ASCII 词（含数字与 2026-11-24 这类连写日期）。
+const ENTITY_SEG = /[\u3400-\u4dbf\u4e00-\u9fff]+|[A-Za-z0-9]+(?:[._'’\-][A-Za-z0-9]+)*/g;
+const CJK_ONLY = /^[\u3400-\u4dbf\u4e00-\u9fff]+$/;
+
+/**
+ * 抽内容 token（纯函数）。
+ *
+ * token 形如 `c:香菜`（CJK 二元组）/ `n:2026-11-24`（数字/日期）/ `a:openai`（ASCII 词）。
+ * 只有满足「两个连续 CJK 实字」的二元组才留下 —— 任一个字是虚字（的了是我你…）就丢掉，
+ * 这条规则顺手把「天我」「的我」这类跨词垃圾全过滤了。
+ *
+ * @param {string} text
+ * @returns {Array<{key:string, kind:'cjk'|'num'|'ascii', strong:boolean, text:string}>}
+ */
+function entityTokens(text) {
+  const src = String(text == null ? '' : text).normalize('NFKC');
+  const out = [];
+  const seen = new Set();
+  const push = (key, kind, strong, raw) => {
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ key, kind, strong, text: raw });
+  };
+
+  for (const seg of src.match(ENTITY_SEG) || []) {
+    if (CJK_ONLY.test(seg)) {
+      for (let i = 0; i + 1 < seg.length; i += 1) {
+        const bg = seg.slice(i, i + 2);
+        if (ENTITY_STOPWORDS.has(bg)) continue;
+        // 跨词垃圾：上一个二元组是停用词（如「有点」→「点东」）说明这个二元组是从停用词
+        // 尾巴上切出来的，不是词。
+        if (i > 0 && ENTITY_STOPWORDS.has(seg.slice(i - 1, i + 1))) continue;
+        if (STOP_CHARS.has(bg[0]) || STOP_CHARS.has(bg[1])) continue;
+        // 两个连续 CJK 实字 = 一个内容二元组 → 强实体（够具体，能当「想起了这件事」的证据）
+        push('c:' + bg, 'cjk', true, bg);
+      }
+      continue;
+    }
+    const lower = seg.toLowerCase();
+    if (/^\d/.test(lower)) {
+      push('n:' + lower, 'num', true, seg);
+      continue;
+    }
+    if (lower.length >= MIN_ASCII_TOKEN) {
+      push('a:' + lower, 'ascii', lower.length >= MIN_ASCII_STRONG, seg);
+    }
+  }
+  return out;
+}
+
+/** 两组 token 的交集（按 key 去重，保留第一个来源的 token 对象）。 */
+function intersectTokens(memoryTokens, replyTokens) {
+  const replyKeys = new Set((replyTokens || []).map((t) => t.key));
+  const seen = new Set();
+  const out = [];
+  for (const t of memoryTokens || []) {
+    if (!replyKeys.has(t.key) || seen.has(t.key)) continue;
+    seen.add(t.key);
+    out.push(t);
+  }
+  return out;
+}
+
+/** 落盘时 token 只存 key（省字节）；读回来按前缀还原 kind/strong（规则与 entityTokens 一致）。 */
+function tokenFromKey(key) {
+  const k = String(key || '');
+  const body = k.slice(2);
+  if (!body) return null;
+  if (k.startsWith('n:')) return { key: k, kind: 'num', strong: true, text: body };
+  if (k.startsWith('a:')) return { key: k, kind: 'ascii', strong: body.length >= MIN_ASCII_STRONG, text: body };
+  if (k.startsWith('c:')) return { key: k, kind: 'cjk', strong: true, text: body };
+  return null;
+}
+
+/**
+ * 用**已抽好的记忆 token** 判回复是否用了这条记忆（纯函数；noteUsed 走这条，
+ * 因为落盘条目里只有 token key，没有记忆全文）。
+ * @param {Array|string[]} memoryTokens token 对象数组或 token key 数组
+ * @param {string} replyText
+ * @param {string[]} [fragments] 旧的 ≥6 字片段（强信号）
+ */
+function judgeTokens(memoryTokens, replyText, fragments) {
+  const reply = String(replyText == null ? '' : replyText);
+  const normReply = normalizeText(reply);
+  if (!normReply) {
+    return { used: false, verdict: 'unknown', method: null, reason: 'empty-text', tokens: [], fragment: null };
+  }
+  if ([...normReply].length < MIN_REPLY_CHARS) {
+    return { used: false, verdict: 'unknown', method: null, reason: 'too-short', tokens: [], fragment: null };
+  }
+
+  // ① fragment：旧的强信号，原样片段 ≥6 字（口径一字不改）
+  const frag = matchInReply(fragments, normReply);
+  if (frag) {
+    return { used: true, verdict: 'used', method: 'fragment', reason: 'fragment', tokens: [frag], fragment: frag };
+  }
+
+  // ② entity：内容 token 共现
+  const memTokens = (Array.isArray(memoryTokens) ? memoryTokens : [])
+    .map((t) => (t && typeof t === 'object' ? t : tokenFromKey(t)))
+    .filter(Boolean);
+  if (!memTokens.length) {
+    return { used: false, verdict: 'not-used', method: null, reason: 'no-memory-tokens', tokens: [], fragment: null };
+  }
+  const hits = intersectTokens(memTokens, entityTokens(reply));
+  if (!hits.length) {
+    return { used: false, verdict: 'not-used', method: null, reason: 'no-entity-overlap', tokens: [], fragment: null };
+  }
+  const strong = hits.find((t) => t.strong);
+  if (hits.length >= 2 || strong) {
+    return {
+      used: true, verdict: 'used', method: 'entity', reason: 'entity',
+      tokens: hits.map((t) => t.text), fragment: null,
+    };
+  }
+  return {
+    used: false, verdict: 'not-used', method: null, reason: 'weak-entity-only',
+    tokens: hits.map((t) => t.text), fragment: null,
+  };
+}
+
+/** 便捷入口：直接给记忆原文。单测与 memory-recall 对账都可用。 */
+function judgeUsage(memoryText, replyText, fragments) {
+  return judgeTokens(entityTokens(memoryText), replyText, fragments);
+}
 
 const CLAUSE_SPLIT = /[\s，。！？!?；;、,.~～…—\-—()\[\]{}"'“”‘’《》<>|/\\]+/u;
 
@@ -88,6 +248,21 @@ function isDistinctive(frag) {
     if (frag === phrase || frag.startsWith(phrase) || frag.endsWith(phrase)) return false;
   }
   return true;
+}
+
+/**
+ * 片段命中（纯函数）：回复已归一化，片段按长度降序尝试原样包含。
+ * @param {string[]} fragments
+ * @param {string} normReply normalizeText() 之后、去掉空白/标点/符号的回复
+ * @returns {string|null}
+ */
+function matchInReply(fragments, normReply) {
+  const list = Array.isArray(fragments) ? fragments.slice().sort((a, b) => b.length - a.length) : [];
+  const reply = String(normReply == null ? '' : normReply);
+  for (const frag of list) {
+    if (frag && reply.includes(frag)) return frag;
+  }
+  return null;
 }
 
 /**
@@ -208,6 +383,9 @@ function blankEntry(id, src, role) {
     role: String(role || ''),
     preview: '',
     fragments: [],
+    // 内容 token（落地只存 key：'c:香菜' / 'n:2026-11-24' / 'a:openai'）。
+    // 2026-11-24 起用于 entity 共现判定；老记录没有这个字段按空处理（下次注入自动补齐）。
+    tokens: [],
     injected: 0,
     used: 0,
     firstAt: 0,
@@ -216,6 +394,8 @@ function blankEntry(id, src, role) {
     decayed: false,
     batch: '',
     usedBatch: '',
+    // 最近一次被判「用上」的方式（'fragment' | 'entity'），便于对账。
+    lastMethod: '',
   };
 }
 
@@ -227,6 +407,9 @@ function normalizeLoadedEntry(raw, id) {
   e.fragments = Array.isArray(raw.fragments)
     ? raw.fragments.map((f) => String(f || '')).filter((f) => f.length >= MIN_FRAGMENT_CHARS).slice(0, MAX_FRAGMENTS)
     : [];
+  e.tokens = Array.isArray(raw.tokens)
+    ? raw.tokens.map((t) => String(t || '')).filter((t) => t.length > 2).slice(0, MAX_TOKENS)
+    : [];
   e.injected = Math.max(0, Math.floor(num(raw.injected, 0)));
   e.used = Math.max(0, Math.floor(num(raw.used, 0)));
   e.firstAt = Math.max(0, num(raw.firstAt, 0));
@@ -235,6 +418,7 @@ function normalizeLoadedEntry(raw, id) {
   e.decayed = raw.decayed === true;
   e.batch = String(raw.batch || '');
   e.usedBatch = String(raw.usedBatch || '');
+  e.lastMethod = (raw.lastMethod === 'entity' || raw.lastMethod === 'fragment') ? raw.lastMethod : '';
   return e;
 }
 
@@ -359,6 +543,7 @@ function createMemoryUsage(options = {}) {
       if (text) {
         const fragments = extractFragments(text);
         if (fragments.length) entry.fragments = fragments;
+        entry.tokens = entityTokens(text).map((t) => t.key).slice(0, MAX_TOKENS);
         entry.preview = normalizeText(text).slice(0, 40);
       }
       if (item.source || item.src) entry.src = String(item.source || item.src);
@@ -376,18 +561,11 @@ function createMemoryUsage(options = {}) {
     return { ok, ids, batchId, added, error: lastError || null };
   }
 
-  function matchFragment(fragments, normReply) {
-    const list = Array.isArray(fragments) ? fragments.slice().sort((a, b) => b.length - a.length) : [];
-    for (const frag of list) {
-      if (frag && normReply.includes(frag)) return frag;
-    }
-    return null;
-  }
-
   /**
-   * 回复完成后结算：只有回复里原样出现某条目的关键片段才算「用上」。
+   * 回复完成后结算：原样片段命中（fragment）或内容 token 共现（entity）都算「用上」。
    * 若 pending 记着轮次 A、当前轮次非空且不是 A → 丢弃该批（reason='stale-turn'），
    * 不拿这一轮的回复去结算上一轮的注入。
+   * 回复为空/过短 → verdict='unknown'（不算 miss，也不虚报命中）。
    * @param {{ids?:string[], text?:string, at?:number, batchId?:string, keepPending?:boolean}} args
    */
   function noteUsed(args = {}) {
@@ -399,7 +577,7 @@ function createMemoryUsage(options = {}) {
     if (current && current.turnId && currentTurn && currentTurn !== current.turnId) {
       pending = null;
       staleDropped += 1;
-      return { ok: true, checked: 0, matched: [], used: 0, reason: 'stale-turn', staleDropped };
+      return { ok: true, checked: 0, matched: [], used: 0, verdict: 'unknown', reason: 'stale-turn', staleDropped };
     }
     const explicitIds = Array.isArray(args.ids) && args.ids.length
       ? [...new Set(args.ids.map((id) => String(id)))]
@@ -408,17 +586,21 @@ function createMemoryUsage(options = {}) {
     const batchId = String(args.batchId || (current && current.batchId) || '');
     const text = String(args.text == null ? '' : args.text);
 
-    if (!ids.length) return { ok: true, checked: 0, matched: [], used: 0, reason: 'no-ids' };
+    if (!ids.length) return { ok: true, checked: 0, matched: [], used: 0, verdict: 'unknown', reason: 'no-ids' };
     if (current && at - Number(current.at || 0) > PENDING_TTL_MS) {
       pending = null;
-      return { ok: true, checked: 0, matched: [], used: 0, reason: 'stale-pending' };
+      return { ok: true, checked: 0, matched: [], used: 0, verdict: 'unknown', reason: 'stale-pending' };
     }
     if (!text.trim()) {
       if (args.keepPending !== true) pending = null;
-      return { ok: true, checked: ids.length, matched: [], used: 0, reason: 'empty-text' };
+      return { ok: true, checked: ids.length, matched: [], used: 0, verdict: 'unknown', reason: 'empty-text' };
+    }
+    // 过短回复判不了：返回 unknown（旧口径会把它当 miss，等于用「没说够长」扣命中率）
+    if ([...normalizeText(text)].length < MIN_REPLY_CHARS) {
+      if (args.keepPending !== true) pending = null;
+      return { ok: true, checked: ids.length, matched: [], used: 0, verdict: 'unknown', reason: 'too-short' };
     }
 
-    const normReply = normalizeText(text);
     const matched = [];
     for (const id of ids) {
       const entry = data.entries[id];
@@ -426,13 +608,25 @@ function createMemoryUsage(options = {}) {
       // 迟到的回复不能算到下一轮注入头上；同一轮重复调用不能重复计数。
       if (batchId && entry.batch && entry.batch !== batchId) continue;
       if (batchId && entry.usedBatch === batchId) continue;
-      const fragment = matchFragment(entry.fragments, normReply);
-      if (!fragment) continue;
+      // 老记录没有 tokens 字段：退回片段 + preview 里能抽到的 token（preview 是归一化正文前 40 字）
+      const tokens = entry.tokens && entry.tokens.length
+        ? entry.tokens
+        : entityTokens(entry.preview || '');
+      const verdict = judgeTokens(tokens, text, entry.fragments);
+      if (!verdict.used) continue;
       entry.used = (Number(entry.used) || 0) + 1;
       entry.lastUsedAt = at;
       entry.decayed = false;
       entry.usedBatch = batchId || entry.batch || '';
-      matched.push({ id, source: entry.src, fragment });
+      entry.lastMethod = verdict.method || '';
+      matched.push({
+        id,
+        source: entry.src,
+        // 旧字段：fragment 命中时给片段原文；entity 命中时没有片段（null），改用 tokens 说明证据
+        fragment: verdict.method === 'fragment' ? verdict.fragment : null,
+        method: verdict.method,
+        tokens: verdict.tokens,
+      });
     }
 
     if (args.keepPending !== true) pending = null;
@@ -442,6 +636,7 @@ function createMemoryUsage(options = {}) {
       checked: ids.length,
       matched,
       used: matched.length,
+      verdict: matched.length ? 'used' : 'not-used',
       error: lastError || null,
     };
   }
@@ -538,10 +733,18 @@ module.exports = {
   DECAY_DAYS,
   MIN_FRAGMENT_CHARS,
   MAX_FRAGMENTS,
+  MAX_TOKENS,
+  MIN_REPLY_CHARS,
   MAX_ENTRIES,
   PENDING_TTL_MS,
+  ENTITY_STOPWORDS,
   normalizeText,
   extractFragments,
+  entityTokens,
+  tokenFromKey,
+  matchInReply,
+  judgeTokens,
+  judgeUsage,
   idFor,
   isDecayed,
   isUnused,

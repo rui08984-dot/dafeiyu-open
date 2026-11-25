@@ -14,6 +14,9 @@ const __silentAudit = require('../../../js/core/silent-audit.js');
 const { Plugin } = require('../../../js/core/plugin-base.js');
 const { resolvePluginEnabled } = require('../../../js/core/plugin-context.js');
 const jsonStore = require('../../../js/core/json-store.js');
+// 后台云端花费闸（2026-11-24 第三轮 P1）：这条提示会把下一轮回复往「多说一句」上推，
+// 属于后台行为；静默期/预算关时不该再叠这层推力。
+const backgroundLLM = require('../../../js/core/background-llm.js');
 const fs = require('fs');
 const path = require('path');
 
@@ -62,10 +65,17 @@ class CompanionHealthPlugin extends Plugin {
         }
     }
 
-    _save() {
+    /**
+     * 落盘。默认一分钟最多写一次（分钟数是连续累计的，丢一秒不心疼）；
+     * `force=true` 绕过节流 —— 用于 `_lastPromptAt` 这类「丢了会直接导致重复打扰」的状态。
+     *
+     * 2026-11-24 第四轮 P2 根因修：提示后 1 分钟内重启时，`_lastPromptAt` 还卡在节流窗口里
+     * 没落盘 → 重启后读回 0 → 两小时内又提示一次。所以提示那一刻必须同步落盘。
+     */
+    _save(force) {
         if (!this._file) return;
         const now = Date.now();
-        if (now - (this._lastSaveAt || 0) < 60000) return;   // 一分钟最多写一次
+        if (force !== true && now - (this._lastSaveAt || 0) < 60000) return;   // 一分钟最多写一次
         // 文件坏过（本进程已隔离）就别写回：否则等于用今天的计数把仅剩的残骸盖掉
         if (jsonStore.isQuarantined(this._file)) {
             if (!this._quarantineWarned) {
@@ -99,15 +109,22 @@ class CompanionHealthPlugin extends Plugin {
         const now = Date.now();
         if (this._minutes < this._threshold) return;
         if (now - this._lastPromptAt < this._gapMs) return;
+        // 后台云端闸：跳过时**不推进 lastPromptAt**、不注入补丁 —— 闸放开后还能补提示
+        // （否则关一次后台预算就等于「今天这条提醒被吃掉」，用户会觉得提示时有时无）。
+        const gate = backgroundLLM.ensureCanRun(this.context, { kind: 'companion-health' });
+        if (!gate.ok) return;
         this._lastPromptAt = now;
-        this._save();
+        // 立即落盘（绕过节流）：提示过却没留住时间戳 = 重启后两小时内再提示一次
+        this._save(true);
         try {
             // 分寸：不劝、不说教，用她自己的口吻，一句话
             // P1-9：口径写明「只算他发来的消息」——她主动说话不在这里计数，别把单向输入说成陪伴。
+            // volatile（2026-11-24 第三轮 P1）：带「今天已经互动 X 小时」的临时状态，每轮都会变；
+            // 写进 system 会在 add/remove 之间改两次 system，把整段历史前缀缓存打穿。
             this.context.addSystemPromptPatch(PATCH_ID,
                 '（今天他已经和你互动了 ' + Math.round(this._minutes / 60 * 10) / 10 + ' 小时（只算他发来的消息）。' +
                 '这轮可以顺口提一句——用你自己的语气，一句话，别劝他、别讲道理，' +
-                '比如"你今天是打算在电脑前坐一天了？"。不提也行。）');
+                '比如"你今天是打算在电脑前坐一天了？"。不提也行。）', { volatile: true });
             this.context.log('info', '[陪伴健康] 今日互动（用户输入） ' + Math.round(this._minutes) + ' 分钟，已提示');
         } catch (e) { try { __silentAudit.audit('index.js:88', e); } catch (e2) {} }
     }

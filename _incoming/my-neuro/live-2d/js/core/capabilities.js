@@ -74,7 +74,8 @@ const CAPABILITIES = [
   // 2026-11-16 插件收敛：community/core-memory-injector 已删除，memory.core_inject 声明同步移除
 
   // ── 主动性（总闸 + 各路）─────────────────────────────────────────────
-  { id: 'proactive.quiet', name: '静默模式（总闸）', group: '主动性', kind: 'config', key: 'cost.quiet', default: true, hot: true, note: '只拦「主动开口」；用户说话仍会调模型。总览/设置/能力页/遥控3003/直播台3004 五个入口同源走 8103（托盘没有静默项，2026-11-21 更正）' },
+  { id: 'proactive.quiet', name: '静默模式（总闸）', group: '主动性', kind: 'config', key: 'cost.quiet', default: true, hot: true, note: '只拦「主动开口」；用户说话仍会调模型。**不再兼任省钱**：后台摘要/反思/画像由 background_llm 单独管（2026-11-24 拆分）。总览/设置/能力页/遥控3003/直播台3004 五个入口同源走 8103' },
+  { id: 'proactive.background_llm', name: '后台 LLM 预算开关', group: '主动性', kind: 'config', key: 'cost.background_llm', default: true, hot: false, soft: true, impl: 'js/core/background-llm.js', note: '关掉后片段卡/反思/画像/日记/判官等后台 LLM 全部跳过（原文仍落盘、游标不丢）；前缀压缩不受影响（它本身是省钱手段）。**改完需重启**：插件上下文持有启动快照。配额 429 时由 llm-health 自动熔断，不需要手动关。config 缺省合法（默认开）' },
   { id: 'proactive.auto_chat', name: '自动搭话', group: '主动性', kind: 'plugin', key: 'built-in/auto-chat', default: true, hot: true, note: '默认间隔 60s（2026-11-16 从 15s 上调）' },
   { id: 'proactive.dawn_dusk', name: '晨昏问候', group: '主动性', kind: 'plugin', key: 'community/dawn-dusk-line', default: true, hot: true },
   { id: 'proactive.alive_state', name: '活着感（饱食/精力/亲密）', group: '主动性', kind: 'plugin', key: 'community/alive-state', default: true, hot: true, evidence: { tests: ['_incoming/my-neuro/live-2d/plugins/community/alive-state/state-model.test.js'] } },
@@ -136,10 +137,19 @@ const CAPABILITIES = [
   { id: 'integration.mcp', name: 'MCP 工具', group: '集成', kind: 'config', key: 'mcp.enabled', default: false, hot: false, impl: 'js/app-initializer.js', note: 'MCPManager 的启动开关' },
 
   // ── 上下文 ────────────────────────────────────────────────────────────
-  { id: 'ctx.limit', name: '上下文条数上限', group: '上下文', kind: 'config', key: 'context.max_messages', default: 16, hot: false, note: '2026-11-16 从 24 降到 16（prefill 成本）；紧急裁剪在 96 条才触发，正常先走压缩' },
+  { id: 'ctx.limit', name: '上下文条数上限', group: '上下文', kind: 'config', key: 'context.max_messages', default: 16, hot: false, note: '2026-11-24 P0-2：硬裁触发线 96→48（仍保留 4× 回差），并新增 history token 兜底（context.hard_trim_tokens，缺省 24000）；正常先走压缩' },
   // 2026-11-23 审计更正：context-compressor 插件用 context.getConfig() 读预算，
   // 而插件上下文持有启动时的配置快照 → 改完需重启才生效（旧声明 hot:true 是错的）。
-  { id: 'ctx.token_budget', name: '上下文 token 预算', group: '上下文', kind: 'config', key: 'context.token_budget', default: 12000, hot: false, note: 'E8：达到 70% 且消息≥15 就触发压缩；2026-11-23 更正为需重启（压缩插件持有启动快照）；缺省 12000' },
+  // 2026-11-24 P0-2：压缩触发改为 **history-only token**（不再把 system+tools 一起算进
+  // 「总预算 70%」——那套口径下 system 3.7k + tools 6.3k 已顶满 10k，触发线永远达不到）。
+  { id: 'ctx.history_budget', name: '历史压缩预算', group: '上下文', kind: 'config', key: 'context.history_token_budget', default: 8000, hot: false, soft: true, note: '只算对话历史的 token；达到预算且比上次压缩后至少再涨 4k 才压。context-compressor 的 plugin_config.history_token_budget 优先，本键是全局兜底（ContextManager 的条数闸也按它分档）；改完需重启' },
+  { id: 'ctx.hard_trim_tokens', name: '硬裁 token 兜底', group: '上下文', kind: 'config', key: 'context.hard_trim_tokens', default: 24000, hot: false, soft: true, impl: 'js/ai/ContextManager.js', note: '压缩失败/被禁用时的紧急背压：history 超它就裁，按 token 继续减半到 4 条下限' },
+  { id: 'ctx.tool_result_cap', name: '工具回执上限（单条）', group: '上下文', kind: 'config', key: 'context.tool_result_max_chars', default: 12000, hot: false, soft: true, impl: 'js/ai/tool-result-cap.js', note: '单条工具结果超过 context.tool_result_max_chars 就截中间（留头尾，可 offset/artifact 续读）；本轮累计上限见 ctx.turn_tool_result_cap' },
+  { id: 'ctx.turn_tool_result_cap', name: '工具回执上限（单轮累计）', group: '上下文', kind: 'config', key: 'context.turn_tool_result_max_chars', default: 32000, hot: false, soft: true, impl: 'js/ai/tool-result-cap.js', note: '一轮工具循环里所有回执合计超过它就省略最旧、保最新（按 offset/artifact 可续读）；单条上限见 ctx.tool_result_cap' },
+  { id: 'ctx.tool_filter', name: '会话级工具子集', group: '上下文', kind: 'config', key: 'toolFilter.enabled', default: false, hot: false, soft: true, impl: 'js/ai/tool-picker.js', note: '开启后按当前模式（聊天/操控/游戏/看视频）选一次工具子集，整个会话保持；核心工具永在、minKeep=8。**不合并工具**；模式切换才重选，可能打穿 tools 段缓存。config 缺省=全量' },
+  { id: 'memory.diary_local', name: '日记走本地模型', group: '记忆', kind: 'config', key: 'diary.local_enabled', default: false, hot: false, soft: true, impl: 'js/ai/DiaryManager.js', note: 'false=日记摘要走云端主模型（默认）；true 才走本地 llama.cpp:11435（MemOperator-4B）。本地不可用时跳过、不回退云' },
+  { id: 'cost.weekly_budget', name: '周 token 预算', group: '成本', kind: 'config', key: 'cost.weekly_token_budget', default: 0, hot: false, soft: true, impl: 'pet-runtime/tools/doctor.mjs', note: '0=只统计不告警；设为正数后近 7 天云用量（不含本地模型）≥80% 时 doctor 黄警告。只告警不拦截（用户 2026-11-24 拍板）' },
+  { id: 'cost.local_memory', name: '本地记忆模型', group: '成本', kind: 'config', key: 'cost.local_memory', default: true, hot: false, soft: true, impl: 'js/core/local-llm.js', note: '默认开：片段卡/画像/日记/MemOS /add 抽取走本地 llama.cpp:11435（MemOperator-4B，32K）；反思/判官仍走云。关掉后后台本地任务跳过（不回退云，避免意外烧配额）' },
   { id: 'ctx.persist', name: '持久化对话历史', group: '上下文', kind: 'config', key: 'context.persistent_history', default: true, hot: false },
   { id: 'ctx.enable_limit', name: '启用上下文条数上限', group: '上下文', kind: 'config', key: 'context.enable_limit', default: true, hot: false, impl: 'js/ai/conversation/ConversationCore.js', note: '关掉后 ctx.limit（max_messages）不生效' },
 

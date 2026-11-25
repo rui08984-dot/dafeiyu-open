@@ -3,7 +3,9 @@
 // 依据：docs/框架设计-四块落地-2026-11-20.md §5
 //   · data/insights.jsonl：一行一条 insight；无重复时只 append，命中保守重复判据时
 //     整文件原子重写（occurrences 累加，见 mergeOrAppendInsights）
-//   · data/insights-cursor.json：{lastEpisodeLine, lastEpisodeId, lastRunAt, runsToday, day, lastError}
+//   · data/insights-cursor.json：{lastEpisodeLine, lastEpisodeId, lastRunAt, runsToday, day, lastError,
+//     reflectRemain, reflectPending}
+//     —— 后两个是「反思触发累计」的持久化（2026-11-24 审计 §9.3-③）：重启不再清零。
 //   · 游标不前进 ≠ 数据丢失：失败时 lastEpisodeLine 不动，下次重试
 //
 // 为什么游标按 **episode 行号**：
@@ -34,6 +36,16 @@ function clampInt(n, lo, hi, fallback) {
     return Math.min(hi, Math.max(lo, Math.floor(v)));
 }
 
+/** 可缺省整数：缺失/非法 → null（区分「没存过」与「存了 0」）。 */
+function optionalInt(n, lo, hi) {
+    // 注意先挡 null/undefined/空串：Number(null) === 0 会被夹成 1，
+    // 旧版游标（没有该字段）就会被误读成「remain=1，马上要反思」。
+    if (n === null || n === undefined || n === '') return null;
+    const v = Number(n);
+    if (!Number.isFinite(v)) return null;
+    return Math.min(hi, Math.max(lo, Math.floor(v)));
+}
+
 /** 本地日期 YYYY-MM-DD（不要用 toISOString：UTC 会把凌晨算到前一天） */
 function todayStr(ts) {
     const d = new Date(Number.isFinite(Number(ts)) ? Number(ts) : Date.now());
@@ -49,6 +61,10 @@ function emptyCursor() {
         runsToday: 0,
         day: '',
         lastError: null,
+        // 反思触发持久化（2026-11-24 审计 §9.3-③）：这两个字段与片段游标同文件存放，
+        // 但语义独立 —— 重启后接着累减，而不是每次 onInit 重置成阈值。
+        reflectRemain: null,
+        reflectPending: null,
     };
 }
 
@@ -62,6 +78,9 @@ function normalizeCursor(raw) {
         runsToday: clampInt(c.runsToday, 0, 1000, 0),
         day: typeof c.day === 'string' ? c.day : '',
         lastError: typeof c.lastError === 'string' ? c.lastError : null,
+        // null = 旧版游标没这两个字段（调用方保留自己的默认值，不要把 0 当「已耗尽」）
+        reflectRemain: optionalInt(c.reflectRemain, 1, 100000),
+        reflectPending: typeof c.reflectPending === 'boolean' ? c.reflectPending : null,
     };
 }
 

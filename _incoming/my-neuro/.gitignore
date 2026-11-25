@@ -44,3 +44,5 @@ live-2d/llm_providers.json.*
 # 运行产物 / 本地状态（2026-11-23）
 live-2d/runtime.log*
 .sessionrelay/
+
+live-2d/crash-main.log*

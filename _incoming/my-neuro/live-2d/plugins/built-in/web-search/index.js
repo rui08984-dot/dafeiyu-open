@@ -5,19 +5,42 @@ const TOOL_DEFINITION = {
     type: 'function',
     function: {
         name: 'web_search',
-        description: '使用搜索网络引擎，并返回内容',
+        description: '使用搜索网络引擎，并返回内容。结果多时按 offset/limit 分页，回执末尾给「续读：offset=N」。',
         parameters: {
             type: 'object',
             properties: {
                 query: {
                     type: 'string',
                     description: '想要搜索的内容关键词'
+                },
+                offset: {
+                    type: 'integer',
+                    description: '（可续读）从第几条结果开始，默认 0；下次用回执里的 offset'
+                },
+                limit: {
+                    type: 'integer',
+                    description: '（可续读）本次最多返回几条，默认 5，上限 10'
                 }
             },
             required: ['query']
         }
     }
 };
+
+const DEFAULT_LIMIT = 5;
+const MAX_LIMIT = 10;
+
+function _pageParams(p) {
+    const offset = Math.max(0, Math.floor(Number(p && p.offset) || 0));
+    const limit = Math.max(1, Math.min(MAX_LIMIT, Math.floor(Number(p && p.limit) || DEFAULT_LIMIT)));
+    return { offset, limit };
+}
+
+function _nextLine(offset, returned, total, limit) {
+    const next = offset + returned;
+    if (next >= total) return '';
+    return '…（还有 ' + (total - next) + ' 条；续读传 offset=' + next + ' limit=' + limit + '）\n';
+}
 
 class WebSearchPlugin extends Plugin {
 
@@ -40,7 +63,8 @@ class WebSearchPlugin extends Plugin {
         throw new Error(`[web-search] 不支持的工具: ${name}`);
     }
 
-    async _webSearch({ query }) {
+    async _webSearch({ query, offset: rawOffset, limit: rawLimit }) {
+        const { offset, limit } = _pageParams({ offset: rawOffset, limit: rawLimit });
         // ① 先走本机 SearXNG
         try {
             const r = await axios.get(this._searx + '/search', {
@@ -49,14 +73,16 @@ class WebSearchPlugin extends Plugin {
             });
             const items = (r.data && r.data.results) || [];
             if (items.length) {
-                this.context.log('info', '[web-search] SearXNG 命中 ' + items.length + ' 条: ' + query);
-                const top = items.slice(0, 5);
-                let out = '搜索结果（来自本机 SearXNG）：\n';
-                top.forEach((it, i) => {
-                    out += (i + 1) + '. ' + String(it.title || '无标题').slice(0, 80) + '\n';
+                this.context.log('info', '[web-search] SearXNG 命中 ' + items.length + ' 条: ' + query
+                    + '（返回第 ' + offset + ' 起 ' + limit + ' 条）');
+                const page = items.slice(offset, offset + limit);
+                let out = '搜索结果（来自本机 SearXNG，共 ' + items.length + ' 条）：\n';
+                page.forEach((it, i) => {
+                    out += (offset + i + 1) + '. ' + String(it.title || '无标题').slice(0, 80) + '\n';
                     out += '   ' + String(it.content || '').replace(/\s+/g, ' ').slice(0, 220) + '\n';
                     out += '   ' + String(it.url || '') + '\n';
                 });
+                out += _nextLine(offset, page.length, items.length, limit);
                 return out;
             }
             this.context.log('info', '[web-search] SearXNG 没结果，回落 Tavily');
@@ -70,8 +96,9 @@ class WebSearchPlugin extends Plugin {
 
             const response = await axios.post('https://api.tavily.com/search', {
                 query,
-                max_results: 3,
-                include_answer: true,
+                // 分页靠多取再切：Tavily 单次最多 20 条
+                max_results: Math.min(20, offset + limit),
+                include_answer: offset === 0,   // 摘要只在第一页有意义（省 token）
                 search_depth: 'basic',
                 api_key: this._tavilyKey
             });
@@ -80,20 +107,24 @@ class WebSearchPlugin extends Plugin {
 
             let fullContent = '';
 
-            const aiAnswer = response.data.answer || '无AI摘要';
-            fullContent += `AI答案摘要：${aiAnswer}\n\n`;
+            if (offset === 0) {
+                const aiAnswer = response.data.answer || '无AI摘要';
+                fullContent += `AI答案摘要：${aiAnswer}\n\n`;
+            }
 
             const searchResults = response.data.results || [];
-            if (searchResults.length > 0) {
-                fullContent += '详细搜索结果：\n';
-                searchResults.forEach((result, i) => {
+            const page = searchResults.slice(offset, offset + limit);
+            if (page.length > 0) {
+                fullContent += `详细搜索结果（共 ${searchResults.length} 条）：\n`;
+                page.forEach((result, i) => {
                     const title = result.title || '无标题';
                     const content = result.content || '无内容';
                     const url = result.url || '无URL';
-                    fullContent += `${i + 1}. 标题：${title}\n`;
+                    fullContent += `${offset + i + 1}. 标题：${title}\n`;
                     fullContent += `   内容：${content.substring(0, 1500)}...\n`;
                     fullContent += `   来源：${url}\n\n`;
                 });
+                fullContent += _nextLine(offset, page.length, searchResults.length, limit);
             } else {
                 fullContent += '未找到相关搜索结果。\n';
             }

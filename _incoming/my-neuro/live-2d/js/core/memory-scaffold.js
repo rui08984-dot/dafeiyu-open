@@ -95,6 +95,15 @@ function isNoise(text, role) {
     if (/^\[?\d{4}(?:[-/年])\d{1,2}(?:[-/月])\d{1,2}日?\]?$/.test(text)) return true;
     // 上下文压缩留下的系统标记：不是「发生过的事」，留着还会被当成最近对话
     if (/^\[(?:历史压缩|历史对话总结)\]/.test(text)) return true;
+    // 2026-11-24 P0-2：工具回执限流的占位符（整条只有标记、没有内容）——
+    // 工具结果被省略后，这条消息不该再被当成「对话」编进记忆索引。
+    if (/^\[本轮工具输出累计超过 \d+ 字符/.test(text)) return true;
+    // 2026-11-24 ADR-014：工具回执的「截断/续读/artifact 指针」也不是发生过的事。
+    // 这些指针会随大输出频繁出现在 tool 消息里，编进索引会毒化召回（且路径本身无意义）。
+    if (/^\[工具输出过长，已截断 \d+ 字符/.test(text)) return true;
+    if (/tool-artifacts[\\/]/.test(text)) return true;
+    if (/完整(?:输出|结果|内容)已落盘[：:]/.test(text)) return true;
+    if (/(?:可用 offset\/limit|续读传 offset=|用 offset\/limit 或 next 续读)/.test(text)) return true;
     // 只有说话人前缀、没有正文的行（实测命中过：`【大肥鱼】` 单独占一条，检索还排到前面）
     if (/^【[^】]{1,20}】\s*[:：]?\s*$/.test(text)) return true;
     // 工具调用的 JSON 回执（2026-11-15 探针抓到）：对话历史里混着

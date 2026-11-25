@@ -23,6 +23,9 @@ const VOLATILE_HEADER = '（系统补充，不必回应）';
 let _emitTelemetry = null;
 try { _emitTelemetry = require('./telemetry.js').emitTelemetry; } catch (e) { _emitTelemetry = null; }
 
+// ADR-014 轨道 1：真实 usage 基线。指纹算法与 llm-client 共用同一份（usage-ledger）。
+const usageLedger = require('./usage-ledger.js');
+
 function estimateTokens(text) {
     const s = String(text == null ? '' : text);
     let cjk = 0;
@@ -97,6 +100,100 @@ function record(input) {
     return m;
 }
 
+/**
+ * 真账优先的测量（ADR-014 轨道 1）。
+ *
+ * 思路与 ZCode/OpenCode 一致：provider 已经告诉我们上一轮真实 prompt_tokens（含 system/tools/
+ * 全部历史），这一轮只要「消息前缀没变」，新增的只有尾部几条 —— 用 estimate 算**增量**，
+ * 误差就从「整段 15k 的估算误差」降到「新增几百 token 的估算误差」。
+ *
+ * 前缀判定（逐条指纹，忽略图片 URL 与 user 消息末尾的易变块）：
+ *   · 易变块（prompt-layout.VOLATILE_HEADER 起到末尾）在 usage-ledger.fingerprint 里已被剥掉，
+ *     所以工具轮里落在中间 user 上的易变块不再让基线失效（P1-2，2026-11-24 对抗审查）；
+ *   · 仍允许**最后一条**不同 —— 压缩/裁剪测量的是 voiceChat.messages（没有易变尾巴），
+ *     宿主最后一条 user 可能还没被请求侧拼上尾巴；这是设计内的差异（兜底，不再承担易变块）；
+ *   · 压缩在第 1 条后插入 summary、裁剪砍掉头部 → 第 1 条指纹就变了 → 回退全量估算。
+ *
+ * history 的返回口径：估算值 × 校准系数（provider prompt / 上次总量估算，钳在 0.5–2.5）。
+ * 没有分项时系数为 1 —— 宁可不校准，也不要拿一个猜出来的比例放大。
+ *
+ * @param {{messages?:Array, tools?:Array, lastUsage?:object}} input
+ *   tools 传 undefined = 「工具面没拿到，假定不变」；传 [] = 「这一轮确实没有工具」。
+ * @returns {object} measure() 的字段 + { total, history, source, baseline, calibration, ... }
+ */
+function measureWithBaseline(input) {
+    const o = input || {};
+    const messages = Array.isArray(o.messages) ? o.messages : [];
+    const toolsGiven = Array.isArray(o.tools);
+    const toolList = toolsGiven ? o.tools : [];
+    const cur = measure({ messages, tools: toolList });
+    const out = {
+        ...cur,
+        source: 'estimate',
+        baseline: false,
+        calibration: null,
+        baselineAt: null,
+        baselineLabel: null,
+        addedMessages: 0,
+        deltaEstimated: 0,
+    };
+
+    // 优先用主对话（main）的基线：视觉/插件请求的 prompt 很小，拿来当锚会失真
+    const lu = o.lastUsage || usageLedger.getLastUsage('main') || usageLedger.getLastUsage();
+    if (!lu || typeof lu !== 'object') return out;
+
+    const promptTokens = Number(lu.prompt_tokens);
+    const hashes = Array.isArray(lu.msgHashes) ? lu.msgHashes : null;
+    const est = lu.estimated && typeof lu.estimated === 'object' ? lu.estimated : null;
+    if (!hashes || !hashes.length || !Number.isFinite(promptTokens) || promptTokens <= 0) return out;
+    // 只有 1 条消息的基线没有可比前缀（allowTail=0 会让任何数组都“匹配”）→ 不认
+    if (hashes.length < 2) return out;
+
+    const n = Math.min(hashes.length, messages.length);
+    let common = 0;
+    while (common < n && usageLedger.fingerprint(messages[common]) === hashes[common]) common += 1;
+
+    const allowTail = hashes.length - 1;      // 最后一条允许被易变尾巴改写
+    if (messages.length < allowTail || common < allowTail) return out;
+
+    const estTotal = est && Number.isFinite(Number(est.total)) ? Number(est.total) : null;
+    const estTools = est && Number.isFinite(Number(est.tools)) ? Number(est.tools) : 0;
+
+    // 消息侧增量 = 现在（去掉 tools）估 - 上次（去掉 tools）估
+    const msgDelta = estTotal == null ? 0 : (cur.total - cur.tools) - (estTotal - estTools);
+
+    // 工具侧增量：只有调用方明确给了 tools 且指纹变了，才加/减 tool 分项
+    let toolsDelta = 0;
+    let toolChanged = false;
+    if (toolsGiven) {
+        const nowHash = usageLedger.toolHash(toolList);
+        toolChanged = !!lu.toolHash && lu.toolHash !== nowHash;
+        if (toolChanged) toolsDelta = cur.tools - estTools;
+    }
+
+    const total = Math.max(0, Math.round(promptTokens + msgDelta + toolsDelta));
+
+    let calibration = 1;
+    if (estTotal && estTotal > 0) {
+        calibration = Math.max(0.5, Math.min(2.5, promptTokens / estTotal));
+    }
+    const history = Math.max(0, Math.round(cur.history * calibration));
+
+    return {
+        ...cur,
+        total,
+        history,
+        source: 'provider_usage',
+        baseline: true,
+        calibration: +calibration.toFixed(3),
+        baselineAt: Number(lu.at) || null,
+        baselineLabel: lu.label || null,
+        addedMessages: Math.max(0, messages.length - hashes.length),
+        deltaEstimated: Math.round(msgDelta + toolsDelta),
+        toolChanged,
+    };
+}
+
 /** 从 telemetry 读最近 N 轮的 section 峰值与 p50/p90（doctor 用）。 */
 function recent(n) {
     const fs = require('fs');
@@ -139,4 +236,13 @@ function recent(n) {
     return { n: rows.length, sections, topGrowth: topGrowth.slice(0, 2) };
 }
 
-module.exports = { measure, record, recent, classifyMessage, estimateTokens, VOLATILE_HEADER };
+module.exports = {
+    measure,
+    measureWithBaseline,
+    record,
+    recent,
+    classifyMessage,
+    estimateTokens,
+    getLastUsage: usageLedger.getLastUsage,
+    VOLATILE_HEADER,
+};

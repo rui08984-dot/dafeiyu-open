@@ -13,10 +13,30 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+// 数据根隔离（A2 同款，2026-11-24）：计划生成现在要过后台花费闸（background-llm.ensureCanRun
+// → llm-health），而 llm-health 读的是 RECORDS_DIR/LLM健康.json。不隔离的话，宿主正在
+// 配额暂停时本测试会整片变红 —— 那是宿主的账，不是计划生成的回归。**必须在 require 之前设**。
+process.env.PET_DATA_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'mk-plan-root-'));
+
 const PLUGIN_DIR = path.join(__dirname, '..', '_incoming', 'my-neuro', 'live-2d', 'plugins', 'community', 'mind-kernel');
+const LIVE = path.join(__dirname, '..', '_incoming', 'my-neuro', 'live-2d');
 const MindKernelPlugin = require(path.join(PLUGIN_DIR, 'index.js'));
 const DispatchPlugin = require(path.join(__dirname, '..', '_incoming', 'my-neuro', 'live-2d', 'plugins', 'community', 'dispatch', 'index.js'));
 const planStore = require(path.join(PLUGIN_DIR, 'lib', 'plan-store.js'));
+// 第四轮 P2：闸关 → planPending → 闸开补生成，需要直接控制云端闸（llm-health）
+const BL = require(path.join(LIVE, 'js', 'core', 'background-llm.js'));
+const { llmHealth } = require(path.join(LIVE, 'js', 'core', 'llm-health.js'));
+
+const HEALTH_PATH = path.join(process.env.PET_DATA_ROOT, 'LLM健康.json');
+function cloudOk() {
+    llmHealth.resetForTests({ path: HEALTH_PATH });
+    BL.__test.resetGateLog();
+}
+function cloudBlocked() {
+    cloudOk();
+    llmHealth.noteFailure({ status: 429, body: '{"error":{"message":"rate limited"}}' }, Date.now());
+    return BL.canRun({ getConfig: () => ({}) }).ok === false;
+}
 
 let pass = 0;
 let fail = 0;
@@ -230,6 +250,72 @@ const NINE_STEPS = { steps: Array.from({ length: 9 }, (_, i) => ({ title: '第' 
         await new Promise((r) => setImmediate(r));
         await s.p.onDestroy();
         eq('钩子：onDestroy 后 __mindKernelPlan 被清掉', typeof globalThis.__mindKernelPlan, 'undefined');
+    }
+
+    // ── ⑦ 闸关期间建的目标：planPending + 闸开 tick 补生成（第四轮 P2）─────
+    // 病根：配额暂停/预算关时 generatePlan 被闸跳过，之后**没有重试入口** ——
+    // 目标永久只剩 addGoalForTask 的 1 行计划。
+    {
+        const s = await setup({}, async () => JSON.stringify(THREE_STEPS));
+        ok('闸关前置：429 后 canRun 真的被拦', cloudBlocked() === true);
+
+        const gid = s.p.addGoalForTask({ title: '闸关期间的目标', doneWhen: '外部验证通过' });
+        ok('闸关：goal 建成功', typeof gid === 'string' && gid.length > 3, String(gid));
+
+        const plan0 = await s.p.generatePlan(gid);
+        eq('闸关：generatePlan 返回 null（不改写单步计划）', plan0, null);
+        eq('闸关：一次 LLM 都没调', s.state.calls, 0);
+        eq('闸关：计划仍是 1 行', s.p._store.get(gid).plan.lines.length, 1);
+        const pend1 = s.p._store.get(gid).planPending;
+        ok('闸关：goal 落了 planPending（attempts=0）',
+            !!pend1 && typeof pend1 === 'object' && pend1.attempts === 0, JSON.stringify(pend1));
+        ok('闸关：ledger 有 plan-pending',
+            readLedger(s.ledgerFile).some((r) => r.kind === 'plan-pending' && r.goalId === gid));
+        ok('debugState 能看到 plansPending',
+            (s.p.debugState().plansPending || []).some((x) => x.id === gid));
+
+        // tick 时闸还关 → 不生成、pending 保留
+        await s.p._tick();
+        await Promise.all(s.p._pendingPlanRetries || []);
+        eq('闸仍关：tick 不调 LLM', s.state.calls, 0);
+        ok('闸仍关：pending 保留', !!s.p._store.get(gid).planPending);
+
+        // 闸放开 + 下一 tick → 生成完整计划、pending 清除
+        cloudOk();
+        await s.p._tick();
+        await Promise.all(s.p._pendingPlanRetries || []);
+        eq('闸开 tick：LLM 调 1 次', s.state.calls, 1);
+        const g2 = s.p._store.get(gid);
+        eq('闸开 tick：计划 3 步', g2.plan.lines.length, 3);
+        eq('闸开 tick：pending 已清（null，不是残留对象）', g2.planPending, null);
+        eq('闸开 tick：落盘也清掉了', diskGoal(s.goalsFile, gid).planPending, null);
+        await s.p.onDestroy();
+    }
+
+    // ── ⑧ 重试上限：闸开但一直失败 → 最多 3 次，不永久循环（第四轮 P2）────
+    {
+        const s = await setup({ plan_timeout_ms: 50 }, async () => { throw new Error('QUOTA'); });
+        ok('上限前置：429 后 canRun 被拦', cloudBlocked() === true);
+        const gid = s.p.addGoalForTask({ title: '一直失败的目标', doneWhen: '外部验证通过' });
+        await s.p.generatePlan(gid);              // 闸关 → pending(attempts=0)
+        ok('上限：起点是 pending(attempts=0)',
+            !!(s.p._store.get(gid).planPending && s.p._store.get(gid).planPending.attempts === 0));
+
+        cloudOk();
+        for (let i = 0; i < 5; i += 1) {
+            await s.p._tick();
+            await Promise.all(s.p._pendingPlanRetries || []);
+        }
+        eq('上限：LLM 只尝试 3 次（不永久循环）', s.state.calls, 3);
+        eq('上限：pending 最终被清空', s.p._store.get(gid).planPending, null);
+        ok('上限：ledger 有 plan-pending-giveup',
+            readLedger(s.ledgerFile).some((r) => r.kind === 'plan-pending-giveup' && r.goalId === gid));
+        eq('上限：计划仍是单步（退回既有兜底）', s.p._store.get(gid).plan.lines.length, 1);
+        // 再 tick 一次也不该再打云
+        await s.p._tick();
+        await Promise.all(s.p._pendingPlanRetries || []);
+        eq('上限：给弃后再 tick 仍 0 新调用', s.state.calls, 3);
+        await s.p.onDestroy();
     }
 
     for (const d of tmpDirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (e) { /* 临时目录清不掉不影响判定 */ } }

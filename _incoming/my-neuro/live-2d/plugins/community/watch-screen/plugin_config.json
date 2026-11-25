@@ -43,10 +43,10 @@
   },
   "organVisionBudgetPerHour": {
     "title": "每小时摘要预算（次）",
-    "description": "超过就降级成\"只有时间戳\"，防止无上限烧钱。",
+    "description": "超过就降级成\"只有时间戳\"，防止无上限烧钱。静默期仍为 0（不调摘要）；调低可直接省视觉调用（90 ≈ 平均 40 秒一条，日常够用）。数字权威是 vision-organ.js 的 VISION_BUDGET_PER_HOUR_DEFAULT（ADR-014 定为 90/h；ADR-004 的 ≤6/h 是旧世界感知口径），这里的 default/value 必须与它一致，_probe/test-watch-screen-budget.cjs 会校验。旧出厂值 220 视为未配置，按 90 走。",
     "type": "int",
-    "default": 220,
-    "value": 220
+    "default": 90,
+    "value": 90
   },
   "organSummaryMaxChars": {
     "title": "单条摘要长度上限（字）",

@@ -37,6 +37,11 @@ rp.recordFile = (name) => path.join(REC, name);
 
 const UF = require(path.join(APP, 'js', 'core', 'user-facts.js'));
 const ES = require(path.join(APP, 'js', 'core', 'episode-store.js'));
+// ⚠ 2026-11-24 ADR-014：MemOS 后端改成本地（llama.cpp:11435）后，待写队列 flush/_drainQueue
+// 先过 _writeGateOpen → localLLM.isAvailable()。单测不依赖真 server：只桩探活本身。
+const localLLM = require(path.join(APP, 'js', 'core', 'local-llm.js'));
+const origIsAvailable = localLLM.isAvailable;
+localLLM.isAvailable = async () => true;
 const RECALL_PATH = path.join(APP, 'plugins', 'community', 'memory-recall', 'index.js');
 const EVOLVE_PATH = path.join(APP, 'plugins', 'community', 'memory-evolve', 'index.js');
 const PROFILE_PATH = path.join(APP, 'plugins', 'community', 'user-profile', 'index.js');
@@ -286,9 +291,11 @@ function readJsonFile(p, fallback) {
 
     console.log('');
     console.log((fail === 0 ? 'PASS ' : 'FAILED: ') + pass + ' / FAIL ' + fail);
+    localLLM.isAvailable = origIsAvailable;
     try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) { /* Windows 句柄占用时留临时目录，可接受 */ }
     process.exit(fail === 0 ? 0 : 1);
 })().catch((e) => {
     console.error('测试自身异常: ' + ((e && e.stack) || e));
+    localLLM.isAvailable = origIsAvailable;
     process.exit(1);
 });

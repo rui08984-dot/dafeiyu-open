@@ -71,6 +71,19 @@ function needsDesktopLock(action, arg) {
 // som_click 时若 SOM_STATE.seq 落后 → 说明中间又拍过别的窗口，编号坐标已不可信。
 let _stateSeq = 0;
 
+// 快照身份号（2026-11-24 根因修）：进程内单调递增，每次写 UIA_SNAPSHOT_STATE / SOM_STATE 都 +1。
+// 病根：#编号属于**某一次**快照，而 UIA_SNAPSHOT_STATE 是模块级单例 —— see 与 click 之间
+// 只要有别的东西（门禁并发 / watch-screen / 另一回合 / 后台任务）又拍了一次快照，
+// 编号就指向另一份快照（很可能是另一个窗口），且点击会「静默成功」。
+// sid 让回执能说清「你点的是第几代快照」，配合窗口身份 + 年龄做 fail-closed 校验。
+let _snapshotSid = 0;
+const SNAPSHOT_MAX_AGE_MS = 120000;   // 快照超过 2 分钟就拒绝按旧编号点（界面早变了）
+// som_click 的放宽上限（2026-11-24 第四轮 P2）：SoM 标注带**真实 hwnd** 时，长任务里
+// 「两分钟必须重拍一次」是纯误伤（窗口没换、编号仍有效）。同一 hwnd 放宽到 5 分钟；
+// 「窗口还活着」由点击前已有的 assertTargetFocused(strict) 兜底 —— 那个断言失败就一次
+// 点击都不发（fail-closed），所以这里只按「有没有可核对的 hwnd」决定 TTL。
+const SOM_STICKY_MAX_AGE_MS = 300000;
+
 // 只计数、不判冷却的「预扣配额」（红队 R6）。
 // batch / skill run 的内层原来完全绕过限速：外层闸扣 1 次，里面最多 20 次真实输入。
 function preChargeTokens(n, game) {
@@ -1963,9 +1976,198 @@ foreach ($c in @(${codes.join(',')})) { [void][PetP]::PostMessage($t,0x0102,[Int
 // 护栏同 Windows-MCP：按 ClassName 排除病态 a11y 树（Chromium/Electron 系）、深度限 5、
 // 元素封顶 60、只收可交互类型、JS 侧 8s 进程超时。
 const UIA_EXCLUDE_CLASSES = 'Chrome_WidgetWin_1|Chrome_RenderWidgetHostHWND';
-const UIA_SNAPSHOT_STATE = { title: '', items: [], hwnd: 0, pid: 0, rect: null };   // hwnd/pid/rect：身份守卫 + homing（2026-11-10 三十八轮）
-const SOM_STATE = { title: '', hwnd: 0, marks: [], rect: null };   // hwnd：真实窗口身份（2026-11-21）；rect：homing 自动补偿基线（三十八轮）
+const UIA_SNAPSHOT_STATE = {
+    title: '', items: [], hwnd: 0, pid: 0, rect: null,
+    // 2026-11-24：快照身份与代数（见 _snapshotSid 注释）
+    sid: 0, at: 0, targetHwnd: 0, targetTitle: '',
+};   // hwnd/pid/rect：身份守卫 + homing（2026-11-10 三十八轮）
+const SOM_STATE = {
+    title: '', hwnd: 0, pid: 0, marks: [], rect: null,
+    sid: 0, at: 0, targetHwnd: 0, targetTitle: '',
+};   // hwnd：真实窗口身份（2026-11-21）；pid：识别「把 pid 当 hwnd 传」的歧义（第四轮 P2）；rect：homing 自动补偿基线（三十八轮）
 const PVZ_STATE = { hwnd: 0, client: null, grid: null };   // 植物大战僵尸网格标定（pvz init）   // SoM 标注状态（som_click 按编号回查）   // 最近一次快照（click_element 按编号回查）
+
+// ── 快照≥编号绑定校验（2026-11-24 根因修，fail-closed）─────────────────────
+// #编号只在「拍它的那次快照」里成立。调用方给窗口（标题或 hwnd）时必须与快照记录的
+// 目标窗口一致；没给窗口则沿用快照自身的 hwnd（不拒绝），但把 sid 记进回执。
+// 任何一项对不上 / 快照过旧 → STALE_SNAPSHOT，且**不发点击**。
+const _normWinText = (s) => String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim();
+// 标题匹配的边界字符：空白 / 常见分隔符 / 左括号。只有「短标题后面紧跟这些」才算同一个窗口。
+const TITLE_BOUNDARY = /[\s\-–—_|/\\:：·.,，()（）\[\]【】]/;
+/**
+ * 窗口标题匹配（2026-11-25 P2-7 收紧）。
+ * 旧实现是双向 includes：req="QQ" 能匹配 "QQ音乐"、req="计" 能匹配一切 —— 等于没校验。
+ * 新规则：
+ *   · 归一化后完全相等 → 匹配；
+ *   · 短的一侧 < 4 个字符 → **必须精确相等**（"QQ"/"计算器" 这类短名不做前缀放宽）；
+ *   · 否则只认「前缀 + 边界」：长标题以短标题开头，且紧跟分隔符/空白（"记事本 - 未命名" 可匹配 "记事本 -"），
+ *     不再接受任意子串/后缀。后缀匹配（"file.txt - Notepad" vs "Notepad"）一律不认 ——
+ *     调用方应传完整标题或 hwnd（see windows 回执里有）。
+ */
+function _winTitleMatches(a, b) {
+    const x = _normWinText(a);
+    const y = _normWinText(b);
+    if (!x || !y) return false;
+    if (x === y) return true;
+    const shortSide = x.length <= y.length ? x : y;
+    const longSide = x.length <= y.length ? y : x;
+    if (shortSide.length < 4) return false;      // 短标题必须精确相等
+    if (!longSide.startsWith(shortSide)) return false;
+    return TITLE_BOUNDARY.test(longSide.charAt(shortSide.length));
+}
+
+/**
+ * 校验「这次点击引用的编号」是否仍属于当前快照。
+ * @param {object} state UIA_SNAPSHOT_STATE 或 SOM_STATE
+ * @param {{title?:string, hwnd?:number}} req 请求里带的窗口（可空）
+ * @param {{maxAgeMs?:number, space?:string, liveHwnds?:number[]|null}} [opts]
+ *        liveHwnds：当前真实存在的窗口 hwnd 列表（只在「数字既不是快照 hwnd、又等于快照 pid」
+ *        的歧义场景需要；传 null/不传 = 查不到窗口表，保持旧宽容，不拒绝）
+ * @returns {{ok:true, snapshot_id:number, snapshot_age_ms:number|null, window:{hwnd:number,title:string}, usedOwnWindow:boolean, matchedBy:string}
+ *          |{ok:false, code:'STALE_SNAPSHOT', reason:string, detail:string, snapshot_id:number, snapshot_age_ms:number|null, snapshot_window:{hwnd:number,title:string}, requested_window:{hwnd:number,title:string}}}
+ */
+function checkSnapshotBinding(state, req, opts) {
+    const st = state || {};
+    const o = opts || {};
+    const maxAge = Number.isFinite(o.maxAgeMs) ? o.maxAgeMs : SNAPSHOT_MAX_AGE_MS;
+    const sid = Number(st.sid) || 0;
+    const at = Number(st.at) || 0;
+    const age = at > 0 ? Math.max(0, Date.now() - at) : null;
+    const snapHwnd = Number(st.targetHwnd || st.hwnd) || 0;
+    const snapPid = Number(st.pid) || 0;
+    const snapTitle = String(st.targetTitle || st.title || '').trim();
+    const r = req || {};
+    const reqTitle = String(r.title == null ? '' : r.title).trim();
+    const reqHwnd = Number(r.hwnd) || 0;
+    const snapshot_window = { hwnd: snapHwnd, title: snapTitle };
+    const requested_window = { hwnd: reqHwnd, title: reqTitle };
+    const who = () => '「' + (snapTitle || ('hwnd ' + snapHwnd)) + '」（sid=' + sid + '）';
+    const stale = (reason, detail, extra) => Object.assign({
+        ok: false, code: 'STALE_SNAPSHOT', reason, detail,
+        snapshot_id: sid, snapshot_age_ms: age,
+        snapshot_window, requested_window,
+    }, extra || {});
+    const okResult = (matchedBy, extra) => Object.assign({
+        ok: true, snapshot_id: sid, snapshot_age_ms: age,
+        window: snapshot_window, usedOwnWindow: !reqHwnd && !reqTitle,
+        matchedBy,
+        // 回执里带「实际匹配到的窗口身份」：模型/评测能直接核对，不用回猜
+        matched: { by: matchedBy, hwnd: snapHwnd, title: snapTitle, requestedHwnd: reqHwnd, requestedTitle: reqTitle },
+    }, extra || {});
+
+    // ① 年龄：超过上限的快照不可信（界面早变了，编号可能指向别的东西）
+    if (age !== null && age > maxAge) {
+        return stale('expired',
+            '快照已过期：' + who() + ' 拍于 ' + Math.round(age / 1000) + ' 秒前（上限 ' +
+            Math.round(maxAge / 1000) + ' 秒）——界面可能已经变了。请重新 see 再点');
+    }
+    // ② 请求带了窗口：必须与快照目标一致
+    if (reqHwnd > 0) {
+        if (!snapHwnd) {
+            return stale('identity-unknown',
+                '快照没有窗口身份（sid=' + sid + '），无法确认编号属于 hwnd ' + reqHwnd +
+                '；请重新 see "' + (reqTitle || reqHwnd) + '" 再点');
+        }
+        if (reqHwnd !== snapHwnd) {
+            // 2026-11-24 第四轮 P2：纯数字最常见是**模型把 pid 当 hwnd 传**。快照记过 pid
+            // 且请求值等于它 = 同一个进程的窗口，按 window-mismatch 拒绝会让她在
+            // 「重新 see → 还是传 pid → 还是 mismatch」里死循环。
+            // 2026-11-25 P2-7 修正：「等于 pid」不能直接当通行证 —— 这个数字也可能**真的是
+            // 另一个窗口的 hwnd**（hwnd 与 pid 都是小整数，撞车完全可能）。所以先查实时窗口表：
+            //   · 传了 liveHwnds 且里面有它 → 是真实存在的另一个窗口 → 拒绝（window-mismatch）；
+            //   · 传了 liveHwnds 但没有它 → 这才当 pid 宽容（沿用快照窗口，回执给 identityNote）；
+            //   · 没传（窗口表查不到）→ 无法证伪，保持旧宽容。
+            if (snapPid && reqHwnd === snapPid) {
+                const live = Array.isArray(o.liveHwnds) ? o.liveHwnds : null;
+                const isRealWindow = live ? live.some((h) => Number(h) === reqHwnd) : null;
+                if (isRealWindow === true) {
+                    return stale('window-mismatch',
+                        '你传的 hwnd ' + reqHwnd + ' 当前确实是一个窗口（它同时也是快照窗口的 pid，数字撞车）——' +
+                        '编号只属于 ' + who() + '，不能跨窗口复用。请重新 see "' + (reqTitle || reqHwnd) + '" 再点',
+                        { pidHwndCollision: true });
+                }
+                return okResult('pid-tolerated', {
+                    usedOwnWindow: true,
+                    note: {
+                        code: 'pid-not-hwnd',
+                        text: '你传的 ' + reqHwnd + ' 是进程 pid，不是窗口 hwnd（快照窗口 hwnd=' + snapHwnd +
+                            '）。这次按快照窗口继续；下次请改传 hwnd=' + snapHwnd + ' 或窗口标题' +
+                            (live ? '' : '（本次未取到实时窗口表，无法排除同号窗口撞车）'),
+                    },
+                });
+            }
+            return stale('window-mismatch',
+                '快照属于 ' + who() + '，你点的是「hwnd ' + reqHwnd + '」；请重新 see "' +
+                (reqTitle || reqHwnd) + '" 再点');
+        }
+        return okResult('hwnd');
+    } else if (reqTitle) {
+        // 2026-11-24 第四轮 P2：hwnd=0 时只凭标题子串放行 —— 1 个字符（如 "Q"）几乎
+        // 匹配一切窗口，等于没校验。标题为空/过短 → identity-unknown，要求给 hwnd 或完整标题。
+        if (_normWinText(reqTitle).length < 2) {
+            return stale('identity-unknown',
+                '窗口标题太短（"' + reqTitle + '"，不足 2 个字符），按子串匹配会误中任意窗口；' +
+                '请改传完整标题或 hwnd（可在 see windows 回执里查）');
+        }
+        if (!snapTitle || _normWinText(snapTitle).length < 2) {
+            return stale('identity-unknown',
+                '快照的窗口标题不可用（"' + snapTitle + '"），无法确认编号属于「' + reqTitle +
+                '」；请重新 see "' + reqTitle + '" 再点');
+        }
+        if (!_winTitleMatches(snapTitle, reqTitle)) {
+            return stale('window-mismatch',
+                '快照属于「' + snapTitle + '」（sid=' + sid + '），你点的是「' + reqTitle +
+                '」；标题必须精确相等，或长标题以它开头并紧跟分隔符（短于 4 字的标题必须写全）。请重新 see "' + reqTitle + '" 再点');
+        }
+        return okResult('title');
+    }
+    // ③ 没带窗口：沿用快照自身 hwnd（不拒绝），回执里会带 sid 便于排障
+    return okResult('snapshot-own');
+}
+
+/**
+ * som_click 的快照年龄上限（纯函数，测试可直接断言）：
+ *   · 请求带了**可验证 hwnd** 且等于快照窗口 hwnd（= 同一窗口，编号仍属于它）→ 300s；
+ *   · 请求没带 hwnd / 传的是别的窗口 / 传的是 pid（数字不可验证）→ 不放宽，仍 120s。
+ * 2026-11-25 P2-7：旧实现「reqHwnd<=0 也放宽到 300s」等于没传窗口就放宽 —— 编号可能来自
+ * 早已换掉的窗口，模型却拿到 5 分钟有效期。现在只有能证明「还是那个窗口」才放宽。
+ * 「窗口仍存活」由点击前的 assertTargetFocused(strict) 强制 —— 不是前台/已关闭就拒绝，
+ * 所以放宽 TTL 不会把点击发进已消失的窗口。
+ */
+function somClickMaxAgeMs(state, req) {
+    const st = state || {};
+    const r = req || {};
+    const snapHwnd = Number(st.targetHwnd || st.hwnd) || 0;
+    const reqHwnd = Number(r.hwnd) || 0;
+    if (!snapHwnd) return SNAPSHOT_MAX_AGE_MS;
+    if (reqHwnd <= 0) return SNAPSHOT_MAX_AGE_MS;   // 没带可验证 hwnd → 不放宽
+    return reqHwnd === snapHwnd ? SOM_STICKY_MAX_AGE_MS : SNAPSHOT_MAX_AGE_MS;
+}
+
+// 测试注入用：模拟「当前真实窗口表」。null = 不注入，走真实 pet-core。
+let _liveHwndsOverride = null;
+/**
+ * 只在「请求的数字既不是快照 hwnd、又恰好等于快照 pid」时查一次实时窗口表。
+ * 用途：区分「模型把 pid 当 hwnd 传」（宽容并提示）与「这个数字真的是另一个窗口的 hwnd」（拒绝）。
+ * 返回 null = 查不到（pet-core 缺失/超时/测试桩死）→ 调用方保持旧宽容，不拒绝。
+ */
+function liveHwndsForCollisionCheck(state, reqHwnd) {
+    const st = state || {};
+    const snapHwnd = Number(st.targetHwnd || st.hwnd) || 0;
+    const snapPid = Number(st.pid) || 0;
+    const n = Number(reqHwnd) || 0;
+    if (!(n > 0) || n === snapHwnd || !snapPid || n !== snapPid) return null;
+    if (Array.isArray(_liveHwndsOverride)) return _liveHwndsOverride.map((h) => Number(h) || 0).filter(Boolean);
+    try {
+        const bin = _coreBin();
+        if (!bin) return null;
+        const wl = JSON.parse(require('child_process').execFileSync(bin, [], {
+            input: JSON.stringify({ cmd: 'windows', max: 400 }), timeout: 8000,
+            maxBuffer: 8 * 1024 * 1024, windowsHide: true,
+        }).toString());
+        return (wl.windows || []).map((w) => Number(w.hwnd) || 0).filter(Boolean);
+    } catch (e) { return null; }
+}
 
 function uiaPsScript(mode, title, targetRid) {
     const escTitle = String(title || '').replace(/'/g, "''");
@@ -3677,6 +3879,14 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
             // 原实现把 title='' 直接发给 UIA 服务 → WinEnum.FindAll('') + PickBest 没有
             // 「前台」概念，返回枚举顺序里第一个窗口（实测前台 Notepad，返回「设置」）。
             // 现在先在 JS 侧把空目标解析成真实 hwnd/title，再把 hwnd 交给服务。
+            // 2026-11-24 根因修：**开始拍新快照就作废旧编号** —— 哪怕这次扫描失败/超时，
+            // 旧 #编号 也不再可信（模型看到的是「这次没拍到」，不能拿上一份编号去点）。
+            // 放在解析目标之前：空目标解析失败同样要作废。
+            UIA_SNAPSHOT_STATE.items = [];
+            UIA_SNAPSHOT_STATE.sid = 0;
+            UIA_SNAPSHOT_STATE.at = 0;
+            UIA_SNAPSHOT_STATE.targetHwnd = 0;
+            UIA_SNAPSHOT_STATE.targetTitle = '';
             let snapTarget = a || String(focus || '').trim();
             let snapFg = null;
             let snapPicked = null;
@@ -3861,6 +4071,14 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
             // 世代号（红队 S4）：任何快照都推进，让更早的 SoM 编号自动失效
             _stateSeq += 1;
             UIA_SNAPSHOT_STATE.seq = _stateSeq;
+            // 快照身份与代数（2026-11-24 根因修）：sid 单调递增 + 拍摄时间
+            UIA_SNAPSHOT_STATE.sid = ++_snapshotSid;
+            UIA_SNAPSHOT_STATE.at = Date.now();
+            // 新快照 = 新身份：先清掉上一份，解析失败时宁可「未知」也不要沿用旧 hwnd
+            //（沿用旧 hwnd 正是「按编号点到上一个窗口」的根因）
+            UIA_SNAPSHOT_STATE.hwnd = 0;
+            UIA_SNAPSHOT_STATE.pid = 0;
+            UIA_SNAPSHOT_STATE.rect = null;
             // 窗口身份守卫 + homing（2026-11-10 三十七轮，抄 #10/#11）：记住快照时刻的 hwnd 与矩形
             try {
                 // 2026-11-21 P1：优先用已经解析好的快照窗口身份（前台 hwnd / 标题解析结果）。
@@ -3889,6 +4107,12 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                     if (hit2) { UIA_SNAPSHOT_STATE.hwnd = hit2.hwnd; UIA_SNAPSHOT_STATE.pid = hit2.pid || 0; }
                 }
             } catch (e) { try { __silentAudit.audit('game-control:snapshot-identity', e); } catch (e2) { /* ignore */ } }
+            // 快照目标窗口（2026-11-24 根因修）：这次快照**实际**拍的是哪个窗口。
+            // 解析顺序：已解析的 snapWin → 服务/内核回报的标题 → 调用方给的标题。
+            UIA_SNAPSHOT_STATE.targetHwnd = Number(UIA_SNAPSHOT_STATE.hwnd) || 0;
+            UIA_SNAPSHOT_STATE.targetTitle = String(
+                (snapWin && snapWin.title) || (svcDiag && svcDiag.title) || snapTarget || UIA_SNAPSHOT_STATE.title || '',
+            ).trim();
             // P1-5（2026-11-21）：#32770 对话框控件类型补全。
             // UIA 常把对话框按钮（「选择文件夹」「取消」）报成 pane —— 按类型的自动化会选错。
             // 只对对话框做一次能力扫描，按动作能力把 pane 改判成 button / edit；
@@ -3929,6 +4153,11 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                 (trunc ? `　⚠ 本次因${trunc === 'time' ? '时间' : '节点数'}预算提前截断——清单可能不全；找不到目标就 som_snapshot 看画面` : ''),
                 {
                     elements: list,
+                    // 2026-11-24 根因修：#编号只在「这份快照」里成立。
+                    // 回执带 sid + 拍的是哪个窗口，click_element 会核对（不一致 → STALE_SNAPSHOT）。
+                    snapshot_id: UIA_SNAPSHOT_STATE.sid,
+                    snapshot_at: UIA_SNAPSHOT_STATE.at,
+                    window: { hwnd: UIA_SNAPSHOT_STATE.targetHwnd || 0, title: UIA_SNAPSHOT_STATE.targetTitle || '' },
                     scanned: svcDiag ? svcDiag.scanned : null,
                     truncated: trunc,
                     shellOnly: svcDiag ? svcDiag.shellOnly : false,
@@ -3957,6 +4186,13 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
             // 画框+编号到截图上，让 AI「按编号选」而不是「猜像素坐标」。
             // 价值：UIA 读不到的自绘画布/游戏/微信/UWP 也能点——OCR 兜底 + 视觉语义。
             // 与 snapshot 的区别：snapshot 只回文字清单（她看不见画面）；som_snapshot 回标注图。
+            // 2026-11-24 根因修：开始标注就作废旧的 SoM 编号（失败/超时同样作废）。
+            SOM_STATE.marks = [];
+            SOM_STATE.sid = 0;
+            SOM_STATE.at = 0;
+            SOM_STATE.targetHwnd = 0;
+            SOM_STATE.targetTitle = '';
+            SOM_STATE.pid = 0;
             const { spawn: _spawn } = require('child_process');
             const py = resolvePython();
             // 路径解析（2026-11-09）：不数层级，直接沿目录树向上找「含 pet-runtime 的根」。
@@ -4016,6 +4252,24 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
             SOM_STATE.marks = d.marks || [];
             // 世代号（红队 S4）：记下这次标注是第几代；后面任何快照都会让它过期
             SOM_STATE.seq = ++_stateSeq;
+            // 快照身份与代数（2026-11-24）：与 UIA snapshot 共用同一个进程级 sid 计数器
+            SOM_STATE.sid = ++_snapshotSid;
+            SOM_STATE.at = Date.now();
+            SOM_STATE.targetHwnd = Number(SOM_STATE.hwnd) || 0;
+            SOM_STATE.targetTitle = String(SOM_STATE.title || '').trim();
+            // 第四轮 P2：记下 pid，用于识别「模型把 pid 当 hwnd 传」。som_annotate 只回
+            // hwnd/title，所以这里用一次只读的 windows 查询补 pid（失败就 0，不影响标注）。
+            SOM_STATE.pid = 0;
+            try {
+                if (SOM_STATE.hwnd) {
+                    const wl = JSON.parse(require('child_process').execFileSync(_coreBin(), [], {
+                        input: JSON.stringify({ cmd: 'windows', max: 200 }), timeout: 8000,
+                        maxBuffer: 8 * 1024 * 1024, windowsHide: true,
+                    }).toString());
+                    const hit = (wl.windows || []).find((w) => Number(w.hwnd) === Number(SOM_STATE.hwnd));
+                    if (hit) SOM_STATE.pid = Number(hit.pid) || 0;
+                }
+            } catch (e) { SOM_STATE.pid = 0; }
             // homing 基线（2026-11-10 三十八轮）：记下标注时刻窗口矩形，som_click 补偿用
             try { SOM_STATE.rect = await windowRealRect(SOM_STATE.title || ''); } catch (e) { SOM_STATE.rect = null; }
             const lines = (d.marks || []).map((m) => `#${m.id}[${m.type}]${String(m.name).slice(0, 20)}`);
@@ -4029,6 +4283,10 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                 '　→ 用 som_click 传编号',
                 {
                     elements: d.marks,
+                    // 2026-11-24 根因修：SoM 编号同样只属于这一代标注
+                    snapshot_id: SOM_STATE.sid,
+                    snapshot_at: SOM_STATE.at,
+                    window: { hwnd: SOM_STATE.targetHwnd || 0, title: SOM_STATE.targetTitle || '' },
                     image: d.image,             // base64 JPEG：调用方决定是否附加给视觉模型
                     imageIsBase64: true,
                     source: d.source,
@@ -4050,6 +4308,33 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
             //   而且点完不验证。现在：① 删掉多余的 ENTER ② 走 actAndVerify 闭环。
             // 同上：接受 # 前缀（som_snapshot 输出也是 #N 格式）
             const idx = Number(String(a || '').replace(/^#/, '').trim()) || 0;
+            if (!Array.isArray(SOM_STATE.marks) || !SOM_STATE.marks.length) {
+                throw new Error('编号不存在（先 som_snapshot 拿标注图，再传编号）');
+            }
+            // 快照绑定校验（2026-11-24 根因修）：SoM 编号也只属于**那一代**标注。
+            // 窗口对不上 / 标注超龄 → STALE_SNAPSHOT，且一次点击都不发。
+            // 第四轮 P2：带真实 hwnd 的同一窗口放宽到 300s（窗口存活由下面 strict 前台断言兜底）。
+            const somReqTitle = String(focus || '').trim();
+            const somReq = {
+                title: somReqTitle,
+                hwnd: /^\d+$/.test(somReqTitle) ? Number(somReqTitle) : 0,
+            };
+            // pid/hwnd 撞车时先查实时窗口表：数字真是另一个窗口的 hwnd → 拒绝跨窗复用编号
+            const somLiveHwnds = liveHwndsForCollisionCheck(SOM_STATE, somReq.hwnd);
+            const somBind = checkSnapshotBinding(SOM_STATE, somReq, {
+                maxAgeMs: somClickMaxAgeMs(SOM_STATE, somReq),
+                liveHwnds: somLiveHwnds,
+            });
+            if (!somBind.ok) {
+                return VC.notSent(somBind.detail, {
+                    code: somBind.code, error: somBind.code, staleSnapshot: true,
+                    staleReason: somBind.reason,
+                    snapshot_id: somBind.snapshot_id, snapshot_age_ms: somBind.snapshot_age_ms,
+                    snapshot_window: somBind.snapshot_window, requested_window: somBind.requested_window,
+                    tier: 'L2',
+                    nextIfFailed: '重新 som_snapshot（这一代编号已不可信），再 som_click；别在两次快照之间混用编号',
+                });
+            }
             const m = SOM_STATE.marks[idx - 1];
             if (!m) throw new Error('编号不存在（先 som_snapshot 拿标注图，再传编号）');
             // ⚠ 红队 S4 第二道（陈旧编号）：编号来自某一次 som_snapshot，而 SOM_STATE 是
@@ -4125,6 +4410,14 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
             if (vr.effect === 'suspected_noop') {
                 vr.nextIfFailed = '点了画面没变：元素可能已失效（窗口变过），重新 som_snapshot 拿新编号再点';
             }
+            // 可观测（2026-11-24）：这条点击用的是第几代标注、标注多久了
+            vr.snapshot_id = somBind.snapshot_id;
+            vr.snapshot_age_ms = somBind.snapshot_age_ms;
+            // 第四轮 P2：传的是 pid 时明确提示「改用 hwnd / 标题」（本次已按快照窗口继续）
+            if (somBind.note) { vr.identityNote = somBind.note.text; vr.identityNoteCode = somBind.note.code; }
+            // 2026-11-25 P2-7：回执带「怎么匹配到的 + 匹配到的窗口身份」，便于模型/评测核对
+            vr.matchedBy = somBind.matchedBy;
+            vr.matched_window = somBind.matched;
             vr.via = 'som';
             vr.name = String(m.name).slice(0, 40);
             return vr;
@@ -4141,6 +4434,31 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
             //   但 Number('#13') = NaN → || 0 → items[-1] undefined → 永远「编号不存在」。
             //   **所有带 # 的调用全挂**。接受 # 前缀（剥离后再解析）。
             const idx = Number(String(a || '').replace(/^#/, '').trim()) || 0;
+            // ── 编号↔快照绑定校验（2026-11-24 根因修，fail-closed）────────────────
+            // #编号属于**某一次**快照，不是全局编号。see 与 click 之间只要又拍过一次快照，
+            // 编号就指向另一份（很可能是另一个窗口）——模型看到 A、点的是 B，还静默 ok。
+            // 窗口对不上 / 快照超龄 → STALE_SNAPSHOT，**一次点击都不发**。
+            if (!Array.isArray(UIA_SNAPSHOT_STATE.items) || !UIA_SNAPSHOT_STATE.items.length) {
+                throw new Error('编号不存在（先 snapshot 拿菜单，再传 #编号；窗口变过就重新 snapshot）');
+            }
+            const reqWinTitle = String(focus || '').trim();
+            const reqWinHwnd = /^\d+$/.test(reqWinTitle) ? Number(reqWinTitle) : 0;
+            // pid/hwnd 撞车时先查实时窗口表：数字真是另一个窗口的 hwnd → 拒绝跨窗复用编号
+            const snapLiveHwnds = liveHwndsForCollisionCheck(UIA_SNAPSHOT_STATE, reqWinHwnd);
+            const snapBind = checkSnapshotBinding(UIA_SNAPSHOT_STATE, {
+                title: reqWinTitle,
+                hwnd: reqWinHwnd,
+            }, { liveHwnds: snapLiveHwnds });
+            if (!snapBind.ok) {
+                return VC.notSent(snapBind.detail, {
+                    code: snapBind.code, error: snapBind.code, staleSnapshot: true,
+                    staleReason: snapBind.reason,
+                    snapshot_id: snapBind.snapshot_id, snapshot_age_ms: snapBind.snapshot_age_ms,
+                    snapshot_window: snapBind.snapshot_window, requested_window: snapBind.requested_window,
+                    tier: 'L2',
+                    nextIfFailed: '重新 see（mode=tree）拿这一份快照的编号，再点；别跨快照混用 #编号',
+                });
+            }
             const item = UIA_SNAPSHOT_STATE.items[idx - 1];
             if (!item) throw new Error('编号不存在（先 snapshot 拿菜单，再传 #编号；窗口变过就重新 snapshot）');
             // 破坏性按钮守卫（§71，2026-11-21 根因修）：不再在这里内联 checkButton ——
@@ -4175,6 +4493,8 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                 if (!identity) {
                     return VC.notSent('窗口身份已变：快照时的窗口（hwnd ' + UIA_SNAPSHOT_STATE.hwnd + '）已关闭——重新 snapshot', {
                         identityChanged: true,
+                        snapshot_id: snapBind.snapshot_id, snapshot_age_ms: snapBind.snapshot_age_ms,
+                        snapshot_window: snapBind.window,
                         nextIfFailed: '目标窗口被关了。若同名窗口还在，重新 snapshot 会绑定到新 hwnd',
                     });
                 }
@@ -4185,6 +4505,8 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                         '窗口身份已变：hwnd ' + UIA_SNAPSHOT_STATE.hwnd + ' 现在是另一个进程的窗口（快照时 pid ' +
                         UIA_SNAPSHOT_STATE.pid + '，现在 pid ' + identity.pid + '）——hwnd 被系统复用了。重新 snapshot',
                         { identityChanged: true, pidWas: UIA_SNAPSHOT_STATE.pid, pidNow: identity.pid,
+                          snapshot_id: snapBind.snapshot_id, snapshot_age_ms: snapBind.snapshot_age_ms,
+                          snapshot_window: snapBind.window,
                           nextIfFailed: '原窗口已关。重新 snapshot 绑定新窗口后再点' },
                     );
                 }
@@ -4201,8 +4523,10 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
             //   都没有就返回 BoundingRectangle（已 SetProcessDPIAware，物理坐标）中心，
             //   由 JS 交给 pet-core 的坐标入口（P2-10 单点收口，PS 侧不再点坐标）。
             //   门禁：IsOffscreen 先 ScrollIntoView，仍不可见/被禁用 → element_unavailable。
-            const targetTitle = UIA_SNAPSHOT_STATE.title || a || focus || '';
-            const targetHwnd = Number(UIA_SNAPSHOT_STATE.hwnd) || 0;
+            // 目标窗口身份以**快照记录**为准（编号属于那一代快照）；请求窗口只用于校验。
+            // （旧实现回落到 `a` —— 那是编号 '5'，拿它当窗口标题是错的方向）
+            const targetTitle = String(UIA_SNAPSHOT_STATE.targetTitle || UIA_SNAPSHOT_STATE.title || snapBind.window.title || focus || '');
+            const targetHwnd = Number(snapBind.window.hwnd || UIA_SNAPSHOT_STATE.hwnd) || 0;
             const verified = await actAndVerifySmart(async () => {
                 let el = null;
                 try { el = await uiaElementAction(targetTitle, item.rid, 12000, targetHwnd, clickGuard); }
@@ -4265,7 +4589,7 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                     x: cx, y: cy, name: el.name || item.name, pid: el.pid || UIA_SNAPSHOT_STATE.pid,
                 });
             }, {
-                expectChange: true, timeoutMs: 1500, uiaTitle: UIA_SNAPSHOT_STATE.title || a,
+                expectChange: true, timeoutMs: 1500, uiaTitle: targetTitle,
                 guard: clickGuard,
                 // 局部验证（2026-11-10 三十九轮实测两连修）：
                 //   ① 只有全屏 dHash 时，计算器点「清除条目」把 555→0 报 noop（整屏看不出来）
@@ -4291,6 +4615,7 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                     offscreen: ar.offscreen === true,
                     enabled: ar.enabled !== false,
                     scrolled: ar.scrolled === true,
+                    snapshot_id: snapBind.snapshot_id, snapshot_age_ms: snapBind.snapshot_age_ms,
                     tier: 'L2',
                     nextIfFailed: '先把元素滚进可视区/展开所在面板（或重新 snapshot 看它是否还在）；被禁用的控件本来就不能点',
                 });
@@ -4302,6 +4627,7 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                     targetPid: ar.targetPid || UIA_SNAPSHOT_STATE.pid || 0,
                     fgPid: ar.fgPid || 0,
                     elementName: String(ar.name || item.name || '').slice(0, 60),
+                    snapshot_id: snapBind.snapshot_id, snapshot_age_ms: snapBind.snapshot_age_ms,
                     tier: 'L2',
                     nextIfFailed: '坐标兜底只认前台：先 focus_window 把目标窗口调到前台再重试',
                 });
@@ -4316,6 +4642,7 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                         ? '窗口最小化了：先 focus_window 恢复，再 snapshot 拿新菜单'
                         : (ar.stale ? '元素失效了（窗口内容变过）：重新 snapshot 拿新编号' : '窗口可能变过：重新 snapshot 拿新菜单；自绘控件改用 som_snapshot + som_click'),
                     name: String(item.name || '').slice(0, 40),
+                    snapshot_id: snapBind.snapshot_id, snapshot_age_ms: snapBind.snapshot_age_ms,
                 });
             }
             const howText = ar.how === 'coord' ? 'UIA 无 Pattern，已改用坐标点击（pet-core 物理坐标）'
@@ -4335,6 +4662,16 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
             //   编号每轮都变，这条经验下次毫无用处。
             //   带上 name 后能记成「click_element 首 页」，下次能作为「这个按钮可点」的知识。
             vr.elementName = String(ar.name || item.name || '').slice(0, 60);
+            // 可观测（2026-11-24 根因修）：这次点击用的是第几代快照、快照多久了。
+            // 现有字段结构上追加，不破坏调用方。
+            vr.snapshot_id = snapBind.snapshot_id;
+            vr.snapshot_age_ms = snapBind.snapshot_age_ms;
+            if (snapBind.usedOwnWindow) vr.snapshot_window = snapBind.window;
+            // 第四轮 P2：focus 传了 pid 时明确提示「这是 pid，请改用 hwnd 或标题」
+            if (snapBind.note) { vr.identityNote = snapBind.note.text; vr.identityNoteCode = snapBind.note.code; }
+            // 2026-11-25 P2-7：回执带「怎么匹配到的 + 匹配到的窗口身份」，便于模型/评测核对
+            vr.matchedBy = snapBind.matchedBy;
+            vr.matched_window = snapBind.matched;
             // P1-6：动作返回前等目标窗口 UIA 树稳定（连续两次哈希相同，最多 400ms）
             try {
                 const st = await waitUiStable({ title: targetTitle, maxWaitMs: 400 });
@@ -6925,6 +7262,15 @@ const __testHooks = {
     pickSnapshotTarget,
     setUiaSnapshotState(s) { Object.assign(UIA_SNAPSHOT_STATE, s || {}); },
     setSomState(s) { Object.assign(SOM_STATE, s || {}); },
+    // 2026-11-24：快照↔编号绑定校验的纯函数入口（测试不需要真机快照）
+    checkSnapshotBinding,
+    somClickMaxAgeMs,
+    // 2026-11-25 P2-7：标题匹配收紧 + pid/hwnd 撞车探测（测试注入实时窗口表）
+    winTitleMatches: _winTitleMatches,
+    liveHwndsForCollisionCheck,
+    setLiveHwnds(list) { _liveHwndsOverride = Array.isArray(list) ? list.slice() : null; },
+    somStickyMaxAgeMs: SOM_STICKY_MAX_AGE_MS,
+    snapshotMaxAgeMs: SNAPSHOT_MAX_AGE_MS,
     setOwnWindows(list) { _ownWinCache.list = Array.isArray(list) ? list : []; _ownWinCache.at = Date.now(); },
     // D2（2026-11-22）：经验路由接线检查用的纯入口（记账/取缓存/静态路由）
     expNoteApp: _expNoteApp,
@@ -6933,12 +7279,19 @@ const __testHooks = {
     recordRouteOutcome,
     routeExperienceStats,
     reset() {
-        Object.assign(UIA_SNAPSHOT_STATE, { title: '', items: [], hwnd: 0, pid: 0, rect: null });
-        Object.assign(SOM_STATE, { title: '', hwnd: 0, marks: [], rect: null });
+        Object.assign(UIA_SNAPSHOT_STATE, {
+            title: '', items: [], hwnd: 0, pid: 0, rect: null,
+            sid: 0, at: 0, targetHwnd: 0, targetTitle: '',
+        });
+        Object.assign(SOM_STATE, {
+            title: '', hwnd: 0, pid: 0, marks: [], rect: null,
+            sid: 0, at: 0, targetHwnd: 0, targetTitle: '',
+        });
         _ownWinCache.list = [];
         _ownWinCache.at = 0;
         _expAppByPid.clear();
         _expAppByTitle.clear();
+        _liveHwndsOverride = null;
     },
 };
 
@@ -6963,7 +7316,7 @@ module.exports = {
     resolveTargetHwnd, pickWindowForTarget, postKeysTo,
     screenRectsFromDisplays, pointOnAnyScreen, assertScreenPoint, screenRects,
     KEY_POLICY_RULES, KEY_POLICY_DENY_MSG, KEY_POLICY_SOURCE, keyPolicyViolation, normalizeKeyName, controlStats, bumpControlStat,
-    uiaScan, uiaElementAction, uiaScanScript, assertTargetFocused, pickSnapshotTarget, guardClickTarget,
+    uiaScan, uiaElementAction, uiaScanScript, assertTargetFocused, pickSnapshotTarget, guardClickTarget, checkSnapshotBinding,
     // D2（2026-11-22）：经验路由（只重排候选顺序；统计可观测）
     guiRoute, recordRouteOutcome, routeExperienceStats, setRouteExperienceEnabled,
     __testHooks,

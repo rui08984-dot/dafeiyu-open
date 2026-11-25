@@ -55,28 +55,28 @@
     "fields": {
       "model": {
         "title": "模型名称",
-        "description": "后端记忆处理使用的 LLM 模型",
+        "description": "后端记忆处理使用的 LLM 模型（本地记忆模型：摘要/实体抽取不消耗云端配额）",
         "type": "string",
         "default": "",
         "value": ""
       },
       "api_key": {
         "title": "API Key",
-        "description": "后端 LLM 的 API 密钥",
+        "description": "后端 LLM 的 API 密钥（本地 llama.cpp 不校验，占位即可）",
         "type": "string",
         "default": "",
         "value": ""
       },
       "base_url": {
         "title": "Base URL",
-        "description": "后端 LLM 的 API 地址",
+        "description": "后端 LLM 的 API 地址（127.0.0.1:11435 = 本地记忆模型）",
         "type": "string",
         "default": "",
         "value": ""
       },
       "max_tokens": {
         "title": "最大输出Token",
-        "description": "后端记忆/实体提取的输出token预算（建议 2000-8000）",
+        "description": "后端记忆/实体提取的输出token预算（本地 4B 建议 2048）",
         "type": "int",
         "default": 8000,
         "value": 8000

@@ -173,13 +173,27 @@ function Get-RelatedCandidates {
             # 只杀「能确认是本项目」的端口占用者：本项目 electron，或**本服务脚本绝对路径**。
             # 其它软件/soak 副本恰好占用同名端口/同名脚本时绝不误杀 —— 留给后面的 foreign 报错。
             $isOurElectron = ($op.Name -eq 'electron.exe' -and $ocmd -like '*live-2d*')
-            $isOurPython = ($op.Name -match '^(py|python|pythonw)\.exe$' -and $fullScript -and $ocmd -like ('*' + $fullScript + '*'))
-            if ($isOurElectron -or $isOurPython) { & $add $op ("svc:" + $s.id) $port }
+            # 2026-11-25：launcher/手工都以「相对路径 + cwd」启动 MemOS（`python api\memos_api_server_v2.py`），
+            # 命令行里没有绝对脚本路径 → 只按 fullScript 匹配会把它当「外来进程」，重启时拒绝继续。
+            # 补一条 basename 匹配（脚本名是本项目独有的，误杀风险极低）；仍要求进程是 python。
+            $baseScript = if ($fullScript) { Split-Path -Leaf $fullScript } else { $null }
+            $isOurPython = ($op.Name -match '^(py|python|pythonw)\.exe$' -and $fullScript -and
+                ($ocmd -like ('*' + $fullScript + '*') -or ($baseScript -and $ocmd -like ('*' + $baseScript + '*'))))
+            # killByPort：llama-server 这类由 pwsh 脚本 Start-Process 拉起后脚本即退出的服务，
+            # 端口占用者命令行里没有脚本路径 → 上面两条都匹配不到，重启会留孤儿。此类服务在
+            # services.json 显式标 killByPort=true（端口专用，不会误杀其它软件）。
+            if ($s.killByPort) {
+                & $add $op ("svc:" + $s.id) $port
+            } elseif ($isOurElectron -or $isOurPython) {
+                & $add $op ("svc:" + $s.id) $port
+            }
         }
         if ($fullScript) {
+            $baseScript2 = Split-Path -Leaf $fullScript
             foreach ($p in $all) {
                 $cmd = [string]$p.CommandLine
-                if ($p.Name -match '^(py|python|pythonw)\.exe$' -and $cmd -like ('*' + $fullScript + '*')) {
+                if ($p.Name -match '^(py|python|pythonw)\.exe$' -and
+                    ($cmd -like ('*' + $fullScript + '*') -or ($baseScript2 -and $cmd -like ('*' + $baseScript2 + '*')))) {
                     & $add $p ("svc:" + $s.id) $port
                 }
             }
@@ -417,13 +431,21 @@ if (-not $NoLauncher) {
         $node = (Get-Command node -ErrorAction SilentlyContinue).Source
         if (-not $node) { $node = 'node' }
         Write-Output ('[restart] 启动 launcher: ' + $node + ' ' + $launcher)
+        # launcher 的 console.log（[launcher] 密钥注入/模型探测/MemOS/本地记忆 enabled=false 跳过…）
+        # 只有重定向才留得下来：-WindowStyle Hidden 时它没有可见控制台，stdout/stderr 否则直接丢失。
+        $launcherOutLog = Join-Path $root 'pet-runtime\.state\launcher.out.log'
+        $launcherErrLog = Join-Path $root 'pet-runtime\.state\launcher.err.log'
+        $logDir = Split-Path -Parent $launcherOutLog
+        if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
         try {
-            $launcherProc = Start-Process -FilePath $node -ArgumentList @($launcher) -WorkingDirectory $root -WindowStyle Hidden -PassThru
+            # 每次启动覆盖写（Start-Process 的重定向是新建/截断），out/err 分两个文件，避免同名冲突。
+            $launcherProc = Start-Process -FilePath $node -ArgumentList @($launcher) -WorkingDirectory $root -WindowStyle Hidden -PassThru -RedirectStandardOutput $launcherOutLog -RedirectStandardError $launcherErrLog
         } catch {
             Write-Output ('[restart] ✗ launcher 启动失败: ' + $_.Exception.Message)
             $launcherProc = $null
         }
         if ($launcherProc) {
+            Write-Output '[restart] launcher 日志: pet-runtime/.state/launcher.out.log'
             # launcher 先注入密钥 + 探模型端点（最多约 15s）再起宿主，这里给 90s。
             for ($i = 0; $i -lt 90; $i++) {
                 Start-Sleep -Seconds 1

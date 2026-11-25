@@ -131,7 +131,7 @@ try {
         JSON.stringify({ topic: disk.topic.text, mood: disk.mood.text }));
     ok('她的话落盘已清洗（无 #mood）', !/#mood/.test(JSON.stringify(disk.companion)), JSON.stringify(disk.companion));
 
-    // ── ⑥ E8：紧急裁剪有账可查（96 条才裁）──────────────────────────────
+    // ── ⑥ E8/P0-2：紧急裁剪有账可查（2026-11-24：96→48 + history token 兜底）──
     const msgs = [{ role: 'system', content: 'base' }];
     for (let i = 0; i < 120; i += 1) msgs.push({ role: i % 2 ? 'assistant' : 'user', content: '消息 ' + i });
     const fake = {
@@ -142,16 +142,58 @@ try {
     };
     const cm = new ContextManager(fake);
     cm.trimMessages();
-    ok('120 条才触发紧急裁剪（96 条门槛，正常先走压缩）', fake.messages.length < msgs.length, 'after=' + fake.messages.length);
+    ok('120 条触发紧急裁剪（48 条门槛，正常先走压缩）', fake.messages.length < msgs.length, 'after=' + fake.messages.length);
     ok('裁剪记账：tokensBefore 是数字', fake._lastTrim && Number.isFinite(fake._lastTrim.tokensBefore),
         JSON.stringify(fake._lastTrim && { tokens: fake._lastTrim.tokensBefore }));
     ok('裁剪记账：firstKeptMessageId 可回查', !!(fake._lastTrim && /^idx:\d+:/.test(fake._lastTrim.firstKeptMessageId)),
         fake._lastTrim && fake._lastTrim.firstKeptMessageId);
+    ok('裁剪记账：reason=count（条数触发）', fake._lastTrim && fake._lastTrim.reason === 'count',
+        fake._lastTrim && fake._lastTrim.reason);
+    ok('裁剪记账：historySource 标注口径（无 provider 基线时为 estimate）',
+        fake._lastTrim && fake._lastTrim.historySource === 'estimate',
+        fake._lastTrim && fake._lastTrim.historySource);
 
-    // 低于 96 条不裁（前缀缓存优先）
-    const small = { messages: msgs.slice(0, 60), enableContextLimit: true, maxContextMessages: 16, fullConversationHistory: [] };
+    // 低于 48 条且 token 不高 → 不裁（前缀缓存优先）
+    const small = { messages: msgs.slice(0, 40), enableContextLimit: true, maxContextMessages: 16, fullConversationHistory: [] };
     new ContextManager(small).trimMessages();
-    ok('60 条不触发硬裁（留给压缩插件）', small.messages.length === 60 && !small._lastTrim);
+    ok('40 条不触发硬裁（留给压缩插件）', small.messages.length === 40 && !small._lastTrim);
+
+    // 51 条**短**消息：history 不到 8k → 仍走 96 条闸，不裁（别为两千 token 丢现场/打穿缓存）
+    const short51 = { messages: msgs.slice(0, 52), enableContextLimit: true, maxContextMessages: 16, fullConversationHistory: [] };
+    new ContextManager(short51).trimMessages();
+    ok('51 条短消息不裁（token 低于 8k 时用 96 条闸）', short51.messages.length === 52 && !short51._lastTrim);
+
+    // 51 条**长**消息：history >8k → 48 条闸生效
+    const longMsgsCount = [{ role: 'system', content: 'base' }];
+    for (let i = 0; i < 51; i += 1) {
+        longMsgsCount.push({ role: i % 2 ? 'assistant' : 'user', content: '长'.repeat(250) + i });
+    }
+    const overCount = { messages: longMsgsCount, enableContextLimit: true, maxContextMessages: 16, fullConversationHistory: [] };
+    new ContextManager(overCount).trimMessages();
+    ok('51 条长消息触发 48 条闸（history >8k）', overCount._lastTrim && overCount._lastTrim.reason === 'count',
+        JSON.stringify(overCount._lastTrim && { reason: overCount._lastTrim.reason, before: overCount._lastTrim.historyTokensBefore }));
+
+    // 30 条但每条很长 → token 兜底触发（条数远低于 48）
+    const longMsgs = [{ role: 'system', content: 'base' }];
+    for (let i = 0; i < 30; i += 1) {
+        longMsgs.push({ role: i % 2 ? 'assistant' : 'user', content: '长'.repeat(1200) + i });
+    }
+    const overTokens = {
+        messages: longMsgs,
+        enableContextLimit: true,
+        maxContextMessages: 16,
+        config: { context: { hard_trim_tokens: 24000 } },
+        fullConversationHistory: [],
+    };
+    new ContextManager(overTokens).trimMessages();
+    ok('30 条长消息触发 token 兜底（条数闸没到）', overTokens._lastTrim && overTokens._lastTrim.reason === 'tokens',
+        JSON.stringify(overTokens._lastTrim && { reason: overTokens._lastTrim.reason, before: overTokens._lastTrim.historyTokensBefore, after: overTokens._lastTrim.historyTokensAfter }));
+    ok('token 兜底后 history ≤ 24000', overTokens._lastTrim && overTokens._lastTrim.historyTokensAfter <= 24000,
+        overTokens._lastTrim && overTokens._lastTrim.historyTokensAfter);
+    ok('token 兜底不切断工具链（无孤儿 tool）', (() => {
+        const t = overTokens.messages;
+        return !t.some((m, i) => m.role === 'tool' && t[i - 1] && t[i - 1].role !== 'assistant');
+    })());
 
     // ── ⑥b 审计 P1 的接线护栏（静态，防「清理无用代码」时把守卫删掉）────
     {
@@ -167,13 +209,27 @@ try {
         ok('dynamic-persona 不从脚手架更新状态', /isScaffolding\(userText, 'user'\)/.test(dp));
     }
 
-    // ── ⑦ 压缩插件静态护栏（它要带现场 + 记元数据）──────────────────────
+    // ── ⑦ 压缩插件静态护栏（它要带现场 + 记元数据 + 缓存感知持有）────────────
     {
         const src = fs.readFileSync(path.join(LIVE, 'plugins', 'built-in', 'context-compressor', 'index.js'), 'utf8');
         ok('压缩摘要带「对话现场」', /describeForPrompt\(\)/.test(src) && /当前对话现场/.test(src));
-        ok('压缩后写 _lastCompression（tokensBefore/firstKeptMessageId）',
-            /_lastCompression/.test(src) && /tokensBefore/.test(src) && /firstKeptMessageId/.test(src));
-        ok('token 窗口触发（70%）', /token_budget/.test(src) && /0\.7/.test(src));
+        ok('压缩后写 _lastCompression（historyTokensBefore/After + firstKeptMessageId）',
+            /_lastCompression/.test(src) && /historyTokensBefore/.test(src)
+            && /historyTokensAfter/.test(src) && /firstKeptMessageId/.test(src));
+        ok('压缩触发：history-only token + 回差（旧的 70% 总量口径已移除）',
+            /history_token_budget/.test(src) && /history_growth_min/.test(src) && !/budget \* 0\.7/.test(src));
+        // ADR-014 轨道 1：生成 → 持有 → 到水位才替换
+        ok('缓存感知：摘要先持有（_pending + summaryUpToIndex）',
+            /_pending/.test(src) && /summaryUpToIndex/.test(src));
+        ok('缓存感知：应用水位 apply_at / 最多持有 max_hold_turns',
+            /apply_at/.test(src) && /max_hold_turns/.test(src));
+        ok('缓存感知：缓存冷判定（_cacheIsCold，无 lastUsage 视为冷）',
+            /_cacheIsCold/.test(src) && /CACHE_TTL_MS/.test(src));
+        ok('压缩遥测：trigger/reason/heldMs/truePostTokens/willRetriggerNextTurn',
+            /trigger\s*,/.test(src) && /reason/.test(src) && /heldMs/.test(src)
+            && /truePostTokens/.test(src) && /willRetriggerNextTurn/.test(src));
+        ok('rapid-refill 闸：同一 3 轮两次应用 → 退避',
+            /_rapidRefillUntilTurn/.test(src) && /rapidRefill/.test(src));
     }
 
     console.log('────────────────────────────────────────────────────');

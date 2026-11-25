@@ -36,6 +36,22 @@
           "enabled": true
         }
       ]
+    },
+    {
+      "id": "local-memory",
+      "name": "示例本地网关",
+      "api_key": "<填你的密钥>",
+      "api_url": "https://api.example.com/v1",
+      "enabled": true,
+      "models": [
+        {
+          "model_id": "example-model",
+          "name": "示例模型",
+          "enabled": true,
+          "reasoning_enabled": false,
+          "temperature_enabled": false
+        }
+      ]
     }
   ]
 }

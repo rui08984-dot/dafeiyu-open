@@ -41,6 +41,32 @@
       "note": "入口不带 --port；冷启动要加载嵌入/索引，可能几十秒。MemOS 子树随仓分发（Apache-2.0）；未装 Python 依赖时该项为可选"
     },
     {
+      "id": "local-memory-llm",
+      "name": "本地记忆模型（MemOperator-4B）",
+      "port": 11435,
+      "required": false,
+      "launchBy": "launcher",
+      "enabled": true,
+      "killByPort": true,
+      "start": {
+        "exe": "pwsh",
+        "script": "_incoming/my-neuro/live-2d/scripts/start-local-memory-llm.ps1",
+        "args": [
+          "-Daily"
+        ],
+        "cwd": "_incoming/my-neuro/live-2d"
+      },
+      "health": {
+        "url": "http://127.0.0.1:11435/health",
+        "timeoutMs": 4000
+      },
+      "startTimeoutMs": 90000,
+      "autoStopFreeMiB": 600,
+      "restartFreeMiB": 5000,
+      "idleRestartMs": 600000,
+      "note": "ADR-014：片段卡/MemOS 抽取走本地，省云端配额。Daily=28K/q8 是唯一质量可用档（实测 52-58 t/s、8K prefill≈2100 t/s）；Batch/Long 的 turbo3 KV 会让结构化 JSON 复读/乱码，仅实验。enabled=true 时随 launcher 自启；脚本自带显存守门（free<5000MiB 直接 exit 0 跳过，开游戏不会硬挤共享内存），launcher 对 exit0 不重试。"
+    },
+    {
       "id": "devtools",
       "name": "自检通道",
       "port": 8004,

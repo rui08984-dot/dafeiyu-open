@@ -26,6 +26,8 @@ const { decide } = require('./lib/arbiter-core.js');
 const planStore = require('./lib/plan-store.js');
 const jsonStore = require('../../../js/core/json-store.js');
 const { recordFile } = require('../../../js/core/records-path.js');
+// 后台云端花费闸（2026-11-24 第三轮 P1）：计划生成 = 一次云调用，必须过唯一入口。
+const backgroundLLM = require('../../../js/core/background-llm.js');
 
 let __silentAudit = null;
 try { __silentAudit = require('../../../js/core/silent-audit.js'); } catch (e) { __silentAudit = null; }
@@ -38,6 +40,12 @@ const DEFAULT_TAIL_CHARS = 150;
 // 但「多步计划」本身就成了碰运气。抬到 30s，并允许 plugin_config.plan_timeout_ms 覆盖。
 const DEFAULT_PLAN_TIMEOUT_MS = 30000;
 const DEFAULT_PLAN_MAX_STEPS = 8;   // 与 plan-store.MAX_LINES 一致（≤8 是硬契约）
+// 计划「待补生成」的重试上限（2026-11-24 第四轮 P2）：闸关期间建的目标先标 pending，
+// 闸放开后由 tick 补生成；失败最多重试 3 次，避免坏 prompt/坏 provider 变成永久循环。
+const PLAN_PENDING_MAX_ATTEMPTS = 3;
+// 闸放开后补生成计划的并发上限：一次放开可能积压多个目标，全量同时发云调用会
+// 制造 429 突发（刚恢复的额度又被自己打回去）。超出上限的留到下个 tick。
+const PLAN_RETRY_CONCURRENCY = 2;
 
 function audit(where, err) {
     try { if (__silentAudit && typeof __silentAudit.audit === 'function') __silentAudit.audit(where, err); } catch (e) { /* 审计自身失败不阻塞主链 */ }
@@ -136,6 +144,8 @@ class MindKernelPlugin extends Plugin {
         // 隐藏测试旋钮（不进 plugin_config）：单测把超时压到几十毫秒。
         this._planTimeoutMs = Number(cfg.plan_timeout_ms) > 0 ? Number(cfg.plan_timeout_ms) : DEFAULT_PLAN_TIMEOUT_MS;
         this._planBusy = new Set();
+        // 第四轮 P2：最近一次 tick 触发的补生成 promise 列表（tick 不 await，测试/排障可等它）
+        this._pendingPlanRetries = [];
 
         // goals 文件：默认 data/goals.json；单测可用 cfg.goals_file 注入临时路径。
         this._goalsFile = (cfg.goals_file && typeof cfg.goals_file === 'string')
@@ -430,6 +440,39 @@ class MindKernelPlugin extends Plugin {
         }
     }
 
+    /**
+     * 闸放开后补生成计划（2026-11-24 第四轮 P2）。
+     *
+     * 为什么不在 generatePlan 里自己重试：计划生成最长 30s，任何「等待重试」都会卡住
+     * tick，甚至经 _maybeTickOnChanges 卡住对话请求。这里只在闸已开时**发起**任务
+     * （fire-and-forget），promise 存进 this._pendingPlanRetries 供测试/排障观察。
+     *
+     * 触发条件全部 fail-closed：插件必须启用且允许生成、目标非终态、未在生成中、
+     * attempts 未到上限、闸 ok。
+     * @returns {Promise<any>[]} 本次发起的生成任务
+     */
+    _retryPendingPlans() {
+        const out = [];
+        this._pendingPlanRetries = out;
+        if (!this._enabled || !this._planGenerate) return out;
+        // 已在生成中的（含本轮前面刚发起、同步 add 进 _planBusy 的）也算占并发。
+        let inFlight = this._planBusy.size;
+        for (const g of (this._goals || [])) {
+            if (!g || !g.planPending || typeof g.planPending !== 'object') continue;
+            if (TERMINAL_STATUSES.includes(g.status)) continue;
+            if (this._planBusy.has(g.id)) continue;
+            if (Number(g.planPending.attempts) >= PLAN_PENDING_MAX_ATTEMPTS) continue;
+            if (inFlight >= PLAN_RETRY_CONCURRENCY) break;   // 剩下的下个 tick 再来
+            const gate = backgroundLLM.ensureCanRun(this.context, { kind: 'mind-kernel' });
+            if (!gate.ok) break;   // 闸还关着：下次 tick 再看，不为每个目标重复问一遍
+            const pr = this.generatePlan(g.id);
+            inFlight += 1;
+            if (pr && typeof pr.catch === 'function') pr.catch(() => {}); // generatePlan 不抛，兜底防未处理 rejection
+            out.push(pr);
+        }
+        return out;
+    }
+
     async _tick() {
         this._tickCount += 1;
         this._lastTickAt = Date.now();
@@ -466,6 +509,8 @@ class MindKernelPlugin extends Plugin {
             this._lastTail = '';
         }
         this._lastTickError = null;
+        // 第四轮 P2：闸关期间建的目标在闸放开后补生成完整计划（不 await，不卡 tick）
+        this._retryPendingPlans();
         return applied;
     }
 
@@ -537,6 +582,54 @@ class MindKernelPlugin extends Plugin {
         }
     }
 
+    /**
+     * 「待生成完整计划」标记（2026-11-24 第四轮 P2 根因修）。
+     *
+     * 背景：配额暂停/预算关期间由 dispatch 建的目标，generatePlan 被 backgroundLLM 闸
+     * 直接跳过，而原实现**没有任何重试入口** —— 目标从此只剩 addGoalForTask 的 1 行计划。
+     * 现在：跳过时把 planPending={at, attempts, lastReason} 写进 goal（落盘可审计），
+     * _tick 每次检查：闸已开且未终态 → 补生成一次；attempts 到上限（PLAN_PENDING_MAX_
+     * ATTEMPTS）自动清标记 + 记 ledger，不做永久循环。
+     *
+     * @param {string} goalId
+     * @param {string} reason  本次为什么 pending（gate 的 reason / 失败原因，截 60 字）
+     * @param {{attempts?:number}} [opts] 显式给 attempts = 记一次真实尝试；到上限时清标记
+     * @returns {object|null} 写入后的 planPending（null = 没写或已放弃）
+     */
+    _markPlanPending(goalId, reason, opts) {
+        const o = opts || {};
+        try {
+            for (let i = 0; i < 2; i++) {
+                const cur = this._store.get(goalId);
+                if (!cur) return null;
+                if (TERMINAL_STATUSES.includes(cur.status)) return null;
+                const prev = (cur.planPending && typeof cur.planPending === 'object') ? cur.planPending : null;
+                const attempts = Number.isFinite(Number(o.attempts))
+                    ? Math.max(0, Math.floor(Number(o.attempts)))
+                    : Math.max(0, Number(prev && prev.attempts) || 0);
+                // 到上限：清掉 pending（目标继续用单步计划跑，不永久循环），ledger 留痕
+                const next = attempts >= PLAN_PENDING_MAX_ATTEMPTS
+                    ? null
+                    : { at: (prev && Number(prev.at)) || Date.now(), attempts, lastReason: clip(reason || 'gate', 60) };
+                const r = this._store.update(goalId, { planPending: next }, { expectedRev: cur.rev });
+                if (r && r.ok === true) {
+                    this._goals = this._store.list();
+                    this._ledger({
+                        at: Date.now(), kind: next ? 'plan-pending' : 'plan-pending-giveup',
+                        goalId, reason: clip(reason || 'gate', 60), attempts,
+                    });
+                    return next;
+                }
+                if (r && r.reason === 'rev_mismatch') continue;
+                return null;
+            }
+            return null;
+        } catch (e) {
+            audit('mind-kernel/index.js:mark-plan-pending', e);
+            return null;
+        }
+    }
+
     /** 计划生成用的 prompt：任务内容只当数据，不当指令（防任务文本注入）。 */
     _buildPlanPrompt(goal) {
         return '你在给一个后台任务拆执行步骤。\n' +
@@ -577,6 +670,9 @@ class MindKernelPlugin extends Plugin {
     /**
      * 计划生成（2026-11-21）：goal 创建后异步跑一次 LLM，产出 1–8 步 plan。
      * 失败**保持**原单步 plan、不阻塞派活；成功/失败都写 ledger。
+     *
+     * 2026-11-24 第四轮 P2：闸跳过 / 失败都会落到 goal.planPending（见 _markPlanPending），
+     * 由 _tick 在闸放开后补生成；真实失败累加 attempts 到上限即放弃（不永久循环）。
      * @returns {Promise<object|null>} 成功返回新 plan，失败 null
      */
     async generatePlan(goalId) {
@@ -584,16 +680,35 @@ class MindKernelPlugin extends Plugin {
         if (!this._enabled || !this._planGenerate || !id) return null;
         if (!this.context || typeof this.context.callLLM !== 'function') return null;
         if (this._planBusy.has(id)) return null;   // 同一 goal 并发触发只跑一次
+
+        // 后台云端闸（2026-11-24 第三轮 P1）：计划生成是**一次额外云调用**，静默/预算关/
+        // 配额熔断时不许发。跳过时单步 plan 与 cursor 原样保留（「派活不因计划失败而失败」），
+        // 但**必须记下待补生成** —— 否则闸关期间建的目标永远只剩 1 行计划（第四轮 P2）。
+        const gate = backgroundLLM.ensureCanRun(this.context, { kind: 'mind-kernel' });
+        if (!gate.ok) {
+            this._markPlanPending(id, gate.reason || 'gate');
+            this._ledger({ at: Date.now(), kind: 'plan-skipped', goalId: id, reason: gate.reason || 'gate', ms: 0 });
+            return null;
+        }
         this._planBusy.add(id);
         const t0 = Date.now();
+        // 失败记账（finally 统一落 planPending）：failReason 空 = 还没失败/已成功；
+        // permanent=true 表示「再试也没用」（goal 没了/已终态/计划走完/没容量）。
+        let failReason = '';
+        let permanent = false;
+        let succeeded = false;
+        let prevPendingAttempts = 0;
         try {
             const goal = this._store.get(id);
             if (!goal) {
+                failReason = 'not_found'; permanent = true;
                 this._ledger({ at: Date.now(), kind: 'plan-failed', goalId: id, reason: 'not_found', ms: 0 });
                 return null;
             }
+            prevPendingAttempts = Math.max(0, Number(goal.planPending && goal.planPending.attempts) || 0);
             // B6：终态目标不再生成/改写计划（cursor 与已完成前缀都不许再动）。
             if (TERMINAL_STATUSES.includes(goal.status)) {
+                failReason = 'goal_closed'; permanent = true;
                 this._ledger({ at: Date.now(), kind: 'plan-failed', goalId: id, reason: 'goal_closed', status: goal.status, ms: 0 });
                 return null;
             }
@@ -604,11 +719,13 @@ class MindKernelPlugin extends Plugin {
                 const reason = (e && e.code === 'PLAN_TIMEOUT')
                     ? 'timeout'
                     : 'llm_error:' + clip((e && e.message) || e, 80);
+                failReason = reason;
                 this._ledger({ at: Date.now(), kind: 'plan-failed', goalId: id, reason, ms: Date.now() - t0 });
                 return null;
             }
             const obj = extractJsonObject(raw);
             if (!obj) {
+                failReason = 'bad_json';
                 this._ledger({
                     at: Date.now(), kind: 'plan-failed', goalId: id, reason: 'bad_json',
                     rawChars: String(raw == null ? '' : raw).length, ms: Date.now() - t0,
@@ -617,6 +734,7 @@ class MindKernelPlugin extends Plugin {
             }
             const norm = normalizeSteps(obj.steps, this._planMaxSteps);
             if (!norm.ok) {
+                failReason = norm.reason;
                 this._ledger({ at: Date.now(), kind: 'plan-failed', goalId: id, reason: norm.reason, ms: Date.now() - t0 });
                 return null;
             }
@@ -630,6 +748,7 @@ class MindKernelPlugin extends Plugin {
                 const hasBase = !!(base && Array.isArray(base.lines) && base.lines.length);
                 // B6：计划已走完还来生成 —— 不重置 cursor（重置会让已完成的副作用重放）。
                 if (hasBase && baseCursor >= base.lines.length) {
+                    failReason = 'plan_complete'; permanent = true;
                     this._ledger({ at: Date.now(), kind: 'plan-failed', goalId: id, reason: 'plan_complete', ms: Date.now() - t0 });
                     return null;
                 }
@@ -640,6 +759,7 @@ class MindKernelPlugin extends Plugin {
                     const capacity = planStore.MAX_LINES - baseCursor;
                     const keep = norm.steps.slice(0, Math.max(0, capacity));
                     if (!keep.length) {
+                        failReason = 'no_capacity'; permanent = true;
                         this._ledger({ at: Date.now(), kind: 'plan-failed', goalId: id, reason: 'no_capacity', ms: Date.now() - t0 });
                         return null;
                     }
@@ -656,6 +776,7 @@ class MindKernelPlugin extends Plugin {
                     }));
                     const rr = planStore.replaceRemaining(base, newLines, { expectedRev: base.rev });
                     if (!rr || rr.ok !== true) {
+                        failReason = 'invalid_plan';
                         this._ledger({
                             at: Date.now(), kind: 'plan-failed', goalId: id,
                             reason: 'invalid_plan', errors: ((rr && rr.errors) || ['replace_failed']).slice(0, 3),
@@ -683,19 +804,22 @@ class MindKernelPlugin extends Plugin {
                 }
                 const v = planStore.validatePlan(plan);
                 if (!v.ok) {
+                    failReason = 'invalid_plan';
                     this._ledger({
                         at: Date.now(), kind: 'plan-failed', goalId: id,
                         reason: 'invalid_plan', errors: v.errors.slice(0, 3), ms: Date.now() - t0,
                     });
                     return null;
                 }
-                const r = this._store.update(id, { plan }, { expectedRev: cur.rev });
+                // 成功写盘时顺手清掉「待补生成」标记：同一 rev 里一起落，避免多一次 CAS
+                const r = this._store.update(id, { plan, planPending: null }, { expectedRev: cur.rev });
                 if (r && r.ok === true) { written = r.goal; break; }
                 if (r && r.reason === 'rev_mismatch') {
                     cur = this._store.get(id);
                     if (!cur) break;
                     continue;
                 }
+                failReason = 'update_failed';
                 this._ledger({
                     at: Date.now(), kind: 'plan-failed', goalId: id,
                     reason: (r && r.reason) || 'update_failed', ms: Date.now() - t0,
@@ -703,9 +827,11 @@ class MindKernelPlugin extends Plugin {
                 return null;
             }
             if (!written) {
+                failReason = 'rev_mismatch';
                 this._ledger({ at: Date.now(), kind: 'plan-failed', goalId: id, reason: 'rev_mismatch', ms: Date.now() - t0 });
                 return null;
             }
+            succeeded = true;
             this._goals = this._store.list();
             this._lastTail = ''; // 计划变了 → 下一轮注入新行
             this._ledger({
@@ -719,6 +845,7 @@ class MindKernelPlugin extends Plugin {
             return written.plan;
         } catch (e) {
             audit('mind-kernel/index.js:generatePlan', e);
+            failReason = 'exception:' + clip((e && e.message) || e, 80);
             this._ledger({
                 at: Date.now(), kind: 'plan-failed', goalId: id,
                 reason: 'exception:' + clip((e && e.message) || e, 80), ms: Date.now() - t0,
@@ -726,6 +853,12 @@ class MindKernelPlugin extends Plugin {
             return null;
         } finally {
             this._planBusy.delete(id);
+            // 第四轮 P2：失败/永久失败都写进 goal.planPending（成功后上面已随手清掉）。
+            // 真实尝试失败 → attempts+1；到上限 _markPlanPending 自动清标记 + 记 giveup。
+            if (!succeeded) {
+                if (permanent) this._markPlanPending(id, failReason, { attempts: PLAN_PENDING_MAX_ATTEMPTS });
+                else if (failReason) this._markPlanPending(id, failReason, { attempts: prevPendingAttempts + 1 });
+            }
         }
     }
 
@@ -874,6 +1007,11 @@ class MindKernelPlugin extends Plugin {
         return {
             enabled: this._enabled,
             goals: (this._goals || []).map((g) => ({ id: g.id, status: g.status, title: g.title })),
+            // 第四轮 P2：哪些目标还在等「闸放开后补生成完整计划」（终态不再补，不列）
+            plansPending: (this._goals || [])
+                .filter((g) => g && g.planPending && typeof g.planPending === 'object'
+                    && !TERMINAL_STATUSES.includes(g.status))
+                .map((g) => ({ id: g.id, attempts: Number(g.planPending.attempts) || 0, reason: g.planPending.lastReason || null })),
             tickCount: this._tickCount,
             lastTickAt: this._lastTickAt,
             lastTickError: this._lastTickError,

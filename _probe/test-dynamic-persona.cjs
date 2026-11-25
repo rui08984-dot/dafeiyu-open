@@ -39,12 +39,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function ctx(opts) {
     const o = opts || {};
     const logs = [];
-    return {
+    const c = {
         logs,
+        llmCalls: 0,
         getPluginConfig: () => ({ update_frequency: o.freq || 3, stale_hours: o.staleHours || 6 }),
-        callLLM: async () => { if (o.slow) await sleep(300); return o.reply === undefined ? '有点困但还在撑' : o.reply; },
+        callLLM: async () => {
+            c.llmCalls += 1;
+            if (o.slow) await sleep(300);
+            return o.reply === undefined ? '有点困但还在撑' : o.reply;
+        },
         log: (lv, msg) => logs.push(lv + ':' + msg),
     };
+    return c;
 }
 const mkReq = () => ({ messages: [{ role: 'system', content: 'S' }, { role: 'user', content: '在干嘛' }] });
 
@@ -106,6 +112,58 @@ const mkReq = () => ({ messages: [{ role: 'system', content: 'S' }, { role: 'use
         // ⑥ prompt 里的人名是「大肥鱼」（注释里提到旧名字不算，只看发给模型的文案）
         const src = fs.readFileSync(path.join(__dirname, '..', '_incoming', 'my-neuro', 'live-2d', 'plugins', 'community', 'dynamic-persona', 'index.js'), 'utf8');
         ok('prompt 里用「大肥鱼」而不是旧名', /描述大肥鱼此刻/.test(src) && !/描述肥牛此刻/.test(src));
+
+        // ⑦ 同一用户轮重冻两次 → msgCount 只 +1（2026-11-24 第四轮 P2 根因修）
+        //    触发链：轮内 host-shrank / 外部改宿主 → llm-handler 重冻前缀并重跑钩子。
+        //    freq=1 时旧实现会「同一轮计数两次 → 每次都到更新点 → 多发一次云调用」。
+        {
+            const c7 = ctx({ freq: 1 });
+            const p7 = new P();
+            p7.context = c7;
+            await p7.onInit();
+            const mkTurn = (turnId) => Object.assign(mkReq(), { turn_id: turnId });
+            await p7.onLLMRequest(mkTurn('turn-A'));
+            await p7.onLLMRequest(mkTurn('turn-A'));      // 同一轮重冻
+            await p7.onLLMRequest(mkTurn('turn-A'));      // 再来一次也一样
+            await sleep(80);
+            ok('同一轮重冻 3 次：msgCount 只 +1', p7.msgCount === 1, 'msgCount=' + p7.msgCount);
+            ok('同一轮重冻 3 次：只发 1 次云调用', c7.llmCalls === 1, 'llmCalls=' + c7.llmCalls);
+            await p7.onLLMRequest(mkTurn('turn-B'));      // 下一个用户轮 → 正常计数
+            await sleep(80);
+            ok('换新轮：msgCount 正常推进到 2', p7.msgCount === 2, 'msgCount=' + p7.msgCount);
+            ok('换新轮：第二次云调用发出', c7.llmCalls === 2, 'llmCalls=' + c7.llmCalls);
+        }
+        // ⑦b 没有轮次身份时不去重（旧调用方/单测的行为不变）
+        {
+            const c8 = ctx({ freq: 1 });
+            const p8 = new P();
+            p8.context = c8;
+            await p8.onInit();
+            await p8.onLLMRequest(mkReq());
+            await p8.onLLMRequest(mkReq());
+            await sleep(80);
+            ok('无 turn_id：保持原计数（不静默少计）', p8.msgCount === 2, 'msgCount=' + p8.msgCount);
+        }
+        // ⑦c 轮次键来源：turn-context 的当前轮也算「同一轮」
+        {
+            const turnCtx = require(path.join(__dirname, '..', '_incoming', 'my-neuro', 'live-2d', 'js', 'core', 'turn-context.js'));
+            const c9 = ctx({ freq: 1 });
+            const p9 = new P();
+            p9.context = c9;
+            await p9.onInit();
+            const tid = turnCtx.beginTurn('chat');
+            try {
+                await p9.onLLMRequest(mkReq());     // 请求里没有 turn_id，靠 turn-context
+                await p9.onLLMRequest(mkReq());
+                await sleep(80);
+                ok('turn-context 同一轮：msgCount 只 +1（turn=' + tid + '）', p9.msgCount === 1, 'msgCount=' + p9.msgCount);
+            } finally {
+                turnCtx.endTurn('ok');
+            }
+            await p9.onLLMRequest(mkReq());         // endTurn 后是新轮 → 继续计数
+            await sleep(80);
+            ok('endTurn 后下一轮正常计数', p9.msgCount === 2, 'msgCount=' + p9.msgCount);
+        }
     } finally {
         // 临时记录室整目录删掉（测试不再还原真实文件，因为根本没写过真实文件）
         iso.cleanup(tmpRoot);

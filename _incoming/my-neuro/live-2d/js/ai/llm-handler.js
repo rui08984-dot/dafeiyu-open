@@ -25,6 +25,47 @@ const scene = require('../core/conversation-scene.js');
 const turnCtx = require('../core/turn-context.js');
 // C3（2026-11-21）：上下文预算账本（只测量，不改行为）
 const contextBudget = require('../core/context-budget.js');
+// P0-2（2026-11-24）：工具回执体积上限。单轮工具循环能把 history 顶到 68k，
+// 压缩钩子只在回复定稿后跑，救不了那一轮；这里在每次请求前封顶（见模块头注释）。
+const toolResultCap = require('./tool-result-cap.js');
+// ADR-014（2026-11-24）：artifact 清理——进程内只跑一次（保留最近 200 个 / 7 天）。
+const toolArtifact = require('./tool-result-artifact.js');
+let __artifactCleanupDone = false;
+function _cleanupArtifactsOnce() {
+    if (__artifactCleanupDone) return;
+    __artifactCleanupDone = true;
+    try {
+        const r = toolArtifact.cleanupArtifacts();
+        if (r && r.removed) logToTerminal('info', '🧹 tool-artifacts 清理：删除 ' + r.removed + ' 个（保留最近 200 个/7 天）');
+    } catch (e) { /* 清理失败不影响对话 */ }
+}
+
+// ── 会话级工具子集的会话标识（ADR-014 轨道 2-7）──────────────────────────
+// voiceChat 对象在会话生命周期内是同一份引用 → WeakMap 分配稳定 sessionKey。
+// 只有模式变化才重选工具；同一会话 + 同一模式 = 同一份 tools（前缀缓存不被打穿）。
+const _sessionKeys = new WeakMap();
+let _sessionSeq = 0;
+function _sessionKeyFor(vc) {
+    if (!vc || typeof vc !== 'object') return 'default';
+    let k = _sessionKeys.get(vc);
+    if (!k) {
+        _sessionSeq += 1;
+        k = 's' + _sessionSeq;
+        _sessionKeys.set(vc, k);
+    }
+    return k;
+}
+
+/** 工具名集合的稳定指纹（只用于日志观测，不参与决策）。 */
+function _toolHash(tools) {
+    const names = (Array.isArray(tools) ? tools : [])
+        .map((t) => String((t.function && t.function.name) || t.name || ''))
+        .filter(Boolean).sort();
+    let h = 5381;
+    const s = names.join(',');
+    for (let i = 0; i < s.length; i += 1) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+    return h.toString(36);
+}
 // D5（2026-11-22）：回复完成后结算记忆兑现率（只观测；注入侧在 memory-recall）。
 const memoryUsage = require('../core/memory-usage.js');
 const fs = require('fs');
@@ -91,13 +132,94 @@ try { globalThis.__ttsWaitStats = ttsWaitStats; } catch (e) { /* 纯 Node 环境
 let _pendingInterruptNote = '';
 let _pendingLoopNote = '';
 
+// ADR-014 漏一（2026-11-24）：轮内前缀冻结的「复用/重建/断裂」必须可聚合 ——
+// 「缓存断裂可观测」是这一轮的核心交付，不能只靠日志文本（日志一冲就没人知道）。
+// 轮末落一条 llm.freeze，字段 reuse/rebuild/rewrite；doctor / 验收直接读它。
+let __emitTelemetry = null;
+try { __emitTelemetry = require('../core/telemetry.js').emitTelemetry; } catch (e) { __emitTelemetry = null; }
+
 function saveScreenshotForHistory(base64Image) {
-    const recordsDir = path.join(__dirname, '..', '..', '..', 'data');
+    // P0（2026-11-25 风暴压测）：目录必须走 records-path 单一真源。
+    // 旧实现自己拼 __dirname/../../../data —— 忽略了 PET_DATA_ROOT，测试跑一轮就往
+    // 用户真实记录室写一张截图（探针污染真实数据）。压缩/历史/画像都是同一口径，这里也统一。
+    let recordsDir = path.join(__dirname, '..', '..', '..', 'data');
+    try {
+        const rp = require('../core/records-path.js');
+        if (rp && rp.RECORDS_DIR) recordsDir = rp.RECORDS_DIR;
+    } catch (e) { /* 没有 records-path 就按历史层级回落 */ }
     const screenshotDir = path.join(recordsDir, '对话截图');
     fs.mkdirSync(screenshotDir, { recursive: true });
     const filename = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}.jpg`;
     fs.writeFileSync(path.join(screenshotDir, filename), Buffer.from(base64Image, 'base64'));
     return `对话截图/${filename}`;
+}
+
+/**
+ * 轮末清理：宿主历史里只保留**最新一张**截图，更早的图片剥成文字（省 token）。
+ *
+ * 为什么是轮末（ADR-014 漏一，2026-11-24）：这段逻辑原来在截图工具分支里**当场**剥宿主旧图。
+ * 轮内冻结前缀覆盖的字节被它一改，从那条消息起整段缓存失效 —— 等价于自己打穿缓存。
+ * 放到「工具循环已经结束、这一轮不再发请求」之后做：下一轮前缀本来就会因为新 user 消息
+ * 重置一次，代价相同，而轮内保证几十次请求逐字节命中。
+ *
+ * @param {Array} messages voiceChat.messages（原地改）
+ * @returns {number} 被剥掉图片的消息条数
+ */
+function stripOldScreenshotImages(messages) {
+    if (!Array.isArray(messages)) return 0;
+    // 从后往前找最新一张带图的消息：它要留给模型（当前正在看的就是它）
+    let keepIdx = -1;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const m = messages[i];
+        if (m && m.role === 'user' && Array.isArray(m.content)
+            && m.content.some((p) => p && p.type === 'image_url')) { keepIdx = i; break; }
+    }
+    let stripped = 0;
+    messages.forEach((msg, i) => {
+        if (i === keepIdx) return;
+        if (!msg || msg.role !== 'user' || !Array.isArray(msg.content)) return;
+        if (!msg.content.some((p) => p && p.type === 'image_url')) return;
+        const textItems = msg.content.filter((p) => p && p.type === 'text');
+        msg.content = textItems.length > 0 ? textItems.map((p) => p.text).join(' ') : '(截图已清除)';
+        stripped += 1;
+    });
+    return stripped;
+}
+
+/**
+ * 请求体里的「历史图片清理」（P1-1，2026-11-24 对抗审查）。
+ *
+ * 这里只改**请求副本**（messagesForAPI），宿主 voiceChat.messages 留给轮末
+ * stripOldScreenshotImages 处理 —— 轮内改宿主 = 改写冻结前缀覆盖的字节。
+ *
+ * 为什么必须是独立函数、且在**冻结点之前**调用一次：
+ *   旧实现在 vision/main 分支里（冻结之后）剥图。无新截图的那一轮，第 1 次请求发出去的
+ *   是剥图后的字节，快照却带着图 → 第 2 次请求 compose 用快照 → 图片「复活」，
+ *   前缀从那一条消息起分叉，而 llm.freeze 仍然报 reuse 成功（假命中）。
+ *   现在顺序固定为：克隆宿主 → 附加新截图（若有）→ 剥历史图 → 拼易变尾巴 → 冻结 →
+ *   发请求。快照 == 首次请求的真实字节；后续请求 compose 出来自然逐字节一致。
+ *
+ * 语义（与原实现一致）：
+ *   · 本轮有新截图（iteration===0 且 screenshotBase64）→ 不剥，整套图都留给模型；
+ *   · 没有新截图 / 已经进入工具循环 → 历史图剥成文字（省 token）。
+ *
+ * @param {Array} messages 请求副本（原地改）
+ * @param {string|null} screenshotBase64 本轮用户新截图
+ * @param {number} iteration 当前工具循环轮次
+ * @returns {number} 被剥掉图片的消息条数
+ */
+function stripHistoryImagesForRequest(messages, screenshotBase64, iteration) {
+    if (!Array.isArray(messages)) return 0;
+    if (screenshotBase64 && !(Number(iteration) > 0)) return 0;
+    let stripped = 0;
+    for (const msg of messages) {
+        if (!msg || msg.role !== 'user' || !Array.isArray(msg.content)) continue;
+        if (!msg.content.some((item) => item && item.type === 'image_url')) continue;
+        const textItems = msg.content.filter((item) => item && item.type === 'text');
+        msg.content = textItems.length > 0 ? textItems.map((item) => item.text).join(' ') : '(图片内容)';
+        stripped += 1;
+    }
+    return stripped;
 }
 
 /**
@@ -394,10 +516,15 @@ class LLMHandler {
             (config.llm && config.llm.model_id) || null
         );
         const llmClient = resolvedLlmProvider
-            ? LLMClient.fromProviderConfig(resolvedLlmProvider, retryCfg)
+            // P1-3：主链显式标 main。原来不传 label，任何含历史图片的请求都会被
+            //   _resolveLabel 推断成 vision → lastUsage.main 不更新、真账基线永远失效。
+            ? LLMClient.fromProviderConfig(resolvedLlmProvider, retryCfg, 'main')
             : new LLMClient(config);
         if (resolvedLlmProvider) {
             logToTerminal('info', `✅ 对话模型: ${resolvedLlmProvider.model}（提供商: ${resolvedLlmProvider.name || resolvedLlmProvider.id}）`);
+        } else if (llmClient && !llmClient.label) {
+            // 旧式 config.llm 回退路径同样是主链：显式标 main（理由同上）
+            llmClient.label = 'main';
         }
         // ⚠ 采样参数补齐。温度等模型级参数现住通讯录（llm_providers.json 每模型条目），
         // _buildResolved 已把它们平铺进 resolved；config.json 里的同名旧键被设计性迁移删除，
@@ -443,7 +570,7 @@ class LLMHandler {
                 resolvedFallbackProvider.api_url === resolvedLlmProvider.api_url &&
                 resolvedFallbackProvider.model === resolvedLlmProvider.model;
             if (resolvedFallbackProvider && !sameAsPrimary) {
-                fallbackClient = LLMClient.fromProviderConfig(resolvedFallbackProvider, retryCfg);
+                fallbackClient = LLMClient.fromProviderConfig(resolvedFallbackProvider, retryCfg, 'main');
                 applySampling(fallbackClient, resolvedFallbackProvider);
                 logToTerminal('info', `✅ 保底模型: ${resolvedFallbackProvider.model}（提供商: ${resolvedFallbackProvider.name || resolvedFallbackProvider.id}）`);
             } else if (sameAsPrimary) {
@@ -461,7 +588,7 @@ class LLMHandler {
                 ? llmProviderManager.resolveProviderOrFallback(config.vision.provider_id, config.vision.model_id || null)
                 : null;
             if (resolvedVisionProvider) {
-                visionClient = LLMClient.fromProviderConfig(resolvedVisionProvider, retryCfg);
+                visionClient = LLMClient.fromProviderConfig(resolvedVisionProvider, retryCfg, 'vision');
                 console.log('✅ 视觉模型已启用:', resolvedVisionProvider.model);
                 logToTerminal('info', `✅ 视觉模型已启用: ${resolvedVisionProvider.model}（提供商: ${resolvedVisionProvider.name || resolvedVisionProvider.id}）`);
             } else if (config.vision.vision_model) {
@@ -502,8 +629,33 @@ class LLMHandler {
         };
 
         const runTurn = async function(prompt) {
+            // ADR-014：artifact 清理每进程一次（失败只 warn，不影响这轮对话）
+            _cleanupArtifactsOnce();
             let hasRetriedWithoutImage = false; // 标志：是否已经重试过（避免无限循环）
             let isFirstAttempt = true; // 标志：是否是第一次尝试
+            // P1-2（2026-11-25 风暴压测）：用户这句话是否已经入宿主。
+            //   截图不支持时 catch 会把 isFirstAttempt 重置为 true 重走整段流程（需要重新判定截图/
+            //   重新拼前缀），但 **user 消息已经在第一次 attempt 时 push 过了**。旧实现只认
+            //   isFirstAttempt，重试就会把同一句话再 push 一遍 —— 实测宿主里出现两条相同 user，
+            //   模型看到用户「说了两遍」，历史体积也翻倍。用独立标志把「首轮流程」和「入库」解耦。
+            let userMessagePushed = false;
+            // P0-2：本轮第一条 user 消息在 voiceChat.messages 里的下标。
+            // 工具回执的「单轮累计上限」只统计这个下标之后的消息（历史回执只做单条截断）。
+            let turnStartIndex = -1;
+            // 🧊 轮内前缀冻结（ADR-014 漏一，2026-11-24）：本轮**第一次请求**渲染完的字节快照。
+            // 工具循环里后面的请求只许在它后面追加新消息，已发出过的字节一个都不许改；
+            // 轮结束（回复/打断/异常/截图重试）在 finally 里清空，下一轮重新冻结。
+            let turnFreeze = null;
+            // P0（2026-11-25）：本轮截图（base64 + 落盘路径 + 目标下标）。轮内重冻时按它原位重贴，
+            // 否则「截图轮被限流/外部改写触发重冻」之后模型就再也看不到屏幕（见重建分支注释）。
+            let turnScreenshot = null;
+            // 本轮冻结战绩（轮末落 telemetry llm.freeze）：
+            //   reuse   = 复用成功发出请求的次数
+            //   rebuild = 中途重建冻结的次数（宿主被改写 / 宿主变短）
+            //   rewrite = 检测到「已发出过的字节被改写」的次数（host-rewritten / 宿主变短 / 快照被改）
+            //   requests= 经冻结通道发出的请求总数（含截图分析那次）
+            //   visionLost = 重冻时找不到本轮截图目标的次数（视觉上下文真丢了，必须可观测）
+            const freezeStats = { reuse: 0, rebuild: 0, rewrite: 0, requests: 0, prefixMsgs: 0, prefixChars: 0, visionLost: 0 };
             let cancelLatencyFiller = () => {}; // ⚡ 快慢双轨：垫场计时器取消句（本轮 finally 必须收）
             // ── 延迟观测（2026-11-16）──────────────────────────────────────────
             // 用户反馈「说一句话要等好久」，但日志里**一个耗时数字都没有**，只能猜。
@@ -544,6 +696,15 @@ class LLMHandler {
             // 🔥 外层重试循环：用于处理视觉不支持错误
             while (true) {
                 try {
+                    // 🧊 每次尝试单独记账（截图重试会重走一遍 attempt）：轮末各自落一条 telemetry，
+                    // 聚合时相加不会重复计。冻结本身也按 attempt 生命周期清空（见 finally）。
+                    freezeStats.reuse = 0;
+                    freezeStats.rebuild = 0;
+                    freezeStats.rewrite = 0;
+                    freezeStats.requests = 0;
+                    freezeStats.prefixMsgs = 0;
+                    freezeStats.prefixChars = 0;
+                    freezeStats.visionLost = 0;
                     // 发送用户输入开始事件（仅第一次）
                     if (isFirstAttempt) {
                         eventBus.emit(Events.USER_INPUT_START);
@@ -588,12 +749,38 @@ class LLMHandler {
 
                 // 只在第一次尝试时添加用户消息
                 if (isFirstAttempt) {
-                    voiceChat.messages.push({ 'role': 'user', 'content': prompt });
-
-                    if (voiceChat.enableContextLimit) {
-                        // ⚡ rolling summary：trim 前把超窗消息快照进滚动摘要（异步，快照先行无竞态）
-                        voiceChat.contextCompressor?.checkAndRollAsync?.().catch(() => {});
-                        voiceChat.trimMessages();
+                    // ⚠ 截图重试会回到这里（isFirstAttempt 被重置），但用户消息只许入库一次。
+                    //   重复 push 会让模型以为用户把同一句话说了两遍，且历史体积无故翻倍。
+                    if (!userMessagePushed) {
+                        voiceChat.messages.push({ 'role': 'user', 'content': prompt });
+                        userMessagePushed = true;
+                        if (voiceChat.enableContextLimit) {
+                            voiceChat.trimMessages();
+                        }
+                        // ⚠ trim 可能把数组前段裁掉、下标整体前移 —— 必须在 trim **之后**取下标。
+                        // 刚 push 的 user 消息在保留窗口内（trim 保留最新 maxContextMessages 条）。
+                        turnStartIndex = voiceChat.messages.length - 1;
+                    } else {
+                        // 重试轮：消息已在宿主里，仍要执行裁剪；但 trim/removeImages 都会换数组、
+                        // 让旧下标漂移。P1-5（2026-11-25 风暴压测）：不能盲信旧下标 ——
+                        // 校验它仍指向**本轮这句 user**，不是就关掉「单轮累计」闸（单条上限仍生效）
+                        // 并 warn。用错位的下标去统计，会把上一轮的回执算进本轮、或漏掉本轮的。
+                        if (voiceChat.enableContextLimit) {
+                            voiceChat.trimMessages();
+                        }
+                        const _textOfContent = (c) => (Array.isArray(c)
+                            ? c.filter((p0) => p0 && p0.type === 'text').map((p0) => p0.text || '').join(' ')
+                            : String(c == null ? '' : c));
+                        const at = turnStartIndex >= 0 ? voiceChat.messages[turnStartIndex] : null;
+                        const stillMine = !!(at && at.role === 'user'
+                            && _textOfContent(at.content).trim() === _textOfContent(prompt).trim());
+                        if (!stillMine) {
+                            if (turnStartIndex >= 0) {
+                                logToTerminal('warn', '🧰 重试轮：本轮起始下标已漂移（trim/剥图改写了宿主），'
+                                    + '单轮累计闸本轮关闭（单条上限仍生效）');
+                            }
+                            turnStartIndex = -1;
+                        }
                     }
                 }
 
@@ -619,6 +806,13 @@ class LLMHandler {
                                     ...(Array.isArray(lastUserMessage.attachments) ? lastUserMessage.attachments : []),
                                     { type: 'image', path: screenshotPath }
                                 ];
+                                // P0（2026-11-25）：截图是「这一轮的输入」，轮内重冻后要能原位重贴。
+                                // 记 hostIndex 只是兜底（attachments 路径才是主判据，trim 后下标会漂）。
+                                turnScreenshot = {
+                                    base64: screenshotBase64,
+                                    path: screenshotPath,
+                                    hostIndex: voiceChat.messages.indexOf(lastUserMessage),
+                                };
                             }
                         } catch (error) {
                             console.error("截图处理失败:", error);
@@ -670,15 +864,16 @@ class LLMHandler {
                     }
                 }
 
-                // 能力域筛选（2026-11-10 三十七轮）：按屏幕状态 + 用户消息把 52 个工具筛成子集。
+                // 能力域筛选（2026-11-10 三十七轮；2026-11-24 ADR-014 升为**会话级**）。
                 //   ⚠ **默认关闭**（config.toolFilter.enabled === true 才启用）—— 主链红线：
                 //   筛掉了 AI 真想用的工具 = 静默劣化，比 schema 大更糟。所以：
                 //   ① 只在 tool 轮生效（纯 chat 轮已被 shouldOmitTools 全省）
-                //   ② 记忆/核心记忆/画像永不裁、保底 8 个通用工具
-                //   ③ 筛选器抛异常只打 warn，绝不让主链失败
+                //   ② 记忆/核心记忆/画像/see/act/app 永不裁、保底 8 个通用工具
+                //   ③ 同一会话 + 同一模式只选一次（模式变了才重选）—— 前缀缓存不因筛选本身漂移
+                //   ④ 筛选器抛异常只打 warn，绝不让主链失败
                 if (config.toolFilter && config.toolFilter.enabled === true && allTools.length > 0 && turnIntent.intent !== 'unknown') {
                     try {
-                        const { pickTools } = require('./tool-picker.js');
+                        const { pickForSession } = require('./tool-picker.js');
                         let screenState = '';
                         try {
                             const entry = global.pluginManager && global.pluginManager._plugins && global.pluginManager._plugins.get('community/watch-screen');
@@ -686,9 +881,19 @@ class LLMHandler {
                             const st = plug && plug._screenState;
                             if (st && st.state) screenState = st.state + (st.what ? ':' + st.what : '');
                         } catch (e0) { /* 状态拿不到就当没有 */ }
-                        const picked = pickTools(allTools, { screenState, lastUserText: promptText });
-                        if (picked.dropped > 0 && picked.tools.length >= 8) {
-                            logToTerminal('info', `[工具筛选] ${picked.domains.join('+') || '通用'}：${allTools.length} → ${picked.tools.length}（省 ${picked.dropped} 个 schema）`);
+                        const picked = pickForSession(allTools, {
+                            sessionKey: _sessionKeyFor(voiceChat),
+                            screenState,
+                            lastUserText: promptText,
+                        });
+                        if (picked.tools.length >= 8) {
+                            // 观测口径：domain / toolCount / toolHash —— 缓存命中率变化能不能归因到「工具换了」
+                            logToTerminal('info', '[工具筛选] mode=' + picked.mode
+                                + ' domain=' + (picked.domains.join('+') || 'core')
+                                + ' toolCount=' + allTools.length + '→' + picked.tools.length
+                                + ' toolHash=' + _toolHash(picked.tools)
+                                + (picked.reused ? '（会话内复用）' : '（新选）')
+                                + (picked.dropped > 0 ? ' 省 ' + picked.dropped + ' 个 schema' : ''));
                             allTools = picked.tools;
                         }
                     } catch (e) {
@@ -742,41 +947,186 @@ class LLMHandler {
                         // 抛出特殊错误，让外层 catch 处理
                         throw new Error('USER_INTERRUPTED');
                     }
+                    // P0-2（2026-11-24）：工具回执体积上限 —— 必须在克隆前改**宿主消息**，
+                    // 这样后续请求看到的是同一份截断结果（前缀稳定，不会每轮重写）。
+                    // 单条超 8k 截中间；本轮累计超 24k 从最旧一条开始省略（保留最新）。
+                    // ⚠ 已知例外（ADR-014 漏一，注明为有意为之）：累计闸在超限那一刻会改写
+                    //   本轮**更早**的 tool 消息。若那条落在冻结前缀区间，`composeTurnPrefix` 的
+                    //   hostSig 会判 `host-rewritten` → 当场作废冻结并按宿主重冻（主动断一次缓存）。
+                    //   这比「用旧快照发出去、截断被静默绕过」正确：宁可断一次，不可让宿主与请求分叉。
+                    try {
+                        const capRes = toolResultCap.enforceToolBudget(voiceChat.messages, turnStartIndex, {
+                            perResultChars: config && config.context && config.context.tool_result_max_chars,
+                            perTurnChars: config && config.context && config.context.turn_tool_result_max_chars,
+                        });
+                        if (capRes.capped || capRes.stubbed) {
+                            logToTerminal('info', '🧰 工具回执限流：截断 ' + capRes.capped + ' 条 / 本轮省略 '
+                                + capRes.stubbed + ' 条 / 共省 ' + capRes.droppedChars + ' 字符（本轮工具回执 '
+                                + capRes.turnChars + ' 字符）');
+                        }
+                    } catch (e) { /* 限流失败不影响对话 */ }
+
                     // 准备发送给API的消息列表
-                    let messagesForAPI = JSON.parse(JSON.stringify(voiceChat.messages));
-                    messagesForAPI.forEach(message => { delete message.attachments; });
-
-                    // 模型不支持图片时，在最后一条用户消息后追加一条说明，让 AI 用自己的语气告知用户
-                    if (hasRetriedWithoutImage && iteration === 0) {
-                        messagesForAPI.push({ role: 'user', content: '（系统提示：当前模型不支持识图，请用你自己的语气告诉用户需要换成支持多模态视觉的模型才能使用截图功能）' });
-                    }
-
-                    // 如果是第一轮且需要截图,添加截图到最后一条用户消息
-                    if (iteration === 0 && screenshotBase64) {
-                        // 从后往前找最后一条用户消息
-                        let lastUserMsgIndex = -1;
-                        for (let i = messagesForAPI.length - 1; i >= 0; i--) {
-                            if (messagesForAPI[i].role === 'user') {
-                                lastUserMsgIndex = i;
-                                break;
+                    // ── 🧊 轮内前缀冻结（ADR-014 漏一，2026-11-24 第三轮）──────────────
+                    // 旧实现每次请求都重跑插件钩子 + 重拼易变尾巴，而钩子本身就在改写**同一段前缀**：
+                    //   · watch-screen 把「最近 60 秒画面摘要」插到最后一条 user 的最前面（每请求都变）；
+                    //   · dawn-dusk 把时段行插到 user 最前面；
+                    //   · user-profile 把画像追到 system 末尾。
+                    // 这些字节一变，从那一字节往后（含还没发出的 tool 往返）全部 miss ——
+                    // 实测 11-22 单轮 18 次请求：prompt 10.6k→24.3k，cached 冻在 9,984，命中 93.7%→41%。
+                    // 所以冻结点不放在「易变块」上，而是放在**本轮第一次请求渲染完的字节**上：
+                    //   ① 第 1 次请求照旧跑钩子/拼尾巴，然后把字节快照进 turnFreeze；
+                    //   ② 之后每次请求 = 快照原样 + 宿主本轮新追加的 assistant/tool 消息（composeTurnPrefix）；
+                    //   ③ 轮结束清空，下一轮重新冻结。
+                    // 语义代价（可接受）：世界行/画面摘要/mood 在本轮内保持**轮起点**快照，
+                    // 下一个用户轮才刷新 —— 这正是要的（工具循环里世界变一秒，模型没必要知道）。
+                    let messagesForAPI = null;
+                    let frozenReuse = null;
+                    if (turnFreeze) {
+                        frozenReuse = promptLayout.composeTurnPrefix(turnFreeze, voiceChat.messages);
+                        if (frozenReuse && frozenReuse.ok) {
+                            messagesForAPI = frozenReuse.messages;
+                            freezeStats.reuse += 1;
+                            freezeStats.requests += 1;
+                            if (!frozenReuse.snapOk) {
+                                // 快照对象本身被外部改过 —— 缓存同样断，但它不是「宿主有没有被改」的判据
+                                freezeStats.rewrite += 1;
+                                logToTerminal('warn', '🧊 冻结快照被外部改写（snapOk=false，本轮第 '
+                                    + (iteration + 1) + ' 次请求，缓存会从这里断）');
                             }
+                            logToTerminal('info', '♻️ 复用冻结前缀：' + frozenReuse.prefixMsgs + ' 条 / '
+                                + frozenReuse.prefixChars + ' 字 + 本轮新增 ' + frozenReuse.tailMsgs
+                                + ' 条（本轮第 ' + (iteration + 1) + ' 次请求）');
+                        } else if (frozenReuse && frozenReuse.reason === 'host-rewritten') {
+                            // 宿主前缀被改写（典型：工具回执限流把本轮更早的 tool 消息省略掉了）。
+                            // 继续用旧快照发 = 截断被静默绕过（宿主与请求分叉），所以宁可主动断一次缓存。
+                            freezeStats.rebuild += 1;
+                            freezeStats.rewrite += 1;
+                            logToTerminal('warn', '🧊 冻结前缀被宿主改写（工具回执限流），本轮重冻：第 '
+                                + frozenReuse.index + ' 条已变，第 ' + (iteration + 1) + ' 次请求');
+                            try {
+                                if (__emitTelemetry) {
+                                    __emitTelemetry({
+                                        cat: 'llm', type: 'llm.freeze.break', title: '冻结前缀被宿主改写',
+                                        level: 'warn', pipeline_stage: 'llm',
+                                        metrics: { rewrite: 1, at_msg: Number(frozenReuse.index) },
+                                        turn_id: turnCtx.currentTurnId(),
+                                    });
+                                }
+                            } catch (e) { /* 遥测失败不影响对话 */ }
+                            frozenReuse = null;   // 本次没复用成功（下面按宿主重建 → 剥历史图 → 重冻）
+                            turnFreeze = null;   // 落到下面的重建 + 重冻
+                        } else {
+                            // 宿主变短（trim/pop）→ 快照与宿主对不上，删了重建一次并重新冻结。
+                            // P1-3（2026-11-25 风暴压测）：变短同样是**缓存断裂** —— 已发出去的前缀
+                            //   里的消息被别的路径删掉了，后续请求不可能再命中。旧实现只 +rebuild，
+                            //   rewrite 仍是 0、也不落 freeze.break → 这种轮次在 doctor 里看起来
+                            //   「零断裂」，缓存账本在说谎。这里按断裂记账（并标出 shrank）。
+                            freezeStats.rebuild += 1;
+                            const reason = (frozenReuse && frozenReuse.reason) || 'unknown';
+                            if (reason === 'host-shrank') {
+                                freezeStats.rewrite += 1;
+                                try {
+                                    if (__emitTelemetry) {
+                                        __emitTelemetry({
+                                            cat: 'llm', type: 'llm.freeze.break', title: '冻结前缀失效（宿主变短）',
+                                            level: 'warn', pipeline_stage: 'llm',
+                                            metrics: { rewrite: 1, shrank: 1, at_msg: 0 },
+                                            turn_id: turnCtx.currentTurnId(),
+                                        });
+                                    }
+                                } catch (e) { /* 遥测失败不影响对话 */ }
+                            }
+                            logToTerminal('warn', '🧊 冻结前缀失效（' + reason
+                                + '），本轮重算一次');
+                            frozenReuse = null;
+                            turnFreeze = null;
+                        }
+                    }
+                    if (!messagesForAPI) {
+                        messagesForAPI = JSON.parse(JSON.stringify(voiceChat.messages));
+                        messagesForAPI.forEach(message => { delete message.attachments; });
+
+                        // 🧹 历史图片清理（P1-1）：**只在这里跑一次，且在上面冻结点之前**。
+                        //   旧位置在下面的 vision/main 分支里（冻结之后）→ 无新截图的轮次里，
+                        //   快照带图、实际请求剥图，下一次 compose 用快照就把图片「复活」了，
+                        //   前缀从那条消息起分叉，而 llm.freeze 还报 reuse 成功。
+                        //   现在快照 == 首次请求真实字节；冻结复用请求也不再剥图（见下面分支注释）。
+                        // ⚠ 顺序（2026-11-25 风暴压测）：先剥**历史图**、再贴**本轮截图**。
+                        //   iteration>0 时这个函数会把所有 user 图都剥掉（含刚贴上的截图），
+                        //   先贴后剥等于白贴 —— 那正是「轮内重冻后她看不见屏幕」的根因。
+                        const _strippedImgs = stripHistoryImagesForRequest(messagesForAPI, screenshotBase64, iteration);
+                        if (_strippedImgs > 0) {
+                            console.log('🧹 历史图片已清理（冻结点之前）: ' + _strippedImgs + ' 条');
                         }
 
-                        if (lastUserMsgIndex !== -1) {
-                            console.log(`📸 将截图附加到消息索引 ${lastUserMsgIndex}，内容: ${promptText.substring(0, 50)}...`);
-                            // prompt 若已是多模态数组则直接追加图片，否则包装成数组
-                            const existingContent = Array.isArray(prompt)
-                                ? prompt
-                                : [{ 'type': 'text', 'text': prompt }];
-                            messagesForAPI[lastUserMsgIndex] = {
-                                'role': 'user',
-                                'content': [
-                                    ...existingContent,
-                                    { 'type': 'image_url', 'image_url': { 'url': `data:image/jpeg;base64,${screenshotBase64}` } }
-                                ]
-                            };
-                        } else {
-                            console.error('⚠️ 未找到用户消息，无法附加截图');
+                        // 模型不支持图片时，在最后一条用户消息后追加一条说明，让 AI 用自己的语气告知用户
+                        if (hasRetriedWithoutImage && iteration === 0) {
+                            messagesForAPI.push({ role: 'user', content: '（系统提示：当前模型不支持识图，请用你自己的语气告诉用户需要换成支持多模态视觉的模型才能使用截图功能）' });
+                        }
+
+                        // 如果是第一轮且需要截图,添加截图到最后一条用户消息
+                        if (iteration === 0 && screenshotBase64) {
+                            // 从后往前找最后一条用户消息
+                            let lastUserMsgIndex = -1;
+                            for (let i = messagesForAPI.length - 1; i >= 0; i--) {
+                                if (messagesForAPI[i].role === 'user') {
+                                    lastUserMsgIndex = i;
+                                    break;
+                                }
+                            }
+
+                            if (lastUserMsgIndex !== -1) {
+                                console.log(`📸 将截图附加到消息索引 ${lastUserMsgIndex}，内容: ${promptText.substring(0, 50)}...`);
+                                // prompt 若已是多模态数组则直接追加图片，否则包装成数组
+                                const existingContent = Array.isArray(prompt)
+                                    ? prompt
+                                    : [{ 'type': 'text', 'text': prompt }];
+                                messagesForAPI[lastUserMsgIndex] = {
+                                    'role': 'user',
+                                    'content': [
+                                        ...existingContent,
+                                        { 'type': 'image_url', 'image_url': { 'url': `data:image/jpeg;base64,${screenshotBase64}` } }
+                                    ]
+                                };
+                            } else {
+                                console.error('⚠️ 未找到用户消息，无法附加截图');
+                            }
+                        } else if (iteration > 0 && turnScreenshot && !hasRetriedWithoutImage) {
+                            // P0（2026-11-25 风暴压测）：**轮内重冻必须把本轮截图重新贴上**。
+                            //   触发链：截图轮 → 工具回执被限流/宿主被别的路径改写 → compose 判
+                            //   host-rewritten → 丢弃冻结、按宿主重建。重建时 iteration>0，旧实现
+                            //   不附图、历史图又被剥 → 模型从这一条请求起再也看不到屏幕，却仍要
+                            //   接着聊画面（只能编）。截图属于「这一轮的输入」，不属于「易变尾巴」，
+                            //   重冻时按轮作用域记录的目标原位重贴；找不到目标 = 视觉真丢了，
+                            //   计 vision_lost 并 warn（不许悄悄降级）。
+                            let idx = -1;
+                            if (turnScreenshot.path) {
+                                idx = voiceChat.messages.findIndex((m0) => m0 && m0.role === 'user'
+                                    && Array.isArray(m0.attachments)
+                                    && m0.attachments.some((a0) => a0 && a0.path === turnScreenshot.path));
+                            }
+                            if (idx < 0 && turnScreenshot.hostIndex >= 0) {
+                                const at = voiceChat.messages[turnScreenshot.hostIndex];
+                                if (at && at.role === 'user') idx = turnScreenshot.hostIndex;
+                            }
+                            if (idx >= 0 && messagesForAPI[idx] && messagesForAPI[idx].role === 'user') {
+                                const m0 = messagesForAPI[idx];
+                                const textParts = Array.isArray(m0.content)
+                                    ? m0.content.filter((p0) => p0 && p0.type === 'text').map((p0) => p0.text).join(' ')
+                                    : String(m0.content == null ? '' : m0.content);
+                                messagesForAPI[idx] = {
+                                    role: 'user',
+                                    content: [
+                                        { type: 'text', text: textParts },
+                                        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${turnScreenshot.base64}` } },
+                                    ],
+                                };
+                                logToTerminal('info', '📸 本轮重冻：已把本轮截图重新贴回第 ' + idx + ' 条 user（视觉上下文不丢）');
+                            } else {
+                                freezeStats.visionLost += 1;
+                                logToTerminal('warn', '📷 本轮重冻：截图目标消息已不存在，视觉上下文丢失（vision_lost，本轮不会再有画面信息）');
+                            }
                         }
                     }
 
@@ -785,55 +1135,87 @@ class LLMHandler {
                     // 稳定的注入留 system；**每轮易变**的注入一律改道到最后一条 user 末尾。
                     // 原因：system 是消息数组第一条，它里面变一个字节，后面的整段历史缓存
                     // 就全部作废（实测 97.4% → 83.8%，见 _probe/cache-probe.cjs）。
-                    const volatileTexts = [];
-                    const hookRequest = {
-                        messages: messagesForAPI,
-                        tools: allTools,
-                        // 插件在 onLLMRequest 里调它声明「这段是易变的」。
-                        // 别自己拼 sysMsg.content —— 那会让系统提示每轮变一次。
-                        addVolatile: (t) => { if (t) volatileTexts.push(String(t)); },
-                    };
-                    if (global.pluginManager) {
-                        const _hookT0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-                        await global.pluginManager.runLLMRequestHooks(hookRequest)
-                            .catch((e) => logToTerminal('warn', '⚠️ onLLMRequest 钩子整体失败: ' + (e && e.message || e)));
-                        if (_lat) _lat.hooksMs = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - _hookT0);
-                    }
-                    // 补丁表里标了 volatile 的（召回片段/屏幕描述/身体状态…）也一起挪
-                    for (const t of collectVolatilePromptPatches()) volatileTexts.push(t);
-                    if (_pendingInterruptNote) {
-                        volatileTexts.push(_pendingInterruptNote);
-                        _pendingInterruptNote = '';
-                        try { logToTerminal('info', '✂️ 上一轮被打断：已把「别接着讲完」注入易变尾巴'); } catch (e) {}
-                    }
-                    if (_pendingLoopNote) {
-                        volatileTexts.push(_pendingLoopNote);
-                        _pendingLoopNote = '';
-                        try { logToTerminal('info', '🔁 复读提醒：已注入易变尾巴'); } catch (e) {}
-                    }
-                    // ADR-013：对话现场（刚在聊什么/上次谁说的/她刚说什么）。
-                    // 只陈述事实、不催她说话；放在 mood 指令之前，保证 mood 仍是最后一句。
-                    try {
-                        const sceneLine = scene.describeForPrompt();
-                        if (sceneLine) volatileTexts.push(sceneLine);
-                    } catch (e) { /* 现场失败不影响请求 */ }
-                    // §72：mood 要求必须放在**最后一条**易变尾巴里（工具在场时系统提示词里的格式
-                    // 要求会被忽略，实测）。放在所有 volatile 项之后，保证它是模型最后看到的一句。
-                    volatileTexts.push(MOOD_TAIL_HINT);
-                    const vres = promptLayout.appendVolatile(messagesForAPI, volatileTexts);
-                    // system 指纹：变了就等于宣告历史缓存作废，必须是可观测的数字，不能靠猜
-                    try {
-                        const sysText = promptLayout.systemText(messagesForAPI);
-                        const h = promptLayout.hashText(sysText);
-                        if (global.__lastSystemHash && global.__lastSystemHash !== h) {
-                            logToTerminal('info', '🧩 system 变了（历史缓存会重建）：' + global.__lastSystemHash
-                                + ' → ' + h + '，' + sysText.length + ' 字');
+                    //
+                    // ⚠ 冻结之后**不再重跑钩子**（2026-11-24）：钩子的副作用和「注入了什么」是绑定的
+                    //   （world-sense 注入后才推进差分基准、world-extras 注入后才给 RSS 记账、
+                    //    mind-kernel 注入后才记 _lastTail）。重跑再丢掉文本 = 它们以为已经告诉过模型，
+                    //   世界行/简报就永久丢了。所以整段钩子只在冻结点跑一次，副作用留到下一个用户轮 ——
+                    //   时间粒度正好等于这些内容的语义粒度。
+                    if (!turnFreeze) {
+                        const volatileTexts = [];
+                        const hookRequest = {
+                            messages: messagesForAPI,
+                            tools: allTools,
+                            // 插件在 onLLMRequest 里调它声明「这段是易变的」。
+                            // 别自己拼 sysMsg.content —— 那会让系统提示每轮变一次。
+                            addVolatile: (t) => { if (t) volatileTexts.push(String(t)); },
+                        };
+                        if (global.pluginManager) {
+                            const _hookT0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+                            await global.pluginManager.runLLMRequestHooks(hookRequest)
+                                .catch((e) => logToTerminal('warn', '⚠️ onLLMRequest 钩子整体失败: ' + (e && e.message || e)));
+                            if (_lat) _lat.hooksMs = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - _hookT0);
                         }
-                        global.__lastSystemHash = h;
-                    } catch (e) { try { __silentAudit.audit('llm-handler.js:system-fingerprint', e); } catch (e2) {} }
-                    if (vres.ok && vres.count > 0) {
-                        logToTerminal('info', '🧩 易变注入 ' + vres.count + ' 段 / ' + vres.chars
-                            + ' 字 → 第 ' + vres.target + ' 条消息（不进 system）');
+                        // 补丁表里标了 volatile 的（召回片段/屏幕描述/身体状态…）也一起挪
+                        for (const t of collectVolatilePromptPatches()) volatileTexts.push(t);
+                        if (_pendingInterruptNote) {
+                            volatileTexts.push(_pendingInterruptNote);
+                            _pendingInterruptNote = '';
+                            try { logToTerminal('info', '✂️ 上一轮被打断：已把「别接着讲完」注入易变尾巴'); } catch (e) {}
+                        }
+                        if (_pendingLoopNote) {
+                            volatileTexts.push(_pendingLoopNote);
+                            _pendingLoopNote = '';
+                            try { logToTerminal('info', '🔁 复读提醒：已注入易变尾巴'); } catch (e) {}
+                        }
+                        // ADR-013：对话现场（刚在聊什么/上次谁说的/她刚说什么）。
+                        // 只陈述事实、不催她说话；放在 mood 指令之前，保证 mood 仍是最后一句。
+                        try {
+                            const sceneLine = scene.describeForPrompt();
+                            if (sceneLine) volatileTexts.push(sceneLine);
+                        } catch (e) { /* 现场失败不影响请求 */ }
+                        // §72：mood 要求必须放在**最后一条**易变尾巴里（工具在场时系统提示词里的格式
+                        // 要求会被忽略，实测）。放在所有 volatile 项之后，保证它是模型最后看到的一句。
+                        volatileTexts.push(MOOD_TAIL_HINT);
+                        const vres = promptLayout.appendVolatile(messagesForAPI, volatileTexts);
+                        // system 指纹：变了就等于宣告历史缓存作废，必须是可观测的数字，不能靠猜
+                        try {
+                            const sysText = promptLayout.systemText(messagesForAPI);
+                            const h = promptLayout.hashText(sysText);
+                            if (global.__lastSystemHash && global.__lastSystemHash !== h) {
+                                logToTerminal('info', '🧩 system 变了（历史缓存会重建）：' + global.__lastSystemHash
+                                    + ' → ' + h + '，' + sysText.length + ' 字');
+                            }
+                            global.__lastSystemHash = h;
+                        } catch (e) { try { __silentAudit.audit('llm-handler.js:system-fingerprint', e); } catch (e2) {} }
+                        if (vres.ok && vres.count > 0) {
+                            logToTerminal('info', '🧩 易变注入 ' + vres.count + ' 段 / ' + vres.chars
+                                + ' 字 → 第 ' + vres.target + ' 条消息（不进 system）');
+                        }
+                        // 🧊 冻结点：这一份就是本轮所有后续请求必须逐字节命中的前缀
+                        // 第二个参数是**宿主**：冻结时顺手取一份宿主前缀指纹，轮内宿主被改就靠它抓。
+                        turnFreeze = promptLayout.freezeTurnPrefix(messagesForAPI, voiceChat.messages, {
+                            volatileCount: vres.ok ? vres.count : 0,
+                            volatileChars: vres.ok ? vres.chars : 0,
+                        });
+                        if (turnFreeze) {
+                            freezeStats.requests += 1;
+                            freezeStats.prefixMsgs = turnFreeze.messages.length;
+                            freezeStats.prefixChars = turnFreeze.chars;
+                            // 挂到 voiceChat 上只为排障/doctor 可读；轮结束会删掉（见 finally）
+                            try {
+                                voiceChat._turnFreeze = {
+                                    at: turnFreeze.at,
+                                    msgs: turnFreeze.messages.length,
+                                    chars: turnFreeze.chars,
+                                    hostSig: turnFreeze.hostSig,
+                                    volatile: turnFreeze.meta,
+                                    stats: freezeStats,
+                                };
+                            } catch (e) { /* 观测失败不影响请求 */ }
+                            logToTerminal('info', '🧊 本轮前缀已冻结：' + turnFreeze.messages.length + ' 条 / '
+                                + turnFreeze.chars + ' 字（hostSig ' + turnFreeze.hostSig + '；工具循环内不再重算）');
+                        }
                     }
 
                     // 使用统一的LLM客户端
@@ -859,22 +1241,12 @@ class LLMHandler {
                             }
                         });
                     } else {
-                        // 🔥 如果没有启用独立视觉模型，但有截图，说明主模型需要支持视觉
-                        // 只有在没有截图的情况下才清理图片
-                        if (!screenshotBase64 || iteration > 0) {
-                            // 不是第一轮或没有截图，清理历史消息中的图片（节省token）
-                            console.log('🧹 清理messagesForAPI中的历史图片');
-                            messagesForAPI.forEach(msg => {
-                                if (msg.role === 'user' && Array.isArray(msg.content)) {
-                                    const hasImage = msg.content.some(item => item.type === 'image_url');
-                                    if (hasImage) {
-                                        const textItems = msg.content.filter(item => item.type === 'text');
-                                        msg.content = textItems.length > 0 ? textItems.map(item => item.text).join(' ') : '(图片内容)';
-                                        console.log('  ✂️ 清理了一条包含图片的消息');
-                                    }
-                                }
-                            });
-                        } else {
+                        // 🔥 如果没有启用独立视觉模型，但有截图，说明主模型需要支持视觉。
+                        // 🧹 历史图片清理已经上移到「克隆宿主之后、冻结点之前」（P1-1），
+                        //    这里**不再**剥图：冻结复用的请求更不能剥 —— 把历史里的图片剥成文字
+                        //    就是在改「已经发出去过的字节」→ 从那条消息起整段 miss。图片留在
+                        //    冻结前缀里反而更好：第一次请求付过钱，后面按 1/10 命中价复用。
+                        if (!frozenReuse && screenshotBase64 && iteration === 0) {
                             console.log('📸 主模型将处理截图（需要主模型支持视觉）');
                         }
 
@@ -1031,26 +1403,9 @@ class LLMHandler {
                                     });
                                 });
 
-                                // 🔥 在添加新截图前，清除历史消息中的所有旧截图（节省token）
-                                console.log('🧹 清除历史消息中的旧截图');
-                                voiceChat.messages.forEach(msg => {
-                                    if (msg.role === 'user' && Array.isArray(msg.content)) {
-                                        // 检查是否包含图片
-                                        const hasImage = msg.content.some(item => item.type === 'image_url');
-                                        if (hasImage) {
-                                            // 只保留文本部分，移除图片
-                                            const textItems = msg.content.filter(item => item.type === 'text');
-                                            if (textItems.length > 0) {
-                                                // 如果有文本，将content改为纯文本
-                                                msg.content = textItems.map(item => item.text).join(' ');
-                                            } else {
-                                                // 如果没有文本，设置为默认文本
-                                                msg.content = '(截图已清除)';
-                                            }
-                                            console.log('  ✂️ 清除了一条旧截图消息');
-                                        }
-                                    }
-                                });
+                                // 🧹 旧截图的剥离挪到**轮末**（stripOldScreenshotImages）：在轮内
+                                //    改宿主历史 = 改写冻结前缀覆盖的字节，自己打穿缓存。轮末做，
+                                //    下一轮前缀本来就会因为新 user 消息重置一次，代价相同。
 
                                 // 2. 再作为user发送图片给AI分析
                                 voiceChat.messages.push({
@@ -1073,6 +1428,33 @@ class LLMHandler {
                                 logToolAction('info', '📸 立即调用AI分析截图内容');
 
                                 // 🔥 关键：立即再次调用LLM API分析图片
+                                // ⚠ 走**同一套冻结通道**（ADR-014 漏一）：裸发 voiceChat.messages 会
+                                //   另起一份前缀（没有易变块、钩子改写），跟主链对不上 = 本轮多一次全 miss。
+                                //   此后宿主只追加了 tool + 截图 user 消息，冻结前缀原样不变，正好命中。
+                                let shotMessages = null;
+                                let _shotReuse = null;
+                                if (turnFreeze) {
+                                    _shotReuse = promptLayout.composeTurnPrefix(turnFreeze, voiceChat.messages);
+                                    if (_shotReuse && _shotReuse.ok) {
+                                        shotMessages = _shotReuse.messages;
+                                        freezeStats.reuse += 1;
+                                        freezeStats.requests += 1;
+                                        if (!_shotReuse.snapOk) freezeStats.rewrite += 1;
+                                        logToTerminal('info', '♻️ 截图分析复用冻结前缀：' + _shotReuse.prefixMsgs
+                                            + ' 条 / ' + _shotReuse.prefixChars + ' 字 + 新增 ' + _shotReuse.tailMsgs + ' 条');
+                                    }
+                                }
+                                if (!shotMessages) {
+                                    // 冻结不可用/被宿主改写 → 退回裸宿主深拷贝（旧行为）。
+                                    // 这里也要计数：静默退回等于「截断被绕过」再演一次，必须看得见。
+                                    if (_shotReuse && _shotReuse.reason === 'host-rewritten') {
+                                        freezeStats.rewrite += 1;
+                                        logToTerminal('warn', '🧊 截图分析：冻结前缀被宿主改写（第 '
+                                            + _shotReuse.index + ' 条），本次按宿主重发');
+                                    }
+                                    shotMessages = JSON.parse(JSON.stringify(voiceChat.messages));
+                                    shotMessages.forEach((m) => { delete m.attachments; });
+                                }
                                 // 🔍 AI调用截图工具时，判断是否使用独立视觉模型
                                 let visionResult;
                                 if (visionClient) {
@@ -1081,12 +1463,12 @@ class LLMHandler {
                                     logToTerminal('info', '🎨 使用独立视觉模型分析AI截图');
                                     // 🔥 使用视觉模型，仍然传递工具列表！
                                     // 这样AI分析完图片后还能继续调用工具
-                                    visionResult = await visionClient.chatCompletion(voiceChat.messages, allTools);
+                                    visionResult = await visionClient.chatCompletion(shotMessages, allTools);
                                 } else {
                                     // 没有独立视觉模型，用主模型（主模型必须支持视觉！）
                                     console.log('📸 AI调用截图工具：使用主模型分析（需支持视觉）');
                                     // 使用主模型（必须支持视觉！），传递完整工具列表以支持连续调用
-                                    visionResult = await llmClient.chatCompletion(voiceChat.messages, allTools);
+                                    visionResult = await llmClient.chatCompletion(shotMessages, allTools);
                                 }
 
                                 console.log('✅ AI图片分析完成:', visionResult.content);
@@ -1172,18 +1554,7 @@ class LLMHandler {
                                                 });
                                             });
 
-                                            // 🔥 在添加新截图前，清除历史消息中的所有旧截图（节省token）
-                                            console.log('🧹 清除历史消息中的旧截图（嵌套截图）');
-                                            voiceChat.messages.forEach(msg => {
-                                                if (msg.role === 'user' && Array.isArray(msg.content)) {
-                                                    const hasImage = msg.content.some(item => item.type === 'image_url');
-                                                    if (hasImage) {
-                                                        const textItems = msg.content.filter(item => item.type === 'text');
-                                                        msg.content = textItems.length > 0 ? textItems.map(item => item.text).join(' ') : '(截图已清除)';
-                                                        console.log('  ✂️ 清除了一条旧截图消息');
-                                                    }
-                                                }
-                                            });
+                                            // 🧹 同上：旧截图剥离统一放到轮末（轮内改宿主会改冻结前缀）
 
                                             // 添加user图片消息
                                             voiceChat.messages.push({
@@ -1337,6 +1708,9 @@ class LLMHandler {
                 if (iteration >= maxIterations) {
                     logToTerminal('warn', `⚠️ 已达到最大工具调用次数限制 (${maxIterations} 轮)`);
                     // 🔥 尝试获取最终回复 - 使用非流式
+                    // ⚠ 已知例外（不可避免）：这是第 31 次请求，用裸宿主 + 空工具面 —— 没有易变块、
+                    //   没有冻结前缀，本轮必然全 miss。它只是「已经尽力了」的最后兜底，一次而已；
+                    //   不为它去重渲染（那会让前面 30 次请求的缓存白算）。
                     const lastResult = await llmClient.chatCompletion(voiceChat.messages, [], false);
 
                     if (lastResult.content) {
@@ -1346,6 +1720,13 @@ class LLMHandler {
                     }
                     // 🔥 不在这里播放TTS，统一在最后播放
                 }
+
+                // 🧹 轮末清理旧截图（此刻本轮不会再有请求了）：轮内剥离会改写冻结前缀的字节。
+                // 保留最新一张（模型这轮看到的就是它），更早的图片剥成文字。
+                try {
+                    const _stripped = stripOldScreenshotImages(voiceChat.messages);
+                    if (_stripped > 0) logToTerminal('info', '🧹 轮末清理旧截图：剥掉 ' + _stripped + ' 条（保留最新一张）');
+                } catch (e) { /* 清理失败不影响对话 */ }
 
                 // 输出最终回复
                 if (finalResponseContent) {
@@ -1473,9 +1854,6 @@ class LLMHandler {
                 if (voiceChat.enableContextLimit) {
                     voiceChat.trimMessages();
                 }
-                // ⚡ rolling summary（轮末主触发点）：刚完成的对话对入账，超窗部分滚进持续摘要。
-                // 异步快照先行，与 trim 无竞态；不开上下文限制时也滚（摘要本身就是上下文经济）。
-                voiceChat.contextCompressor?.checkAndRollAsync?.().catch(() => {});
                 } catch (error) {
                     // 🔥 特殊处理：用户打断不是错误，静默退出
                     if (error.message === 'USER_INTERRUPTED') {
@@ -1611,6 +1989,38 @@ class LLMHandler {
                 } finally {
                     // global.isProcessingUserInput 已通过事件自动管理，无需手动设置
 
+                    // 🧊 冻结战绩落 telemetry（llm.freeze）：验收就看 reuse/rebuild/rewrite 三个数。
+                    // 「缓存断裂可观测」是这一轮的核心交付 —— 只写日志等于没有。
+                    if (freezeStats.requests > 0) {
+                        try {
+                            if (__emitTelemetry) {
+                                __emitTelemetry({
+                                    cat: 'llm',
+                                    type: 'llm.freeze',
+                                    title: '前缀冻结复用',
+                                    level: freezeStats.rewrite > 0 ? 'warn' : 'info',
+                                    pipeline_stage: 'llm',
+                                    metrics: {
+                                        reuse: freezeStats.reuse,
+                                        rebuild: freezeStats.rebuild,
+                                        rewrite: freezeStats.rewrite,
+                                        requests: freezeStats.requests,
+                                        prefix_msgs: freezeStats.prefixMsgs,
+                                        prefix_chars: freezeStats.prefixChars,
+                                        // 视觉丢失必须可聚合：重冻时贴不回本轮截图 = 她这轮在「盲聊」
+                                        vision_lost: freezeStats.visionLost,
+                                    },
+                                    turn_id: turnCtx.currentTurnId(),
+                                });
+                            }
+                        } catch (e) { /* 遥测失败不影响对话 */ }
+                    }
+
+                    // 🧊 轮结束（回复完成/打断/异常/截图重试）一律丢掉本轮冻结前缀：
+                    // 下一轮的世界行/现场/画像要重新收集，否则她会一直用旧的现场说话。
+                    turnFreeze = null;
+                    try { delete voiceChat._turnFreeze; } catch (_) { /* 观测字段删不掉不影响对话 */ }
+
                     // ⚡ 本轮收口：垫场计时器必须收掉，防止漏到下一轮（重试 continue 也走这里，
                     //    下一轮循环顶部会重新武装）
                     try { cancelLatencyFiller(); } catch (_) { try { __silentAudit.audit('llm-handler.js:1074', _); } catch (e2) {} }
@@ -1739,5 +2149,9 @@ module.exports = {
     createTurnGate,
     filterThinkingContent,
     shouldRunMotionChoreography,
-    describeChoreographySkip
+    describeChoreographySkip,
+    // 轮末旧截图清理（ADR-014 漏一）：导出只为让 _probe 能直接断言「保留最新一张」
+    stripOldScreenshotImages,
+    // 请求体的历史图片清理（P1-1）：导出让 _probe 断言「剥图在冻结之前、快照==首请求字节」
+    stripHistoryImagesForRequest,
 };

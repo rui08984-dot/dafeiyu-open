@@ -28,6 +28,12 @@ const tmpRoot = iso.setUpTempDataRoot('pet-queue-');
 
 const P = require(path.join(ROOT, '_incoming', 'my-neuro', 'live-2d', 'plugins', 'community', 'memory-evolve', 'index.js'));
 const { recordFile } = require(path.join(ROOT, '_incoming', 'my-neuro', 'live-2d', 'js', 'core', 'records-path.js'));
+// ⚠ 2026-11-24 ADR-014：MemOS 后端改成本地（llama.cpp:11435）后，_drainQueue 先过
+// _writeGateOpen → localLLM.isAvailable()（本地 /health 探活）。单测不依赖真 server：
+// 只桩探活本身；真正的 /add 仍由用例里的 p._post 假实现提供。
+const localLLM = require(path.join(ROOT, '_incoming', 'my-neuro', 'live-2d', 'js', 'core', 'local-llm.js'));
+const origIsAvailable = localLLM.isAvailable;
+localLLM.isAvailable = async () => true;
 
 let pass = 0;
 let fail = 0;
@@ -91,6 +97,7 @@ function mkCtx(messages) {
         ok('onLLMResponse 不等巩固（600ms 的巩固没进回复链）', dt2 < 150, dt2 + 'ms');
         await sleep(700);
     } finally {
+        localLLM.isAvailable = origIsAvailable;
         // 临时记录室整目录删掉（不再写/还原真实文件）
         iso.cleanup(tmpRoot);
     }

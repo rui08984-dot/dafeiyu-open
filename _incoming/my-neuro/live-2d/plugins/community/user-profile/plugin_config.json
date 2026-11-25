@@ -42,11 +42,11 @@
     "value": 40
   },
   "max_items_per_field": {
-    "title": "每字段最大条目数",
-    "description": "画像每个列表字段最多保留多少条，控制注入体积",
+    "title": "每字段渲染条目数",
+    "description": "画像每个列表字段注入 system 时最多渲染多少条（完整画像仍由 profile 工具提供；ADR-014 画像 20→10）",
     "type": "int",
-    "default": 20,
-    "value": 20
+    "default": 10,
+    "value": 10
   },
   "profile_file": {
     "title": "画像文件",
@@ -64,33 +64,33 @@
   },
   "profile_llm": {
     "title": "专用画像模型",
-    "description": "用于画像诊断、候选提取和晋升润色的独立模型；留空则回退主对话模型",
+    "description": "用于画像诊断、候选提取和晋升润色的独立模型；留空则回退主对话模型（云端）。2026-11-24：本地 MemOperator-4B 会把已有画像整份重抄成新观察、全 self_declared、category 错分，画像不使用本地小模型；三项留空 → 走主对话模型（云端），不把密钥复制进 tracked 配置。",
     "type": "object",
     "fields": {
       "model": {
         "title": "模型名称",
-        "description": "例如 deepseek-v4-pro",
+        "description": "例如 deepseek-v4-pro；留空 = 跟随主对话模型",
         "type": "string",
         "default": "",
         "value": ""
       },
       "api_key": {
         "title": "API Key",
-        "description": "专用画像模型 API Key",
+        "description": "专用画像模型 API Key；留空 = 跟随主对话模型（不在这里复制密钥，避免进 git）",
         "type": "string",
         "default": "",
         "value": ""
       },
       "base_url": {
         "title": "Base URL",
-        "description": "OpenAI 兼容接口地址，例如 https://api.deepseek.com",
+        "description": "OpenAI 兼容接口地址；留空 = 跟随主对话模型",
         "type": "string",
         "default": "",
         "value": ""
       },
       "max_tokens": {
         "title": "最大输出 Token",
-        "description": "画像分析输出 token 上限",
+        "description": "画像分析输出 token 上限（云端 4000）",
         "type": "int",
         "default": 4000,
         "value": 4000

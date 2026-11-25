@@ -127,6 +127,19 @@ function createTrigger(opts) {
             return { fire: false, remain, spent: v };
         },
         reset() { remain = threshold; },
+        /**
+         * 恢复持久化的剩余值（2026-11-24 审计 §9.3-③：触发计数原来只在内存里，
+         * 重启清零导致反思永远攒不到阈值）。
+         * 夹在 1..threshold：0/负数意味着「已经该触发了」，不能把触发器设成永久点火。
+         * @param {number} n
+         * @returns {number} 实际生效的 remain
+         */
+        setRemain(n) {
+            const v = Number(n);
+            if (!Number.isFinite(v)) return remain;
+            remain = clamp(Math.floor(v), 1, threshold);
+            return remain;
+        },
         get remain() { return remain; },
     };
 }

@@ -77,6 +77,10 @@ class PersonaGuardPlugin extends Plugin {
         if (!Number.isFinite(this._judgeEvery) || this._judgeEvery < 0) this._judgeEvery = 10;
         this._judgeRuns = 0;
         this._oocEvents = [];
+        // 后台 LLM 闸（2026-11-25）：判官 = 额外一次 API 调用，静默/预算耗尽时不该跑。
+        // 每次调用都问 ensureCanRun（不缓存「加载失败」结论）。
+        this._bgGate = null;
+        this._bgGateLogged = false;
 
         // 统计窗口：24 小时滚动
         this._events = [];      // { at, id, severity, text, turn }
@@ -126,10 +130,41 @@ class PersonaGuardPlugin extends Plugin {
      *   · 不重复：同一句被判过就跳过（按 text hash）
      *   · 不误伤：判官只说「哪句不对、改成什么」，不整段重写、不改人设正文
      */
+    /**
+     * 后台 LLM 闸（2026-11-24 第三轮 P1；2026-11-25 收口）：判官是**额外一次 API 调用**，
+     * 静默/预算耗尽/限流时不该跑。
+     *
+     * 走唯一入口 `backgroundLLM.ensureCanRun(this.context, {kind})`（内部=用户开关+云端熔断），
+     * 返回 {ok,reason,retryAt}。只有模块真的不在（早期启动）才 fail-open；**不再缓存
+     * 「加载失败」结论** —— 旧实现第一次 require 失败就把 `_bgGateReady=true` 永久置位，
+     * 之后后台闸永远等于不存在（注释说接了闸、代码实际没接）。
+     * @returns {Promise<boolean>} true = 允许跑判官
+     */
+    async _backgroundAllowed() {
+        let bg;
+        try { bg = require('../../../js/core/background-llm.js'); } catch (e) { return true; }
+        if (!bg || typeof bg.ensureCanRun !== 'function') return true;
+        // 不包 try/catch：ensureCanRun 内部已兜住配置/熔断/日志异常；插件再吞一层
+        // 等于重演「注释说接了闸、实际永远放行」。真抛了就让调用方（判官 Promise.catch）记失败。
+        const r = bg.ensureCanRun(this.context, { kind: 'persona-guard' });
+        return !(r && r.ok === false);
+    }
+
     async _judgeOoc(lastText) {
         if (!this._judgeEnabled) return null;
         const text = String(lastText || '').trim();
         if (text.length < 4) return null;
+        // 后台闸：不可用就跳过（只 log 一次，别每轮刷日志）。放在 hash 去重之前 ——
+        // 被跳过的那句不算「判过」，闸恢复后还能补判。
+        if (!(await this._backgroundAllowed())) {
+            if (!this._bgGateLogged) {
+                this._bgGateLogged = true;
+                try {
+                    this.context.log('info', '[人设判官] 后台 LLM 闸不可用（静默/预算/限流），跳过判官（只记一次）');
+                } catch (e) { /* 日志失败不影响回复 */ }
+            }
+            return null;
+        }
         const h = require('crypto').createHash('md5').update(text, 'utf8').digest('hex');
         this._judged = this._judged || new Set();
         if (this._judged.has(h)) return null;
@@ -164,11 +199,14 @@ class PersonaGuardPlugin extends Plugin {
         if (this._oocEvents.length > 300) this._oocEvents = this._oocEvents.slice(-200);
         this.context.log('warn', '[人设判官] 出戏(' + dim + ')：' + quote + ' → 建议 ' + fix);
         // 行为级纠正：只说这一句该怎么改，不整段重写
+        // volatile（2026-11-24 第三轮 P1）：「上一条里哪句不对」是**一次性的临时裁决**，
+        // 不是稳定人格条款。写进 system 会让每次判官触发都改写 system 两次
+        // （这里加、onLLMResponse 里删）→ 其后的整段历史前缀缓存全部作废。
         try {
             this.context.addSystemPromptPatch(PATCH_ID + '-ooc',
                 '（你上一条里有句不像你：' + (quote ? '「' + quote + '」' : '某句话') +
                 '（' + dim + '）。下一条按这个方向改：' + (fix || '更口语、更像她本人') +
-                '。别解释、别道歉，直接自然地说。）');
+                '。别解释、别道歉，直接自然地说。）', { volatile: true });
         } catch (e) { try { __silentAudit.audit('index.js:ooc', e); } catch (e2) {} }
         try { this._saveOoc(); } catch (e) { /* 落盘失败不影响纠正 */ }
         return { dimension: dim, quote, fix };
@@ -244,12 +282,14 @@ class PersonaGuardPlugin extends Plugin {
             (high ? ' · 严重 ' + high + ' 项' : ''));
 
         // 关怀类严重项：立刻提醒（不等连续 2 次）
+        // volatile（2026-11-24 第三轮 P1）：这是对「刚才那句话」的一次性反应，不是常驻规则。
         const critical = hits.filter((h) => h.severity === 'critical');
         if (critical.length) {
             try {
                 this.context.addSystemPromptPatch(PATCH_ID,
                     '（重要：刚才那句话涉及自伤/绝望。收起吐槽腔，认真接住他。' +
-                    '不要讲道理、不要说"想开点"、不要转移话题，就陪着他，问他现在怎么样。）');
+                    '不要讲道理、不要说"想开点"、不要转移话题，就陪着他，问他现在怎么样。）',
+                    { volatile: true });
             } catch (e) { try { __silentAudit.audit('index.js:156', e); } catch (e2) {} }
             this.context.log('warn', '[关怀] 检测到自伤相关表达，已注入关怀提示');
             return;
@@ -261,20 +301,23 @@ class PersonaGuardPlugin extends Plugin {
             try {
                 this.context.addSystemPromptPatch(PATCH_ID,
                     '（提醒你自己：刚才那句话有点在把他的世界收缩到只有你。你是他生活里的一部分，不是全部——' +
-                    '关心可以，但接下来自然地把话题推回他的现实：朋友、出门、他自己的事。语气照常，不要说教、不要道歉。）');
+                    '关心可以，但接下来自然地把话题推回他的现实：朋友、出门、他自己的事。语气照常，不要说教、不要道歉。）',
+                    { volatile: true });
             } catch (e) { try { __silentAudit.audit('index.js:168', e); } catch (e2) {} }
             this.context.log('warn', '[关怀] 检测到依赖诱导表达，已注入降温提示');
             return;
         }
 
         // 连续 2 次以上才提醒，避免偶发一句就打断她
+        // volatile：同样只对「接下来这一条」有效；onLLMResponse 回复正常时会 remove（保留）。
         if (this._warn && this._consecutive >= 2) {
             try {
                 this.context.addSystemPromptPatch(PATCH_ID,
                     '（提醒你自己：你是大肥鱼，住在桌面小窗里的人，不是助手。' +
                     // 2026-11-10 回归审计：这里原来写死「不超过 70 字」，而代码默认 140、配置 200 ——
                     //   三个数并存导致 71-200 字的回复既不违规也不计数。现在引导语和硬阈值同源。
-                    '说话口语化、控制在 ' + Math.round(this._maxChars / 3) + ' 字左右（超过 ' + this._maxChars + ' 字算啰嗦）、别列条目、别用"我可以帮你"这种腔调。）');
+                    '说话口语化、控制在 ' + Math.round(this._maxChars / 3) + ' 字左右（超过 ' + this._maxChars + ' 字算啰嗦）、别列条目、别用"我可以帮你"这种腔调。）',
+                    { volatile: true });
             } catch (e) { try { __silentAudit.audit('index.js:179', e); } catch (e2) {} }
         }
     }

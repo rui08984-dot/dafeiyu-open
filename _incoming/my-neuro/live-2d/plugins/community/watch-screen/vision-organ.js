@@ -24,6 +24,27 @@ const { wrapUntrusted } = require('../../../js/core/untrusted-data.js');
  * 摘要就是"HH:MM:SS 画面（变化/静止）"，保证三个工具和滚动缓冲照常工作，功能不炸。
  */
 
+// ── 视觉预算：唯一数字源（2026-11-24 根因修）──────────────────────────────
+// 历史：DEFAULTS 里曾是 220，index.js 的兜底是 90，plugin_config.json 是第三个数字（90/220
+// 都出现过）—— 三处各写一份，谁生效取决于「配置在不在」，用户看到的预算和代码默认值漂移。
+// ADR-004 的「云端 VLM ≤6 次/小时」是**旧世界感知**口径（那时只有看剧摘要），
+// ADR-014 拍板改为 90 次/小时（≈ 平均 40 秒一条，静默期仍 0）。
+// 现在这个常量是唯一权威：DEFAULTS / index.js 兜底 / plugin_config.json 的自定义默认值
+// 都必须等于它（_probe/test-watch-screen-budget.cjs 会校验，防止再次漂移）。
+const VISION_BUDGET_PER_HOUR_DEFAULT = 90;
+// 旧出厂默认（220）：老安装的 plugin_config.json 里可能还存着这个值。
+// 它不代表用户意图，只是没被改过的出厂值 —— 与 user-profile「20 条 = 未配置」同一判据：
+// 读到 220 视为未配置，按 90 走；任何其它正数才是用户显式选择。
+const VISION_BUDGET_PER_HOUR_LEGACY_DEFAULTS = [220];
+
+/** 把 plugin_config / DEFAULTS 里的原始值归一成实际预算（唯一解析入口）。 */
+function resolveVisionBudgetPerHour(raw) {
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return VISION_BUDGET_PER_HOUR_DEFAULT;
+    if (VISION_BUDGET_PER_HOUR_LEGACY_DEFAULTS.includes(n)) return VISION_BUDGET_PER_HOUR_DEFAULT;
+    return Math.floor(n);
+}
+
 const DEFAULTS = {
     sampleIntervalMs: 500,        // 2fps
     // 静默/省钱模式（global.__petQuiet）下的采样间隔。2026-11-22 实测：
@@ -44,7 +65,7 @@ const DEFAULTS = {
     keyframeMinGapMs: 15000,      // 两个关键帧最短间隔
     sceneMinGapMs: 6000,          // 场景切换可以急一点
     quietKeyframeMs: 45000,       // 画面不动也补一条"仍在看"的锚点
-    visionBudgetPerHour: 220,     // 每小时最多调多少次摘要模型（超过就只留时间戳）
+    visionBudgetPerHour: VISION_BUDGET_PER_HOUR_DEFAULT, // 每小时最多调多少次摘要模型（超过就只留时间戳）
     ringSeconds: 120,
     maxEntries: 240,
     maxFrames: 6,                 // 缓冲里保留几张关键帧图（给 look_now / find_moment）
@@ -651,4 +672,7 @@ function estimateTokens(lines, charsPerToken = DEFAULTS.tokenCharsPerToken) {
     return Math.ceil(chars / charsPerToken) + lines.length * 2;
 }
 
-module.exports = { VisionOrgan, DEFAULTS, compareSignatures, estimateTokens, clockOf };
+module.exports = {
+    VisionOrgan, DEFAULTS, compareSignatures, estimateTokens, clockOf,
+    VISION_BUDGET_PER_HOUR_DEFAULT, VISION_BUDGET_PER_HOUR_LEGACY_DEFAULTS, resolveVisionBudgetPerHour,
+};

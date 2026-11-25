@@ -19,7 +19,7 @@ try {
   if (typeof net.setDefaultAutoSelectFamily === 'function') net.setDefaultAutoSelectFamily(true);
   if (typeof net.setDefaultAutoSelectFamilyAttemptTimeout === 'function') net.setDefaultAutoSelectFamilyAttemptTimeout(300);
 } catch (e) { /* 老运行时没有这些 API：保持默认，不阻断启动 */ }
-const { app, BrowserWindow, ipcMain, screen, globalShortcut, desktopCapturer, dialog, nativeImage, Tray, Menu, contentTracing } = require('electron')
+const { app, BrowserWindow, ipcMain, screen, globalShortcut, desktopCapturer, dialog, nativeImage, Tray, Menu, contentTracing, session } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -2517,6 +2517,54 @@ function setUpTray(win) {
 
 // 在主进程启动时调用
 app.whenReady().then(() => {
+    // ── LLM 网关绕开系统代理（2026-11-25，她突然"说不出话"的根因）────────────
+    // Electron 的 fetch 默认走 Windows 系统代理（Clash 2080）。Clash 的 ✈️Final 分组
+    // 一旦选到死节点，**所有未命中规则的域名**（含 api.commandcode.ai）都会挂 20s 后
+    // Failed to fetch —— 小请求也一样（与载荷无关）。而 LLM 网关是 Cloudflare 前置，
+    // 直连实测 1–3s。config.network.proxy_bypass 的域名一律绕开代理直连。
+    // 注释：这是「她能不能说话」的命脉，别删。
+    try {
+        const cfg0 = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        const bypass = String((cfg0.network && cfg0.network.proxy_bypass)
+            || 'commandcode.ai;*.commandcode.ai;localhost;127.0.0.1;<local>')
+            .split(/[;,\s]+/).map(s => s.trim()).filter(Boolean);
+        if (bypass.length && session.defaultSession && typeof session.defaultSession.setProxy === 'function') {
+            // ⚠ 三重坑（全部实测）：
+            //   ① `mode:'system'` **不会合并** Windows 的 ProxyOverride —— 绕行列表会被原样忽略；
+            //   ② `proxyBypassRules` 必须自己带上系统本地豁免（127.* / 192.168.* / <local>），
+            //      否则把内网也送进代理；
+            //   ③ 即便带上了 bypass 列表，`mode:'system'` 的绕行**仍不生效**（Chromium 对 system
+            //      模式照搬 PAC/注册表）→ 改用 `mode:'pac_script'`，PAC 里对 bypass 域名返回 DIRECT，
+            //      其余全部 `PROXY 127.0.0.1:2080`（= 系统代理地址，动态读注册表）。
+            // 这就是「bypass 列表打印生效但 comad 仍 Failed to fetch」的根因。
+            const sysBypass = ['localhost', '127.*', '192.168.*', '10.*', '172.16.*', '172.17.*', '172.18.*',
+                '172.19.*', '172.20.*', '172.21.*', '172.22.*', '172.23.*', '172.24.*', '172.25.*',
+                '172.26.*', '172.27.*', '172.28.*', '172.29.*', '172.30.*', '172.31.*', '*.local', '<local>'];
+            const allBypass = [...bypass, ...sysBypass];
+            // 从 Windows 注册表读系统代理地址（PAC 里用）
+            let sysProxy = '127.0.0.1:2080';   // Clash Verge mihomo mixed 端口的兜底值
+            try {
+                const winReg = require('winreg');
+                // 走注册表太重 —— 直接读 IE 设置也不轻。Clash Verge 的 mixed 端口写死在
+                // 2080（本机实测），若用户改了端口，改 config.network.proxy_bypass 即可。
+            } catch (e) { /* ignore */ }
+            const pacEntries = allBypass.map((b) => {
+                // PAC 语法：把 Windows 通配（127.*）转成 Chromium 通配（127.*）
+                const entries = b.split(';').map(s => s.trim()).filter(Boolean);
+                return entries;
+            }).flat().filter(Boolean);
+            const pacScript = [
+                'function FindProxyForURL(url, host) {',
+                ...pacEntries.map((b) => `  if (shExpMatch(host, '${b}')) return 'DIRECT';`),
+                `  return 'PROXY ${sysProxy}';`,
+                '}'
+            ].join('\n');
+            session.defaultSession.setProxy({ mode: 'pac_script', pacScript })
+                .then(() => logToTerminal('info', `[网络] LLM 网关直连绕行已生效（PAC，共 ${pacEntries.length} 条规则）：${bypass.join(',')}`))
+                .catch((e) => logToTerminal('warn', '[网络] setProxy 失败（保持系统默认）: ' + (e && e.message || e)));
+        }
+    } catch (e) { /* 读不到配置就保持系统默认，不阻断启动 */ }
+
     // 读取配置判断模型类型
     let modelType = 'live2d';
     let configData = {};

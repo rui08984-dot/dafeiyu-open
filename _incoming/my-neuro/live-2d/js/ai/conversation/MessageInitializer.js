@@ -1,6 +1,76 @@
 // MessageInitializer.js - 消息初始化逻辑
 const fs = require('fs');
 const path = require('path');
+// 记录室路径唯一真源（2026-11-24）：原来这里手拼 4 层 ..，测试无法用 PET_DATA_ROOT 隔离。
+const { RECORDS_DIR, recordFile } = require('../../core/records-path.js');
+
+/**
+ * 下一个交互编号：取现有「交互N：」的最大号 +1（口径不变，从 1 开始）。
+ * 提成模块级函数供 InputRouter 复用 —— 启动时不再预写占位，编号在**第一条真实内容**前才算。
+ * @param {string} [filePath]
+ * @returns {number}
+ */
+function getNextInteractionNumber(filePath) {
+    const dialogLogPath = filePath || recordFile('记忆库.txt');
+    try {
+        if (!fs.existsSync(dialogLogPath)) return 1;
+        const content = fs.readFileSync(dialogLogPath, 'utf8');
+        const matches = content.match(/交互(\d+)：/g);
+        if (!matches) return 1;
+        const numbers = matches.map((match) => parseInt(match.match(/\d+/)[0], 10)).filter((n) => Number.isFinite(n));
+        if (!numbers.length) return 1;
+        return Math.max(...numbers) + 1;
+    } catch (error) {
+        console.error('获取交互编号失败:', error);
+        return 1;
+    }
+}
+
+/**
+ * 构造「本次会话头」（日期分割线 + 交互N：）。
+ * 2026-11-24：启动时不再写空占位（实测 975 个「交互N：」里 864 个下面一个字都没有）；
+ * 改成第一条真实内容落盘前调用本函数，返回要 append 的文本。
+ *   · 今天已有日期头 → 只写 `\n交互N：\n`（与旧格式一致）
+ *   · 今天还没有 → 写分割线 + 日期头 + 空行 + `交互N：\n`
+ * @param {string} [filePath]
+ * @param {Date} [now]
+ * @returns {{text:string, dateLabel:string, interactionNumber:number, newDay:boolean}}
+ */
+function buildSessionHeader(filePath, now = new Date()) {
+    const dialogLogPath = filePath || recordFile('记忆库.txt');
+    const pad = (n) => String(n).padStart(2, '0');
+    const dateLabel = `[${now.getFullYear()}年${pad(now.getMonth() + 1)}月${pad(now.getDate())}日]`;
+    const interactionNumber = getNextInteractionNumber(dialogLogPath);
+    let hasToday = false;
+    try {
+        hasToday = fs.readFileSync(dialogLogPath, 'utf8').includes(dateLabel);
+    } catch (error) { /* 文件不存在 = 今天还没有记录 */ }
+    return {
+        text: hasToday
+            ? `\n交互${interactionNumber}：\n`
+            : `------------------------------------\n${dateLabel}\n\n交互${interactionNumber}：\n`,
+        dateLabel,
+        interactionNumber,
+        newDay: !hasToday,
+    };
+}
+
+/**
+ * 把会话头落盘（惰性写：由 InputRouter 在第一条真实内容前调用）。
+ * @returns {{ok:boolean, interactionNumber:number, newDay:boolean, error?:string}}
+ */
+function ensureSessionHeader(filePath, now = new Date()) {
+    const dialogLogPath = filePath || recordFile('记忆库.txt');
+    try {
+        fs.mkdirSync(path.dirname(dialogLogPath), { recursive: true });
+        const header = buildSessionHeader(dialogLogPath, now);
+        fs.appendFileSync(dialogLogPath, header.text, 'utf8');
+        return { ok: true, interactionNumber: header.interactionNumber, newDay: header.newDay };
+    } catch (error) {
+        console.error('写记忆库会话头失败:', error);
+        return { ok: false, interactionNumber: 0, newDay: false, error: String((error && error.message) || error) };
+    }
+}
 
 /**
  * 负责文件读取、历史加载、交互编号等初始化逻辑
@@ -17,7 +87,7 @@ class MessageInitializer {
         // 确保data文件夹存在
         this.initializeRecordsDir();
 
-        // 获取交互编号
+        // 获取交互编号（只算不写：真正写头在第一条真实内容落盘前，见 InputRouter.saveToMemoryLog）
         const sessionInteractionNumber = this.getNextInteractionNumber();
 
         // 构建系统提示词
@@ -35,16 +105,15 @@ class MessageInitializer {
     }
 
     /**
-     * 初始化data文件夹和记忆库文件
+     * 初始化data文件夹和记忆库文件（**不再写「交互N：」空占位**）
      */
     initializeRecordsDir() {
-        const recordsDir = path.join(__dirname, '..', '..', '..', '..', 'data');
-        const dialogLogPath = path.join(recordsDir, '记忆库.txt');
+        const dialogLogPath = recordFile('记忆库.txt');
 
         try {
             // 确保data文件夹存在
-            if (!fs.existsSync(recordsDir)) {
-                fs.mkdirSync(recordsDir, { recursive: true });
+            if (!fs.existsSync(RECORDS_DIR)) {
+                fs.mkdirSync(RECORDS_DIR, { recursive: true });
                 console.log('已创建data文件夹');
             }
 
@@ -54,26 +123,9 @@ class MessageInitializer {
                 console.log('已创建记忆库文件');
             }
 
-            // 添加日期和交互编号
-            const now = new Date();
-            const currentDate = `${now.getFullYear()}年${String(now.getMonth() + 1).padStart(2, '0')}月${String(now.getDate()).padStart(2, '0')}日`;
-
-            const existingContent = fs.readFileSync(dialogLogPath, 'utf8');
-            const todayPattern = `[${currentDate}]`;
-
-            let sessionStart;
-            if (existingContent.includes(todayPattern)) {
-                // 今天已经有记录，只添加交互编号
-                const interactionNumber = this.getNextInteractionNumber();
-                sessionStart = `\n交互${interactionNumber}：\n`;
-            } else {
-                // 今天还没有记录，添加完整的日期分割线
-                const interactionNumber = this.getNextInteractionNumber();
-                sessionStart = `------------------------------------\n[${currentDate}]\n\n交互${interactionNumber}：\n`;
-            }
-
-            fs.appendFileSync(dialogLogPath, sessionStart, 'utf8');
-            console.log('记忆库文件已准备好');
+            // 2026-11-24：这里原来每次启动都 append「交互N：\n」（一天开几次就几个空壳，
+            // 实测 864/975 是空占位）。现在只保证文件存在；日期/交互头由
+            // InputRouter.saveToMemoryLog 在第一条真实内容落盘前用 ensureSessionHeader() 写。
         } catch (error) {
             console.error('准备记忆库文件失败:', error);
         }
@@ -93,7 +145,7 @@ class MessageInitializer {
      * 加载持久化对话历史（JSONL格式）
      */
     loadConversationHistory() {
-        const conversationHistoryPath = path.join(__dirname, '..', '..', '..', '..', 'data', '对话历史.jsonl');
+        const conversationHistoryPath = recordFile('对话历史.jsonl');
         let conversationHistory = [];
 
         // 总是尝试读取历史文件（用于保存时的完整性）
@@ -138,28 +190,17 @@ class MessageInitializer {
     }
 
     /**
-     * 获取下一个交互编号
+     * 获取下一个交互编号（类方法保留旧 API；实现与模块级函数同源）
      */
     getNextInteractionNumber() {
-        try {
-            const dialogLogPath = path.join(__dirname, '..', '..', '..', '..', 'data', '记忆库.txt');
-            if (!fs.existsSync(dialogLogPath)) {
-                return 1;
-            }
-
-            const content = fs.readFileSync(dialogLogPath, 'utf8');
-            const matches = content.match(/交互(\d+)：/g);
-            if (!matches) {
-                return 1;
-            }
-
-            const numbers = matches.map(match => parseInt(match.match(/\d+/)[0]));
-            return Math.max(...numbers) + 1;
-        } catch (error) {
-            console.error('获取交互编号失败:', error);
-            return 1;
-        }
+        return getNextInteractionNumber();
     }
 }
 
-module.exports = { MessageInitializer };
+module.exports = {
+    MessageInitializer,
+    // 供 InputRouter / 单测复用（惰性写头）
+    getNextInteractionNumber,
+    buildSessionHeader,
+    ensureSessionHeader,
+};

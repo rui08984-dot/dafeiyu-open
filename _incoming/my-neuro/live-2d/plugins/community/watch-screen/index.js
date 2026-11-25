@@ -18,7 +18,10 @@
  */
 const __silentAudit = require('../../../js/core/silent-audit.js');
 const { Plugin } = require('../../../js/core/plugin-base.js');
-const { VisionOrgan, DEFAULTS } = require('./vision-organ.js');
+// 后台云端花费闸（2026-11-25 契约）：主动评论 / 主动观察 / 多模态摘要都会花云 token。
+// quiet 管「说不说」，cost.background_llm=false 管「花不花」，两套闸都要过。
+const backgroundLLM = require('../../../js/core/background-llm.js');
+const { VisionOrgan, DEFAULTS, resolveVisionBudgetPerHour } = require('./vision-organ.js');
 const media = require('./media-file.js');
 const fs = require('fs');
 // 解释器统一解析：原来这里连 PET_PYTHON 兜底都没有，写死本机 Python313 绝对路径。
@@ -474,6 +477,8 @@ class WatchScreenPlugin extends Plugin {
             keyframeMinGapMs: cfg.organKeyframeMinGapMs ?? DEFAULTS.keyframeMinGapMs,
             sceneMinGapMs: cfg.organSceneMinGapMs ?? DEFAULTS.sceneMinGapMs,
             quietKeyframeMs: cfg.organQuietKeyframeMs ?? DEFAULTS.quietKeyframeMs,
+            // 数字默认值唯一源在 vision-organ.js（VISION_BUDGET_PER_HOUR_DEFAULT，ADR-014=90/h）；
+            // 实际预算在 _visionBudgetOk 里经 resolveVisionBudgetPerHour 归一（旧出厂值 220 → 90）。
             visionBudgetPerHour: cfg.organVisionBudgetPerHour ?? DEFAULTS.visionBudgetPerHour,
             proactiveEnabled: this._activeMode,
         };
@@ -567,7 +572,9 @@ class WatchScreenPlugin extends Plugin {
     async onStop() {
         this.context.removeSystemPromptPatch(PATCH_ID_PASSIVE);
         this.context.removeSystemPromptPatch(PATCH_ID_ACTIVE);
+        // 旧版本的 id（热重载时可能还挂在共享补丁表里）＋ 现行陪玩补丁。
         this.context.removeSystemPromptPatch('watch-screen-story');
+        this.context.removeSystemPromptPatch(PATCH_ID_GAME);
         this.context.removeSystemPromptPatch(GAME_RULES_PATCH_ID);
         // 2026-11-22：一起看的补丁也要摘 —— 插件停用后它曾留到进程结束
         this.context.removeSystemPromptPatch('watch-screen-cowatch');
@@ -724,11 +731,18 @@ class WatchScreenPlugin extends Plugin {
             if (config.llm && config.llm.provider_id) candidates.push([config.llm.provider_id, (config.llm && config.llm.model_id) || null]);
             for (const pair of candidates) {
                 const resolved = llmProviderManager.resolveProviderOrFallback(pair[0], pair[1]);
-                if (resolved) {
-                    this._visionClient = LLMClient.fromProviderConfig(resolved, (config.llm && config.llm.retry) || {});
-                    this.context.log('info', '[organ] 摘要模型: ' + resolved.model + '（' + (resolved.name || resolved.id) + '）');
-                    return this._visionClient;
+                if (!resolved) continue;
+                // fail-closed（2026-11-25 契约）：配置里**点名**的 provider 解析不到时，
+                // resolveProviderOrFallback 会降级到默认（可能是云端）。多模态摘要每 90 秒
+                // 一次，静默回云就是持续烧钱 —— 这里只接受「真的是它」，否则跳过该候选。
+                if (String(resolved.id) !== String(pair[0])) {
+                    this.context.log('warn', '[organ] 摘要 provider "' + pair[0]
+                        + '" 不可用（已降级到 ' + resolved.id + '）；按 fail-closed 不回退，跳过该候选');
+                    continue;
                 }
+                this._visionClient = LLMClient.fromProviderConfig(resolved, (config.llm && config.llm.retry) || {});
+                this.context.log('info', '[organ] 摘要模型: ' + resolved.model + '（' + (resolved.name || resolved.id) + '）');
+                return this._visionClient;
             }
         } catch (error) {
             this.context.log('warn', '[organ] 解析摘要模型失败: ' + String(error && error.message || error));
@@ -765,7 +779,8 @@ class WatchScreenPlugin extends Plugin {
         const now = Date.now();
         const hourKey = Math.floor(now / 3600000);
         if (this._budgetHour !== hourKey) { this._budgetHour = hourKey; this._budgetUsed = 0; }
-        const cap = Number(this._organConfig.visionBudgetPerHour) || 220;
+        // 预算的唯一数字源在 vision-organ.js；这里不再写第二份 90（两处数字漂移的根因）。
+        const cap = resolveVisionBudgetPerHour(this._organConfig.visionBudgetPerHour);
         if (this._budgetUsed >= cap) {
             if (!this._budgetWarned) {
                 this._budgetWarned = true;
@@ -909,6 +924,11 @@ class WatchScreenPlugin extends Plugin {
         ];
         const viaTier = await this._summarizeViaTier(messages, tierCfg, this._organConfig.summaryMaxChars);
         if (viaTier != null) return viaTier;
+        // 分档（本地 Ollama）已失败，接下来是 provider/云端多模态：过后台花费闸。
+        // 本地档已先试过，所以 background_llm=false 只拦云调用，不拦免费/本地感知。
+        if (!backgroundLLM.ensureCanRun(this.context, { kind: 'watch-screen' }).ok) {
+            throw new Error('后台 LLM 已暂停，摘要跳过');
+        }
         const useClient = client || this._resolveVisionClient();
         if (!useClient) throw new Error('没有可用的多模态模型');
         const reply = await useClient.chatCompletion(messages, null, false);
@@ -946,6 +966,9 @@ class WatchScreenPlugin extends Plugin {
         ];
         let text = await this._summarizeViaTier(messages, tierCfg, this._organConfig.summaryMaxChars * 2);
         if (text == null) {
+            if (!backgroundLLM.ensureCanRun(this.context, { kind: 'watch-screen' }).ok) {
+                throw new Error('后台 LLM 已暂停，摘要跳过');
+            }
             const useClient = client || this._resolveVisionClient();
             if (!useClient) throw new Error('没有可用的多模态模型');
             const reply = await useClient.chatCompletion(messages, null, false);
@@ -2178,6 +2201,9 @@ class WatchScreenPlugin extends Plugin {
     async _commentOn(entry) {
         // 省钱模式：不主动开口（每次主动评论都是一次 LLM 调用）
         try { if (global.__petQuiet) return false; } catch (e) { try { __silentAudit.audit('index.js:1031', e); } catch (e2) {} }
+        // 后台花费闸：必须在 speechCoordinator.request 之前 —— request 成功会占用发言窗口，
+        // 闸关时再 return 等于白占一个窗口（弹幕/节目反而被让路）。
+        if (!backgroundLLM.ensureCanRun(this.context, { kind: 'watch-screen' }).ok) return false;
         // 看剧时最值得搭腔的往往不是画面，而是台词。
         // 只给画面摘要的话，她只能说出「两个人坐在车里」这种废话；
         // 带上对白，她才能接住剧情。这是「同频道」和「旁白」的差别。
@@ -2458,19 +2484,22 @@ class WatchScreenPlugin extends Plugin {
         }
         if (!this._useOrgan || !this._passiveMode || !this._organ) return;
         const messages = request.messages || [];
+        const windowText = this._organ.describeWindow(60);
+        if (!windowText) return;
+        // 2026-11-25 P2-6：屏幕摘要每轮都在变，必须走**易变尾部**（request.addVolatile），
+        // 不能插到最后一条 user 的**开头** —— usage-ledger 只剥 VOLATILE_HEADER 之后的块，
+        // 前插会让历史基线每轮都变，压缩触发退回估算。
+        // 历史缓存只允许尾部追加，禁止前插。
+        const viaVolatile = typeof request.addVolatile === 'function';
+        if (viaVolatile) request.addVolatile(windowText);
         for (let i = messages.length - 1; i >= 0; i -= 1) {
             if (messages[i].role !== 'user') continue;
-            const windowText = this._organ.describeWindow(60);
-            if (!windowText) return;
-            // ⚠ 2026-11-10 审计抓到（数据丢失，高危）：原来只处理 `content` 是字符串的情况，
-            //   而 llm-handler 在截图回合会把 content 变成**数组**（用户的文字 + image_url）。
-            //   于是 `textPart=''` → 用户的**原话和截图全被丢掉**，模型只看到一句「屏幕最近 60 秒摘要」
-            //   → 答非所问。现在：数组原样保留，屏幕摘要**插到最前面**而不是替换。
             const orig = messages[i].content;
-            const origParts = Array.isArray(orig)
+            const parts = Array.isArray(orig)
                 ? orig.slice()
                 : (typeof orig === 'string' && orig ? [{ type: 'text', text: orig }] : []);
-            const parts = [{ type: 'text', text: windowText }].concat(origParts);
+            // 旧宿主（没有 addVolatile）兜底：追加到**末尾**，绝不前插。
+            if (!viaVolatile) parts.push({ type: 'text', text: windowText });
             // look_now / find_moment 刚被调用过 → 附一张图（唯一允许进主对话的像素）
             if (this._pendingFrame && Date.now() - this._pendingFrame.ts < 20000) {
                 parts.push({ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + String(this._pendingFrame.base64).replace(/^data:image\/\w+;base64,/, ''), detail: 'low' } });
@@ -2574,6 +2603,9 @@ class WatchScreenPlugin extends Plugin {
     }
 
     async _tryReact(pictures) {
+        // 主动观察 = 一次带图云调用（最贵的一类）。quiet 之外还要过后台花费闸；
+        // 被闸拦下时直接丢这批帧（下一次关键帧会再来），不排队、不补说旧画面。
+        if (!backgroundLLM.ensureCanRun(this.context, { kind: 'watch-screen' }).ok) return false;
         this._isReacting = true;
         try {
             this.context.log('info', '主动观察屏幕，发送 ' + pictures.length + ' 张图片给 AI');
@@ -2584,6 +2616,7 @@ class WatchScreenPlugin extends Plugin {
                     image_url: { url: 'data:image/jpeg;base64,' + f.base64, detail: 'low' }
                 }))
             ]);
+            return true;
         } finally {
             this._isReacting = false;
         }

@@ -1,6 +1,5 @@
 // InputRouter.js - 输入路由
 const fs = require('fs');
-const path = require('path');
 const { eventBus } = require('../../core/event-bus.js');
 const { Events } = require('../../core/events.js');
 const { MessageEvent } = require('../../core/message-event.js');
@@ -9,6 +8,9 @@ const { MessageEvent } = require('../../core/message-event.js');
 const turnCtx = require('../../core/turn-context.js');
 // ADR-013：真实用户输入写「对话现场」（她主动说完后的重逢误判就是缺这一层）
 const scene = require('../../core/conversation-scene.js');
+// 记忆库路径唯一真源 + 惰性会话头（2026-11-24：启动不再写「交互N：」空占位）
+const { recordFile } = require('../../core/records-path.js');
+const { ensureSessionHeader } = require('./MessageInitializer.js');
 
 // 8103 写令牌（2026-11-21 红队 P1）：皮套窗 nodeIntegration=true，主进程通过
 // webPreferences.additionalArguments 注入 --pet-control-token；本页是 file:// 源，
@@ -25,9 +27,8 @@ function petControlToken() {
  * 负责路由不同来源的输入（语音/文本/弹幕）
  */
 class InputRouter {
-    constructor(conversationCore, _unused1, contextCompressor, memosClient, config) {
+    constructor(conversationCore, memosClient, config) {
         this.conversationCore = conversationCore;
-        this.contextCompressor = contextCompressor;
         this.memosClient = memosClient;  // 🔥 新增：MemOS 客户端
         this.config = config;
 
@@ -43,6 +44,9 @@ class InputRouter {
 
         // VoiceChatFacade 引用（用于记忆注入）
         this.voiceChatFacade = null;
+
+        // 本次会话的「日期/交互头」是否已随第一条真实内容落盘（2026-11-24）
+        this._memoryLogSessionStarted = false;
     }
 
     /**
@@ -252,6 +256,10 @@ class InputRouter {
 
     /**
      * 保存到记忆库
+     *
+     * 2026-11-24（审计 §9.3-⑧）：日期头 / 「交互N：」占位改为**惰性写** ——
+     * 只有本次会话第一条真实内容要落盘时才写会话头。启动即写占位曾产生 975 个
+     * 「交互N：」里 864 个下面一个字都没有的空壳（2623 行里 37%）。
      */
     saveToMemoryLog() {
         const messages = this.conversationCore.getMessages();
@@ -260,13 +268,15 @@ class InputRouter {
 
         if (lastUserMsg && lastAIMsg) {
             const newContent = `【用户】: ${lastUserMsg.content}\n【大肥鱼】: ${lastAIMsg.content}\n`;
+            const logPath = recordFile('记忆库.txt');
 
             try {
-                fs.appendFileSync(
-                    path.join(__dirname, '..', '..', '..', '..', 'data', '记忆库.txt'),
-                    newContent,
-                    'utf8'
-                );
+                if (!this._memoryLogSessionStarted) {
+                    // 写头失败就不置位：下一次真实内容还会重试（宁缺不丢内容）
+                    const res = ensureSessionHeader(logPath);
+                    if (res && res.ok) this._memoryLogSessionStarted = true;
+                }
+                fs.appendFileSync(logPath, newContent, 'utf8');
             } catch (error) {
                 console.error('保存记忆库失败:', error);
             }

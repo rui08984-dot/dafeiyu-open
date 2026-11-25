@@ -12,6 +12,9 @@
 const __silentAudit = require('../../../js/core/silent-audit.js');
 const { Plugin } = require('../../../js/core/plugin-base.js');
 const { resolvePluginEnabled } = require('../../../js/core/plugin-context.js');
+// 后台云端花费闸（2026-11-25 契约）：主动表达 = 一次完整 sendMessage = 云 token。
+// quiet 只表示「不说话」，不是「不花钱」；cost.background_llm=false 才是后台花费总开关。
+const backgroundLLM = require('../../../js/core/background-llm.js');
 const model = require('./state-model.js');
 const jsonStore = require('../../../js/core/json-store.js');
 const fs = require('fs');
@@ -104,6 +107,11 @@ class AliveStatePlugin extends Plugin {
         if (!pick) return;
         const cdMin = this._cooldownMin[pick.kind] || 120;
         if (now - ((this._state.lastExpressAt || {})[pick.kind] || 0) < cdMin * 60000) return;
+        // 后台花费闸必须在 speechCoordinator.request **之前**：request 成功等于占用了
+        // 一个发言窗口，若过闸失败才 return，窗口会一直悬着，别的发起者（弹幕/节目）
+        // 反而不让说话。闸关时也不写 lastExpressAt（不烧冷却）。
+        const bgGate = backgroundLLM.ensureCanRun(this.context, { kind: 'alive-state' });
+        if (!bgGate.ok) return;
         const gate = speechCoordinator.request('alive-state', { priority: 'proactive' });
         if (!gate.allowed) {
             this.context.log('info', `[活着感] ${pick.kind} 想说但协调器让路（${gate.reason}）`);

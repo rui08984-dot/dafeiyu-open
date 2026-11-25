@@ -14,8 +14,16 @@
 const __silentAudit = require('../../../js/core/silent-audit.js');
 const { Plugin } = require('../../../js/core/plugin-base.js');
 const { resolvePluginEnabled } = require('../../../js/core/plugin-context.js');
+// 云端 LLM 健康/配额熔断（2026-11-24 审计 P0-1）：429 配额用尽时不再每 5 分钟盲撞。
+// background-llm 只是「配置开关 + 熔断」的薄封装，别在插件里自己拼判据。
+const backgroundLLM = require('../../../js/core/background-llm.js');
+const { llmHealth } = require('../../../js/core/llm-health.js');
+// 本地记忆模型（ADR-014 轨道 2）：片段卡 / MemOS 抽取走本机 llama.cpp（MemOperator-4B），
+// 反思仍走云端。本地不在就跳过，绝不回退云端 —— 两条闸（canRunLocal / canRun）互不复用。
+const localLLM = require('../../../js/core/local-llm.js');
 const { scoreEvent, createTrigger } = require('./lib/importance.js');
 const { reflect } = require('./lib/reflect.js');
+const { pickJsonObject } = require('./lib/json-extract.js');
 const { isAddOk, addErrorText } = require('./lib/memos-contract.js');
 // 脚手架判定唯一真源（2026-11-22 记忆污染）：与 memory-recall 共用 js/core/memory-scaffold.js。
 // 模块加载失败必须 fail-open —— 过滤器坏了可以多写一条，不能把整条记忆链停掉。
@@ -60,6 +68,86 @@ const RULES = [
 const NOISE = [
   /^(?:嗯|哦|啊|哈|好|行|在吗|你好|晚安|早安|谢谢|拜拜|哈哈哈?)[。！？!.?~ ]*$/,
 ];
+
+// ── 片段卡：结构化输出（2026-11-24 第四轮 · 本地记忆模型调参）──────────────
+// 为什么：MemOperator 是**指令微调的小模型**，输出分布靠训练 prompt 撑。原来的 prompt 是
+// 「一句话 + 一行 JSON 样例」，一旦发散（带解释 / 少字段 / facts 写成字符串），parseCard
+// 只能整批判废、游标不动、每 5 分钟重烧一次。现在两件事一起做：
+//   ① prompt 形状向训练分布靠（单条 user / 规则在前 / schema 在最后 / 只输出一个 JSON 对象）；
+//   ② 用 response_format(json_schema) 让服务端约束解码，格式不再靠模型自觉。
+// 字段名**一律不动**（episodes.jsonl / memory-recall 有消费者）。
+const EPISODE_CARD_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  // required 只列 summary：空摘要 {"summary":""} 是「这段没值得记的」的**合法**输出，
+  // 保留它才能推进游标跳过（否则同一段会被反复重试）。title/facts 可省，parseCard 有兜底。
+  required: ['summary'],
+  properties: {
+    title: { type: 'string', maxLength: 24 },
+    summary: { type: 'string', maxLength: 200 },
+    facts: { type: 'array', maxItems: 3, items: { type: 'string', maxLength: 40 } },
+  },
+};
+
+const EPISODE_CARD_KEYS = new Set(['title', 'summary', 'facts']);
+
+/**
+ * 片段卡 prompt：对齐 MemOS `mem_reader_prompts` 的形状（单条 user、规则在前、schema 在后、
+ * 「宁全勿简」、第三人称、绝对时间、代词消解），字段仍是我们自己的三件套。
+ */
+function buildEpisodePrompt(dialogue) {
+  return '把下面这段「他」和「你」的对话，整理成一张以后能回答「上周 / 那阵子在干什么」的片段卡片。\n'
+    + '\n'
+    + '整理规则（必须全部遵守）：\n'
+    + '1. 只写对话里真正出现过的信息；没提到的不要补，不要评价，不要猜。\n'
+    + '2. 用第三人称写「他」；不要出现「我」「你」这两个人称。\n'
+    + '3. 时间写绝对时间（「周三下午三点」而不是「昨天」）；代词要消解成具体的人或事。\n'
+    + '4. 宁全勿简：发生的事、他的状态、做出的决定、情绪的转折，都写进 summary。\n'
+    + '5. summary 至少 6 个字；这段如果全是寒暄、没有任何值得记住的内容，就输出 {"summary":""}。\n'
+    + '\n'
+    + '输出：只输出一个 JSON 对象，不要解释、不要 Markdown 代码块、不要多余文字。\n'
+    + '字段定义如下（这一行之后不要再写任何说明）：\n'
+    + '{"title":"≤24字标题","summary":"≤200字：发生了什么、他的状态或决定","facts":["≤40字的关键事实，最多 3 条"]}\n'
+    + '\n'
+    + '对话：\n'
+    + String(dialogue || '').slice(0, 4000);
+}
+
+/**
+ * 校验片段卡输出。三种结论，**不猜、不接受半截**：
+ *   · 'ok'    合规（返回解析后的对象）
+ *   · 'empty' 主动表示「没值得记的」（空 summary，合法，调用方推进游标跳过）
+ *   · 'bad'   格式不合 schema（调用方 warn + 不前进游标 + 记一次重试）
+ * 不复用 parseCard 的原因：parseCard 是「宽容解析」（缺 title 兜底、facts 强转字符串），
+ * 而这里要能分辨「模型说没内容」和「模型输出坏了」这两件完全不同的事。
+ * @param {*} raw
+ * @returns {{status:'ok'|'empty'|'bad', json?:object, reason?:string}}
+ */
+function validateEpisodeCardOutput(raw) {
+  const j = pickJsonObject(raw);
+  if (!j) return { status: 'bad', reason: '没有可解析的 JSON 对象' };
+  const unknown = Object.keys(j).filter((k) => !EPISODE_CARD_KEYS.has(k));
+  if (unknown.length) return { status: 'bad', reason: '多余字段 ' + unknown.join(',') };
+  if (typeof j.summary !== 'string') return { status: 'bad', reason: 'summary 缺失或不是字符串' };
+  if (j.title != null && typeof j.title !== 'string') return { status: 'bad', reason: 'title 不是字符串' };
+  if (j.facts != null && (!Array.isArray(j.facts) || j.facts.some((f) => typeof f !== 'string'))) {
+    return { status: 'bad', reason: 'facts 不是字符串数组' };
+  }
+  if (!j.summary.trim()) return { status: 'empty' };
+  return { status: 'ok', json: j };
+}
+
+/**
+ * 服务端不认结构化输出？（老 llama.cpp / 某些兼容层会对 response_format 直接 400）
+ * 只认「4xx + body/文案里提到 response_format/json_schema/grammar」——
+ * 其它 400 一律按真失败处理，不许被这条兜底吞掉。
+ */
+function isResponseFormatRejected(err) {
+  const status = Number(err && err.status) || 0;
+  if (status !== 400 && status !== 422) return false;
+  const text = String((err && err.body) || '') + ' ' + String((err && err.message) || '');
+  return /response_format|json_schema|json schema|grammar|schema/i.test(text);
+}
 
 class MemoryEvolvePlugin extends Plugin {
 
@@ -123,8 +211,16 @@ class MemoryEvolvePlugin extends Plugin {
         const epRetries = Number(cfg.episode_parse_max_retries ?? 3);
         this._episodeMaxParseRetries = (Number.isFinite(epRetries) && epRetries >= 1 ? Math.floor(epRetries) : 3);
         this._episodeParseFails = 0;
+        // response_format 被服务端拒绝只 warn 一次（见 _callEpisodeLLM）
+        this._episodeNoSchemaWarned = false;
         this._episodeTimer = null;
         this._episodeBusy = false;
+        // 本地失败退避（ADR-014）：本地 llama-server 崩了/被关了，不能每 5 分钟撞一次。
+        // 失败后 2 分钟内不再探活（游标不动、原文不丢，恢复后自然补上）。
+        const localBackoffSec = Number(cfg.episode_local_backoff_sec ?? 120);
+        this._localBackoffMs = (Number.isFinite(localBackoffSec) && localBackoffSec > 0 ? localBackoffSec : 120) * 1000;
+        this._localBackoffUntil = 0;
+        this._localPauseLoggedFor = '';
         // 启动补跑 timer 句柄（2026-11-20 审计 P1）：原来 setTimeout 的 id 丢掉，
         // 热重载后旧实例的 2 分钟回调照样跑 → 新旧两份实例同时反思、重复写 insight。
         this._bootTimer = null;
@@ -152,6 +248,11 @@ class MemoryEvolvePlugin extends Plugin {
         this._reflectPending = false;   // 触发器已点着，等空闲节拍真正跑
         this._reflectBusy = false;
         this._reflectCapWarnedDay = ''; // 日上限日志一天只喊一次（别每 5 分钟刷屏）
+        // LLM 熔断日志：只在「暂停状态迁移」时喊一次（429 刷屏 99 条的直接教训）。
+        this._reflectPauseLoggedFor = '';
+        // 触发计数落盘（2026-11-24 审计 §9.3-③）：debounce ≥2s，onStop 强制写一次。
+        this._reflectPersistTimer = null;
+        this._reflectPersistWarned = false;
         this._reflectState = {
             lastError: null, lastRunAt: 0, runsToday: 0,
             lastResult: null, lastScore: null, lastHits: [], remain: this._reflectThreshold,
@@ -165,6 +266,8 @@ class MemoryEvolvePlugin extends Plugin {
         } catch (e) {
             this.context.log('warn', '[反思] 记录室不可用: ' + (e && e.message));
         }
+        // 从游标恢复「累计到哪了 / 是否待反思」（必须在 _insightsDir 定下来之后）。
+        this._restoreReflectTrigger();
 
         this._queuePath = null;
         try {
@@ -253,6 +356,9 @@ class MemoryEvolvePlugin extends Plugin {
         if (this._destroyed) return 0;
         if (!this._pending.length) return 0;
         if (this._consolidating) return 0;   // 已有巩固在跑：它会把这批一起带走
+        // 2026-11-24：MemOS /add 内部也要调云端 LLM（当前配置同一 provider/key）。
+        // 配额 429 时每 30 秒重放 = 又一个「对着死端点空转」；暂停时条目留在内存/队列。
+        if (!(await this._writeGateOpen())) return 0;
         this._consolidating = true;
         const n = this._pending.length;
         try {
@@ -276,6 +382,9 @@ class MemoryEvolvePlugin extends Plugin {
         if (this._episodeTimer) { clearInterval(this._episodeTimer); this._episodeTimer = null; }
         if (this._bootTimer) { clearTimeout(this._bootTimer); this._bootTimer = null; }
         if (this._bootQueueTimer) { clearTimeout(this._bootQueueTimer); this._bootQueueTimer = null; }
+        // 触发状态：清掉 debounce，强制写一次（重启后反思能接着攒，不再清零）。
+        if (this._reflectPersistTimer) { clearTimeout(this._reflectPersistTimer); this._reflectPersistTimer = null; }
+        this._persistReflectTrigger('onStop');
         if (this._pending.length) {
             // 过闸时已逐条 append 到队列，这里只留痕（不在停机路径上撞 /add 的 150s 超时）
             this.context.log('info', '[记忆演化] 停机：' + this._pending.length + ' 条待写仍在队列（下次启动补写）');
@@ -367,23 +476,73 @@ class MemoryEvolvePlugin extends Plugin {
         const { turns, consumed } = es.readTurns(rp.recordFile('对话历史.jsonl'), cursor, this._episodeMaxLines);
         if (turns.length < this._episodeMinTurns) return null;
 
+        // 本地不可用（llama-server 没起 / 能力页关掉 / 刚失败退避中）就安静跳过：
+        // 游标不动，原文一行不丢；**不回退云端**（ADR-014：不回退，避免再次意外烧配额）。
+        const gate = await this._localGate();
+        if (!gate.ok) return null;
+
         this._episodeBusy = true;
         try {
             const body = turns.map((t) => (t.role === 'user' ? '他：' : '你：') + t.text).join('\n');
-            const prompt =
-                '把下面这段对话压成一张「片段卡片」，以后用来回答「上周/那阵子在干什么」。\n' +
-                '只输出一行 JSON：{"title":"≤12字","summary":"≤120字，说清发生了什么、他的状态或决定","facts":["≤30字的关键事实，最多3条"]}\n' +
-                '要求：只写对话里真的出现过的信息，不要评价、不要编；如果这段没有任何值得记住的内容，输出 {"summary":""}\n\n' +
-                body.slice(0, 4000);
+            const prompt = buildEpisodePrompt(body);
+            // 本地连接信息**只认 local-llm.resolve()**（与上面的 _localGate 同一个真相源）。
+            // 2026-11-25 契约：不再写死 provider_id:'local-memory' ——
+            //   callLLM 对「指定了 provider 但解析不到」是 fail-closed（抛 PROVIDER_NOT_FOUND），
+            //   而 provider 配置可能被删/被禁用/管理器未初始化；那会让片段卡永久失败，
+            //   还被误当成 transient 本地故障每 2 分钟重试。resolve() 找不到时回落到内置回环默认，
+            //   保证「本地任务只在本地跑、绝不因此回退云端」。
+            const conn = localLLM.resolve();
             let raw = '';
-            try { raw = String(await this.context.callLLM(prompt, { temperature: 0.2 }) || ''); }
-            catch (e) {
-                this.context.log('warn', '[片段] 摘要调用失败（游标不动，下次重试）: ' + (e && e.message || e));
+            try {
+                raw = await this._callEpisodeLLM(prompt, {
+                    // 抽取类采样（工程值）：0.2 / 0.8 / 20 / min_p 0 / repeat 1.05。
+                    // 启动脚本的 --temp 等是服务端默认；这里显式再给一遍，换成别的档也不会漂。
+                    temperature: 0.2,
+                    top_p: 0.8,
+                    top_k: 20,
+                    min_p: 0,
+                    repeat_penalty: 1.05,
+                    api_url: conn.apiUrl,
+                    api_key: conn.apiKey,
+                    model: conn.model,
+                    max_tokens: 800,
+                    timeout_ms: 180000,   // 4B 本地 32K 首 token 慢；别用云的短超时误杀
+                    response_format: {
+                        type: 'json_schema',
+                        json_schema: { name: 'episode_card', strict: true, schema: EPISODE_CARD_SCHEMA },
+                    },
+                });
+            } catch (e) {
+                // 本地失败只记本地（退避 + 一条 warn），**不写云端熔断**：
+                // 本地挂了跟云端配额是两件事，混记会让反思也跟着停。
+                this._localNoteFailure(e);
+                this.context.log('warn', '[片段] 本地摘要调用失败（游标不动，'
+                    + Math.round(this._localBackoffMs / 1000) + 's 后再试）: ' + this._llmErrText(e));
                 return null;
             }
-            if (/"summary"\s*:\s*""/.test(raw)) {
+
+            // 先判「模型说没内容」再判「输出坏了」——两件事的处置完全相反。
+            const verdict = validateEpisodeCardOutput(raw);
+            if (verdict.status === 'empty') {
                 es.saveCursor(cursor + consumed);
                 this.context.log('info', '[片段] 这段没值得记的，跳过 ' + consumed + ' 行');
+                return null;
+            }
+            if (verdict.status === 'bad') {
+                // 2026-11-24：不再静默接受半截。空/残缺/多字段一律按解析失败走，
+                // 游标不动、下次重试；连续 N 次才跳过这段（原文仍在对话历史）。
+                this._episodeParseFails += 1;
+                if (this._episodeParseFails >= this._episodeMaxParseRetries) {
+                    es.saveCursor(cursor + consumed);
+                    this.context.log('warn', '[片段] 连续 ' + this._episodeParseFails + ' 次输出不合 schema，跳过 '
+                        + consumed + ' 行（原文仍在对话历史；不再重试同一批）: ' + verdict.reason
+                        + '；输出 ' + String(raw).slice(0, 80));
+                    this._episodeParseFails = 0;
+                } else {
+                    this.context.log('warn', '[片段] 输出不合 schema（游标不动，第 ' + this._episodeParseFails
+                        + '/' + this._episodeMaxParseRetries + ' 次重试）: ' + verdict.reason
+                        + '；输出 ' + String(raw).slice(0, 80));
+                }
                 return null;
             }
             const card = es.parseCard(raw, {
@@ -427,6 +586,250 @@ class MemoryEvolvePlugin extends Plugin {
     // 触发：每条新用户消息按 1..10 打分，累减到 <=0 只点亮「待反思」；真正跑要等
     // 5 分钟空闲节拍（复用压卡的 30 分钟空闲闸），一天 ≤4 次，gaming/watching 不跑。
     // 产出只 append insights.jsonl + 推进 cursor；**本轮不注入人格、不改 system**。
+    // ── 云端 LLM 熔断接线（2026-11-24 审计 P0-1；2026-11-25 收口）───────────
+    // 背景：套餐周配额用尽后 429 每 5 分钟重试同一批（runtime.log 99 条）。
+    // 现在每次调 LLM 前问一句「现在能花这个钱吗」，不能就安静跳过。
+    // 判据唯一入口 = backgroundLLM.ensureCanRun（用户开关 + 云端熔断 + 状态迁移日志），
+    // 插件不再自己复制 canRun 判断/自己吞异常（旧实现把 fail-open 又包了一层）。
+    _llmGate() {
+        // 判据唯一入口；插件不再自己复制 canRun 判断，也不吞闸抛出的异常。
+        const gate = backgroundLLM.ensureCanRun(this.context, { kind: 'memory-evolve-reflect' });
+        if (gate.ok) {
+            this._reflectPauseLoggedFor = '';
+            return gate;
+        }
+        // 额外一条「本轮不跑」的业务日志（与 ensureCanRun 的状态迁移日志互补；
+        // 同一 reason+retryAt 只喊一次，避免每 5 分钟刷屏）。
+        const sig = String(gate.reason || 'blocked') + ':' + String(gate.retryAt || 0);
+        if (this._reflectPauseLoggedFor !== sig) {
+            this._reflectPauseLoggedFor = sig;
+            const at = gate.retryAt ? this._localHm(gate.retryAt) : '时间未知';
+            this.context.log('info', '[记忆演化] LLM 暂停中（' + (gate.reason || 'blocked') + '，' + at + ' 恢复），本轮不跑');
+        }
+        return gate;
+    }
+
+    /**
+     * 本地闸（片段卡用）：用户开关 + cost.local_memory + 本地 /health，外加本地失败退避。
+     * 与 _llmGate 分开：云端 429 不该拦住本地摘要；本地挂了也不该拦住云端反思。
+     */
+    async _localGate() {
+        const now = Date.now();
+        if (now < (this._localBackoffUntil || 0)) {
+            return { ok: false, reason: 'local_backoff', retryAt: this._localBackoffUntil };
+        }
+        let gate;
+        try { gate = await backgroundLLM.canRunLocal(this.context, now); }
+        catch (e) { gate = { ok: false, reason: 'local_down', retryAt: null }; }
+        if (!gate || gate.ok) {
+            this._localPauseLoggedFor = '';
+            return { ok: true, reason: null, retryAt: null };
+        }
+        const sig = String(gate.reason || 'blocked') + ':' + String(gate.retryAt || 0);
+        if (this._localPauseLoggedFor !== sig) {
+            this._localPauseLoggedFor = sig;
+            const why = gate.reason === 'local_disabled' ? '能力页已关闭本地记忆模型'
+                : gate.reason === 'disabled' ? '后台 LLM 总开关关闭'
+                : '本地模型不可用';
+            this.context.log('info', '[记忆演化] ' + why + '（' + (gate.reason || 'blocked')
+                + '），本轮片段卡跳过（不回退云端）');
+        }
+        return gate;
+    }
+
+    /**
+     * 片段卡调用：带 response_format(json_schema)；服务端不认结构化输出时**降级一次**纯
+     * prompt 约束。为什么要有这条兜底：老 llama.cpp / 兼容层会对 response_format 直接 400，
+     * 而片段卡每 5 分钟重试一次 —— 没有兜底就等于「换了个 server 就永久停摆」。
+     * 降级只 warn 一次；其余失败照旧抛给调用方（退避、游标不动）。
+     */
+    async _callEpisodeLLM(prompt, options) {
+        try {
+            return String(await this.context.callLLM(prompt, options) || '');
+        } catch (e) {
+            if (!isResponseFormatRejected(e)) throw e;
+            if (!this._episodeNoSchemaWarned) {
+                this._episodeNoSchemaWarned = true;
+                this.context.log('warn', '[片段] 本地服务不支持 response_format/json_schema（HTTP '
+                    + (Number(e && e.status) || '?') + '），本次改为纯 prompt 约束: ' + this._llmErrText(e));
+            }
+            const relaxed = Object.assign({}, options);
+            delete relaxed.response_format;
+            return String(await this.context.callLLM(prompt, relaxed) || '');
+        }
+    }
+
+    /** 本地调用失败 → 退避一段时间（默认 2 分钟），避免每 5 分钟撞同一台死服务。 */
+    _localNoteFailure(err) {
+        const now = Date.now();
+        this._localBackoffUntil = now + this._localBackoffMs;
+        this._localPauseLoggedFor = 'local_backoff:' + this._localBackoffUntil;
+        try {
+            this.context.log('info', '[记忆演化] 本地模型退避到 '
+                + this._localHm(this._localBackoffUntil) + '（' + this._llmErrText(err) + '）');
+        } catch (e) { /* 日志失败不影响退避 */ }
+    }
+
+    /**
+     * 从一份 MemOS 配置里取后端 LLM 的 base_url。
+     * 两种形状都要认：
+     *   · 运行时扁平（getPluginFileConfig 的返回值）：{ backend_llm: { base_url: '...' } }
+     *   · 盘上 schema：{ backend_llm: { fields: { base_url: { value: '...' } } } }
+     *   · 生成的 memos_config.json：{ llm: { config: { base_url: '...' } } }
+     */
+    _backendBaseUrlFromConfig(cfg) {
+        if (!cfg || typeof cfg !== 'object') return '';
+        const pick = (v) => (v && typeof v === 'object' && 'value' in v) ? v.value : v;
+        const flat = cfg.backend_llm && cfg.backend_llm.base_url;
+        if (flat) return String(pick(flat) || '');
+        const nested = cfg.backend_llm && cfg.backend_llm.fields && cfg.backend_llm.fields.base_url;
+        if (nested) return String(pick(nested) || '');
+        const llm = cfg.llm && cfg.llm.config && cfg.llm.config.base_url;
+        if (llm) return String(pick(llm) || '');
+        return '';
+    }
+
+    /**
+     * MemOS 后端是不是本地模型（决定 /add 用哪条闸）。
+     * 读两份配置（插件配置 + 生成的 memos_config.json），base_url 指向 11435 即本地。
+     * 60s 缓存：改配置后最多一分钟生效，不为每次 /add 读两次盘。
+     */
+    _memosBackendIsLocal() {
+        const now = Date.now();
+        if (this._memosBackendLocal != null && now - (this._memosBackendLocalAt || 0) < 60000) {
+            return this._memosBackendLocal;
+        }
+        let local = false;
+        const live2d = path.join(__dirname, '..', '..', '..');
+        const candidates = [
+            path.join(live2d, 'plugins', 'built-in', 'memos', 'plugin_config.json'),
+            path.join(live2d, '..', 'plugins-dlc', 'memos', 'memos_system', 'config', 'memos_config.json'),
+        ];
+        for (const file of candidates) {
+            try {
+                if (!fs.existsSync(file)) continue;
+                const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+                if (localLLM.isLocalUrl(this._backendBaseUrlFromConfig(cfg))) { local = true; break; }
+            } catch (e) { /* 配置读不到：按云端处理（保守：多闸一会儿，不误放行） */ }
+        }
+        this._memosBackendLocal = local;
+        this._memosBackendLocalAt = now;
+        return local;
+    }
+
+    /**
+     * 待写队列的闸。MemOS /add 内部也会调 LLM：
+     *   · 后端是本地 → 只问本地 /health（云端 429 与它无关）
+     *   · 后端是云端 → 沿用 llmHealth 熔断
+     * 暂停时不要每 30 秒重放（条目留在内存/队列，恢复后自动补写；只延迟不丢）。
+     */
+    async _writeGateOpen() {
+        if (this._memosBackendIsLocal()) {
+            // 本地后端也走 canRunLocal：它同时管 cost.background_llm（总开关）
+            // 与 cost.local_memory（能力页本地模型开关），不是只看端口活。
+            try {
+                const g = await backgroundLLM.canRunLocal(this.context);
+                if (g.ok) { this._writePauseLoggedFor = ''; return true; }
+                const sig = 'local:' + String(g.reason || 'paused');
+                if (this._writePauseLoggedFor !== sig) {
+                    this._writePauseLoggedFor = sig;
+                    this.context.log('info', '[记忆演化] 本地记忆后端暂停（' + (g.reason || 'paused')
+                        + '），待写队列暂不重放（条目保留）');
+                }
+                return false;
+            } catch (e) { /* 闸自身异常按不可用处理，不回退云端 */ }
+            return false;
+        }
+        // 云端后端：与其它后台云调用同一入口（含 cost.background_llm 总开关）。
+        // 不包 try/catch：ensureCanRun 内部已兜住配置/熔断/日志异常，插件再吞一层
+        // 就等于「闸坏了照样花云钱」。
+        const g = backgroundLLM.ensureCanRun(this.context, { kind: 'memory-evolve-write' });
+        if (g.ok) { this._writePauseLoggedFor = ''; return true; }
+        // ensureCanRun 已在状态迁移时记一行；这里只维护本地去重标记，不重复刷。
+        this._writePauseLoggedFor = 'cloud:' + String(g.reason || 'paused');
+        return false;
+    }
+
+    /** 失败日志用的一句话：HTTP 状态 + body 摘要（≤160 字），不再只喊「429」。 */
+    _llmErrText(err) {
+        const status = Number(err && err.status) || 0;
+        const body = String((err && err.body) || (err && err.message) || err || 'LLM 调用失败')
+            .replace(/\s+/g, ' ').trim().slice(0, 160);
+        return (status ? 'HTTP ' + status + ' ' : '') + body;
+    }
+
+    _localHm(ms) {
+        const d = new Date(Number(ms) || Date.now());
+        const p = (n) => String(n).padStart(2, '0');
+        const sameDay = d.toDateString() === new Date().toDateString();
+        const hm = p(d.getHours()) + ':' + p(d.getMinutes());
+        return sameDay ? hm : (p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + hm);
+    }
+
+    /** onInit：从 insights-cursor.json 恢复「累计到哪了 / 是否待反思」。 */
+    _restoreReflectTrigger() {
+        if (!this._reflectEnabled || !this._insightsDir) return null;
+        try {
+            const cur = insightsStore.loadCursor(this._insightsDir);
+            let restored = false;
+            if (cur.reflectRemain != null && Number.isFinite(Number(cur.reflectRemain))) {
+                const r = this._reflectTrigger.setRemain(cur.reflectRemain);
+                this._reflectState.remain = r;
+                restored = true;
+            }
+            if (typeof cur.reflectPending === 'boolean') {
+                this._reflectPending = cur.reflectPending;
+                restored = true;
+            }
+            if (restored) {
+                this.context.log('info', '[反思] 从游标恢复触发状态（remain ' + this._reflectTrigger.remain + '/'
+                    + this._reflectThreshold + (this._reflectPending ? '，待反思' : '') + '）');
+            }
+            return { remain: this._reflectTrigger.remain, pending: this._reflectPending, restored };
+        } catch (e) {
+            // 游标坏了不能当 0 用：按默认阈值继续，但要发声（json-store 已隔离坏文件）。
+            this.context.log('warn', '[反思] 触发状态恢复失败（按默认 ' + this._reflectThreshold + ' 继续）: '
+                + ((e && e.message) || e));
+            return null;
+        }
+    }
+
+    /**
+     * 写回触发状态（只碰 reflectRemain/reflectPending，其余字段沿用盘上最新值，
+     * 不覆盖 runsToday/day/lastEpisodeLine）。落盘失败只 warn 一次。
+     */
+    _persistReflectTrigger(reason) {
+        if (!this._reflectEnabled || !this._insightsDir) return false;
+        try {
+            const fresh = insightsStore.loadCursor(this._insightsDir);
+            const next = Object.assign({}, fresh, {
+                reflectRemain: this._reflectTrigger ? this._reflectTrigger.remain : null,
+                reflectPending: !!this._reflectPending,
+            });
+            insightsStore.saveCursor(this._insightsDir, next);
+            this._reflectPersistWarned = false;
+            return true;
+        } catch (e) {
+            if (!this._reflectPersistWarned) {
+                this._reflectPersistWarned = true;
+                this.context.log('warn', '[反思] 触发状态落盘失败（重启后会丢这段累计，'
+                    + (reason || '') + '）: ' + ((e && e.message) || e));
+            }
+            return false;
+        }
+    }
+
+    /** debounce ≥2s：每条消息都会改 remain，但不能每条都整文件重写。 */
+    _scheduleReflectPersist() {
+        if (!this._reflectEnabled || !this._insightsDir || this._reflectPersistTimer) return;
+        this._reflectPersistTimer = setTimeout(() => {
+            this._reflectPersistTimer = null;
+            if (this._destroyed) return;
+            this._persistReflectTrigger('debounce');
+        }, 2000);
+        if (this._reflectPersistTimer.unref) this._reflectPersistTimer.unref();
+    }
+
     _setReflectError(msg) {
         const text = String(msg || '未知错误');
         this._reflectState.lastError = text;
@@ -446,6 +849,8 @@ class MemoryEvolvePlugin extends Plugin {
             this.context.log('info', '[反思] 重要性触发（本条 ' + r.score + ' 分' +
                 (r.hits.length ? '：' + r.hits.join('/') : '') + '），等空闲再反思');
         }
+        // 触发计数是跨会话状态：任何变化都排一次落盘（debounce 2s）。
+        this._scheduleReflectPersist();
         return { score: r.score, hits: r.hits, fire: t.fire, remain: t.remain };
     }
 
@@ -523,6 +928,9 @@ class MemoryEvolvePlugin extends Plugin {
             next.lastEpisodeLine = opts.advanceLine;
             next.lastEpisodeId = opts.advanceId;
         }
+        // 同一份游标顺带记触发状态：CAS 重写（runsToday/游标位置）时不能把 reflectRemain 丢掉。
+        if (this._reflectTrigger) next.reflectRemain = this._reflectTrigger.remain;
+        next.reflectPending = !!this._reflectPending;
         const saved = insightsStore.saveCursor(dir, next);
         return { conflict, cursor: saved };
     }
@@ -530,6 +938,9 @@ class MemoryEvolvePlugin extends Plugin {
     async _maybeReflectInner() {
         if (!this._reflectPending) return null;
         if (!this._insightsDir) return null;
+        // 云端不可用就保留 pending、不占日配额（配额是「真跑过」的账，不是「想跑」的账）。
+        const gate = this._llmGate();
+        if (!gate.ok) return { skipped: 'llm_paused', reason: gate.reason, retryAt: gate.retryAt || null };
 
         const now = Date.now();
         const lastUser = Number(global.__lastUserInputAt) || 0;
@@ -607,7 +1018,16 @@ class MemoryEvolvePlugin extends Plugin {
             r = await reflect({
                 entries,
                 existingInsights: existing,
-                callLLM: (prompt) => this.context.callLLM(prompt, { temperature: 0.2 }),
+                callLLM: async (prompt) => {
+                    try {
+                        const out = await this.context.callLLM(prompt, { temperature: 0.2 });
+                        llmHealth.noteSuccess();
+                        return out;
+                    } catch (e) {
+                        try { llmHealth.noteFailure(e); } catch (e2) { /* 熔断记账失败不改变本轮失败 */ }
+                        throw e;
+                    }
+                },
                 now: () => now,
                 maxEntries: this._reflectMaxEntries,
                 maxInsights: this._reflectMaxInsights,
@@ -633,8 +1053,9 @@ class MemoryEvolvePlugin extends Plugin {
         if ((costCas && costCas.conflict) ||
             insightsStore.loadCursor(this._insightsDir).lastEpisodeLine !== baseLine) {
             // 把本轮成本补记到最新游标（对方可能已覆盖 runsToday），但不推进片段游标。
-            try { cursor = this._saveCursorCas(cursor, baseLine).cursor; } catch (e) { /* 写失败下面照常发声 */ }
+            // 同样先清 pending 再写：游标里不能留下「已处理却仍待反思」。
             this._reflectPending = false;
+            try { cursor = this._saveCursorCas(cursor, baseLine).cursor; } catch (e) { /* 写失败下面照常发声 */ }
             this._reflectState.lastRunAt = now;
             this._reflectState.runsToday = cursor.runsToday;
             this._reflectState.lastResult = { insights: 0, deduped: r.insights.length, cards: built.cardCount };
@@ -661,6 +1082,8 @@ class MemoryEvolvePlugin extends Plugin {
         }
 
         cursor.lastError = null;
+        // 先清 pending 再落盘：游标里不能留下「已完成却仍待反思」的状态。
+        this._reflectPending = false;
         try { cursor = this._saveCursorCas(cursor, baseLine, { advanceLine: built.lastLine, advanceId: built.lastId }).cursor; }
         catch (e) {
             // 游标没写进去 → 下轮可能重复追加同一批 insight。重复比丢好，但必须发声。
@@ -757,6 +1180,9 @@ class MemoryEvolvePlugin extends Plugin {
 
     /** 把队列里攒着的条目写回去（成功一条删一条，失败保留） */
     async _drainQueue() {
+        // MemOS /add 内部也要调 LLM（本地或云端，看后端配置）；闸没开就先不重放
+        // （连 reachability 都不必探）。
+        if (!(await this._writeGateOpen())) return 0;
         if (!(await this._memosReachable())) return 0;
         const items = this._queueLoad();
         if (!items.length) return 0;
@@ -1123,6 +1549,15 @@ class MemoryEvolvePlugin extends Plugin {
             text: s,
             score: +this._score(s).toFixed(2),
             gate: this._gate,
+            background: {
+                enabled: backgroundLLM.isEnabled(this.context),
+                localEnabled: backgroundLLM.isLocalEnabled(this.context),
+                health: llmHealth.getStatus(),
+                memosBackendLocal: this._memosBackendIsLocal(),
+                localBackoffUntil: this._localBackoffUntil || 0,
+            },
+            // 本地记忆模型快照（只读缓存；不触发网络）
+            local: localLLM.getStatus(),
             reflect: {
                 enabled: !!this._reflectEnabled,
                 importance: scoreEvent(s),
@@ -1139,3 +1574,8 @@ class MemoryEvolvePlugin extends Plugin {
 }
 
 module.exports = MemoryEvolvePlugin;
+// 单测后门（生产代码不要用）：片段卡的 schema / prompt / 校验器，见 _probe/test-episode-schema.cjs。
+MemoryEvolvePlugin.EPISODE_CARD_SCHEMA = EPISODE_CARD_SCHEMA;
+MemoryEvolvePlugin.buildEpisodePrompt = buildEpisodePrompt;
+MemoryEvolvePlugin.validateEpisodeCardOutput = validateEpisodeCardOutput;
+MemoryEvolvePlugin.isResponseFormatRejected = isResponseFormatRejected;

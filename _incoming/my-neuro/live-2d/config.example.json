@@ -1,7 +1,7 @@
 {
   "api_gateway": {
     "use_gateway": false,
-    "base_url": "http://gateway.example.com/api/v1",
+    "base_url": "https://api.example.com/v1",
     "api_key": "<填你的密钥>"
   },
   "llm": {
@@ -115,7 +115,7 @@
     },
     "tts": {
       "enabled": false,
-      "url": "https://api.siliconflow.cn/v1/audio/speech",
+      "url": "https://api.example.com/v1",
       "model": "FunAudioLLM/CosyVoice2-0.5B",
       "voice": "speech:fake-neuro:j3qz9ij4k2:kquiiycgizgaoxeujypx",
       "response_format": "wav",
@@ -176,11 +176,11 @@
     "pet_window": {
       "width": 420,
       "height": 760,
-      "x": 96,
-      "y": 78
+      "x": 0,
+      "y": 0
     },
     "subtitle_position": null,
-    "click_through_default": true,
+    "click_through_default": false,
     "petbody_mouth_gain": 1.1,
     "petbody_emotion_gain": 1,
     "petbody_framing": "half",
@@ -192,7 +192,10 @@
     "max_messages": 16,
     "persistent_history": true,
     "history_file": "../data/对话历史.json",
-    "token_budget": 12000
+    "history_token_budget": 8000,
+    "hard_trim_tokens": 24000,
+    "tool_result_max_chars": 12000,
+    "turn_tool_result_max_chars": 32000
   },
   "vmc": {
     "enabled": false,
@@ -202,6 +205,9 @@
   "tools": {
     "enabled": true,
     "auto_reload": false
+  },
+  "toolFilter": {
+    "enabled": false
   },
   "mcp": {
     "enabled": false,
@@ -219,7 +225,14 @@
   },
   "version": "v6.8.1",
   "cost": {
-    "quiet": true
+    "quiet": true,
+    "background_llm": true,
+    "local_memory": true,
+    "weekly_token_budget": 0
+  },
+  "diary": {
+    "local_enabled": false,
+    "_comment": "false=日记摘要走云端主模型（默认）；true 才走本地 llama.cpp:11435（MemOperator-4B，需先启动）。本地不可用时跳过、不回退云。"
   },
   "dispatch": {
     "ledger_v2": true,

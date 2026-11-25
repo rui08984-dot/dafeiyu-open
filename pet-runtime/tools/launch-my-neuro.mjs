@@ -681,6 +681,150 @@ async function startMemos() {
   console.log('[launcher] MemOS 记忆后端已启动 (' + MEMOS_PORT + ')');
 }
 
+// ── 本地记忆模型（llama-server 11435，可选）──────────────────────────────
+// ADR-014 轨道 2-10：片段卡/MemOS 抽取走本地 4B（MemOperator-4B，28K/q8），省云端配额。
+// **默认不自动拉起**（services.json 里 enabled=false）：28K/q8 要占 ~7GB，门禁/游戏期间
+// 抢显存会让拖拽/操控测试假红。要常驻时把 enabled 改成 true，重启 launcher 生效；
+// 临时用直接 `start-local-memory-llm.ps1 -Daily`。
+// 只允许 Daily 档自动启动：Batch/Long（turbo3 KV）实测结构化 JSON 会复读/乱码，见脚本头注释。
+let localLlmChild = null;
+let localLlmAttempts = 0;
+const LOCAL_LLM_ID = 'local-memory-llm';
+const LOCAL_LLM_PORT = portOf(LOCAL_LLM_ID, 11435);
+const LOCAL_LLM_HEALTH = healthUrlOf(LOCAL_LLM_ID, 'http://127.0.0.1:11435/health');
+const LOCAL_LLM_SCRIPT = join(appDir, 'scripts', 'start-local-memory-llm.ps1');
+// 手动暂停文件（2026-11-25 用户拍板）：`start-local-memory-llm.ps1 -Stop` 写、`-Daily` 删。
+// 存在 = 人说了「别开」：启动时跳过、watchdog 既不杀也不拉（否则门禁/手动停模型后
+// 2 分钟内就被自动拉回来抢显存）。
+const LOCAL_LLM_PAUSE = process.env.PET_LOCAL_LLM_PAUSE_FILE || join(logDir, 'local-llm.pause');
+const localLlmPaused = () => existsSync(LOCAL_LLM_PAUSE);
+
+async function startLocalMemory() {
+  if (localLlmPaused()) {
+    console.log('[launcher] 本地记忆模型：手动暂停中（local-llm.pause），跳过');
+    return;
+  }
+  const svc = MANIFEST.services.find((x) => x.id === LOCAL_LLM_ID);
+  if (!svc) return;                       // 没登记 = 不启用（保持旧行为）
+  if (svc.enabled === false) {
+    console.log('[launcher] 本地记忆模型：services.json enabled=false，跳过（需要时跑 -Daily）');
+    return;
+  }
+  if (await portUp(LOCAL_LLM_PORT)) { console.log('[launcher] 本地记忆模型已在运行，跳过'); return; }
+  if (!existsSync(LOCAL_LLM_SCRIPT)) { console.log('[launcher] 本地记忆模型启动脚本缺失，跳过'); return; }
+  // 2026-11-25 用户拍板「随宿主启停」：不再经 pwsh 脚本 Start-Process（那样 llama-server
+  // 会成为 pwsh 的孤儿子进程，launcher 死了它还活着占显存）。改问脚本要最终参数（-PrintArgs，
+  // 输出一行 JSON，含显存守门 skip 判定），然后**launcher 直接 spawn llama-server**——
+  // 它成为 launcher 的直接子进程，exit 处理器/killTree/taskkill /T 都能带走它。
+  let spec = null;
+  try {
+    const mode = (svc.start && Array.isArray(svc.start.args) && svc.start.args.includes('-Batch')) ? '-Batch'
+      : (svc.start && svc.start.args && svc.start.args.includes('-Long')) ? '-Long' : '-Daily';
+    const out = execSync('pwsh -NoProfile -File "' + LOCAL_LLM_SCRIPT + '" ' + mode + ' -PrintArgs',
+      { encoding: 'utf8', timeout: 30000, windowsHide: true });
+    const line = out.split('\n').map((s) => s.trim()).find((s) => s.startsWith('{'));
+    if (!line) throw new Error('PrintArgs 没输出 JSON：' + out.slice(0, 200));
+    spec = JSON.parse(line);
+  } catch (e) {
+    console.log('[launcher] 本地记忆模型参数获取失败（不启动，不影响宿主）：' + (e && e.message || e).slice(0, 160));
+    return;
+  }
+  if (!spec || spec.skip) {
+    console.log('[launcher] 本地记忆模型：显存守门跳过（' + ((spec && spec.reason) || '未知') + '）；后台任务会按 local_down 跳过，不烧云');
+    return;
+  }
+  localLlmChild = trackPid(spawn(spec.exe, spec.args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }));
+  localLlmChild.stdout.on('data', (d) => appendLog('[local-llm] ', d));
+  localLlmChild.stderr.on('data', (d) => appendLog('[local-llm] ', d));
+  localLlmChild.on('exit', (code) => {
+    // 非正常退出才重试（exit 0 = 显存守门/有意退出不重试；停机中 stop=true 也不重试）。
+    // 连续 3 次起不来（比如显存真不够 OOM）就放弃，避免 30s 一轮的空转刷日志。
+    if (!stop && code !== 0) {
+      localLlmAttempts += 1;
+      if (localLlmAttempts > 3) {
+        console.log('[launcher] 本地记忆模型连续 3 次退出(code=' + code + ')，放弃自动重启（下次 launcher 启动再试）');
+        return;
+      }
+      console.log('[launcher] 本地记忆模型退出(code=' + code + ') —— 不影响宿主；30 秒后重试');
+      setTimeout(startLocalMemory, 30000);
+    }
+  });
+  console.log('[launcher] 本地记忆模型已启动 (' + LOCAL_LLM_PORT + ')，后台等就绪…');
+  // 不阻塞宿主启动：90s 预热期（首次加载 2.4GB 模型 + CUDA）
+  (async () => {
+    for (let i = 0; i < 90; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      try {
+        const r = await fetch(LOCAL_LLM_HEALTH, { signal: AbortSignal.timeout(3000) });
+        if (r.ok) { console.log('[launcher] 本地记忆模型就绪 (' + LOCAL_LLM_PORT + ')'); return; }
+      } catch (_) { /* 预热中 */ }
+    }
+    console.log('[launcher] ⚠ 本地记忆模型 90s 未就绪（后台任务会按 local_down 跳过，不烧云）');
+  })().catch(() => {});
+}
+
+// ── 本地记忆模型：显存压力自动停 / 空闲自动重启（2026-11-25 用户拍板）────────
+// 用户场景：桌宠还开着，但正在打游戏/渲染 —— 模型占着 ~4.9GB 会把它挤进共享内存。
+// 判据不用「猜哪个是游戏」，只看**实际剩余显存**：
+//   · 模型活着 & free < autoStopFreeMiB（默认 600）连续 3 分钟 → 杀掉模型腾显存；
+//   · 模型不在 & 已过冷却（默认 10 分钟）& free ≥ restartFreeMiB（默认 5000）连续 2 分钟 → 自动拉起。
+// 这些阈值可在 services.json 的条目里覆盖（autoStopFreeMiB/restartFreeMiB/idleRestartMs）。
+const LOCAL_LLM_MON = { lowStreak: 0, highStreak: 0, suppressUntil: 0, lastFree: -1 };
+
+function gpuFreeMiB() {
+  try {
+    const out = execSync('nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits',
+      { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+    const n = parseInt(String(out).trim().split(/\r?\n/)[0], 10);
+    return Number.isFinite(n) ? n : -1;
+  } catch (_) { return -1; }
+}
+
+function startLocalMemoryWatchdog() {
+  const svc = MANIFEST.services.find((x) => x.id === LOCAL_LLM_ID);
+  if (!svc || svc.enabled === false) return;
+  const low = Number(svc.autoStopFreeMiB) || 600;
+  const high = Number(svc.restartFreeMiB) || 5000;
+  const coolMs = Number(svc.idleRestartMs) || 10 * 60 * 1000;
+  setInterval(() => {
+    if (stop) return;
+    // 手动暂停中（local-llm.pause 存在）：既不杀也不拉——显存压力再大也不动，
+    // 拉起更不允许。门禁/用户 -Stop 之后模型必须保持停着。
+    if (localLlmPaused()) return;
+    const free = gpuFreeMiB();
+    if (free < 0) return;
+    LOCAL_LLM_MON.lastFree = free;
+    const alive = localLlmChild && localLlmChild.exitCode === null;
+    if (alive) {
+      LOCAL_LLM_MON.highStreak = 0;
+      if (free < low) {
+        LOCAL_LLM_MON.lowStreak += 1;
+        if (LOCAL_LLM_MON.lowStreak >= 3) {
+          console.log('[launcher] 显存压力（free=' + free + 'MiB < ' + low + ' 连续 3 次）→ 暂停本地记忆模型，腾显存');
+          try { localLlmChild.kill(); } catch (_) { /* 杀不掉交给系统回收 */ }
+          LOCAL_LLM_MON.lowStreak = 0;
+          LOCAL_LLM_MON.suppressUntil = Date.now() + coolMs;
+        }
+      } else {
+        LOCAL_LLM_MON.lowStreak = 0;
+      }
+      return;
+    }
+    LOCAL_LLM_MON.lowStreak = 0;
+    if (Date.now() < LOCAL_LLM_MON.suppressUntil) return;   // 冷却期内不重启
+    if (free >= high) {
+      LOCAL_LLM_MON.highStreak += 1;
+      if (LOCAL_LLM_MON.highStreak >= 2) {
+        LOCAL_LLM_MON.highStreak = 0;
+        console.log('[launcher] 显存空闲（free=' + free + 'MiB ≥ ' + high + '）→ 重新拉起本地记忆模型');
+        startLocalMemory();
+      }
+    } else {
+      LOCAL_LLM_MON.highStreak = 0;
+    }
+  }, 60 * 1000).unref?.();
+}
+
 // ⚡ MemOS 挂起自愈（拍板：自动重启）。挂起=进程活着但不应答，exit-restart 抓不住——
 // 每 30s 探一次 /health（10s 超时，容忍嵌入时的重负载）；**连续 3 次失败**（约 90s 无应答）
 // 才杀掉——exit 处理器会 5 秒后自动 startMemos。刚启动给 90s 预热期不探。
@@ -963,8 +1107,10 @@ export async function boot() {
   await startVoiceprint();
   await startSemantic();
   await startMemos();
+  await startLocalMemory();
   startOllama();
   startMemosWatchdog();
+  startLocalMemoryWatchdog();
   startRendererWatchdog();
   startNotificationCollector();
   launch();

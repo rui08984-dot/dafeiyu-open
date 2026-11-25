@@ -46,6 +46,13 @@ if _MEMOS_ROOT not in sys.path:
 
 from utils.embedding_provider import apply_embedding_env_overrides, build_embedder, redact_secret
 
+# 示例句泄漏兜底（纯函数，见 memory_guard.py）：不能依赖模型「不照抄 prompt 示例」。
+try:
+    from memory_guard import is_example_leak
+except ImportError:  # 以包方式/非脚本方式导入时，补上 api 目录
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from memory_guard import is_example_leak
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -1636,7 +1643,7 @@ async def process_conversation_batch(conversation: str, context_summary: Optiona
         # 看起来像「这段对话没什么可记的」，实际是模型配置没加载，整条记忆链死了也没人知道。
         # （当天真实发生：恢复后手工起的 MemOS 没加载 llm.config，连续两个明显该记的对话都 added=0。）
         logger.error("[记忆提取] llm_config 为空 —— 记忆写入被跳过，检查 memos_config.json 的 llm.config")
-        return {"memories": [], "error": "llm_config_empty"}
+        return {"memories": [], "skipped_leak": 0, "error": "llm_config_empty"}
 
     # 构建模型列表
     models_to_try = []
@@ -1668,7 +1675,7 @@ async def process_conversation_batch(conversation: str, context_summary: Optiona
             })
 
     if not models_to_try:
-        return {"memories": []}
+        return {"memories": [], "skipped_leak": 0}
 
     import aiohttp
 
@@ -1708,24 +1715,26 @@ async def process_conversation_batch(conversation: str, context_summary: Optiona
 **分类优先级（如果可归入多个类型，选择优先级最高的）**：
 preference > fact > episodic > procedural > semantic > general
 
-**分类示例**：
-- "主人喜欢吃辣的食物" → preference（表达喜好）
-- "主人的生日是5月20日" → fact（个人信息）
-- "主人今天去了健身房锻炼" → episodic（具体事件）
-- "主人每天早上都会喝咖啡" → procedural（日常习惯）
-- "主人了解Python编程" → semantic（知识技能）
+**分类示例（只示范如何判断类型；示例文本是「示例占位」标记，严禁写进结果）**：
+- 「<示例占位：某人喜欢某类食物>」 → preference（表达喜好）
+- 「<示例占位：某人的生日是某月某日>」 → fact（个人信息）
+- 「<示例占位：某人某天去了某地做某事>」 → episodic（具体事件）
+- 「<示例占位：某人每天固定时间做某事>」 → procedural（日常习惯）
+- 「<示例占位：某人了解某个知识领域>」 → semantic（知识技能）
 
 {context_summary_section}
 
 当前待总结对话：
 {conversation}
 
-请返回 JSON：
+请返回 JSON。
+以下示例**仅示范 JSON 结构与字段**，严禁把示例内容写进结果；只输出「当前待总结对话」中真实出现的事实。
 {{"memories": [
-  {{"content": "主人喜欢吃辣的食物", "importance": 0.9, "memory_type": "preference", "tags": ["食物", "口味"]}},
-  {{"content": "主人今天去了健身房锻炼", "importance": 0.6, "memory_type": "episodic", "tags": ["健身", "运动"]}},
-  {{"content": "主人的生日是5月20日", "importance": 0.95, "memory_type": "fact", "tags": ["生日", "个人信息"]}}
+  {{"content": "「<示例占位：某人喜欢某类食物>」", "importance": 0.9, "memory_type": "preference", "tags": ["<标签1>", "<标签2>"]}},
+  {{"content": "「<示例占位：某人某天去了某地做某事>」", "importance": 0.6, "memory_type": "episodic", "tags": ["<标签1>"]}},
+  {{"content": "「<示例占位：某人的生日是某月某日>」", "importance": 0.95, "memory_type": "fact", "tags": ["<标签1>", "<标签2>"]}}
 ]}}
+若对话中没有任何可记事实，返回 {{"memories": []}}。
 """
 
     logger.info(f"[记忆提取] 输入对话 {len(conversation)} 字，预览: {conversation[:200].replace(chr(10), ' | ')}")
@@ -1798,6 +1807,7 @@ preference > fact > episodic > procedural > semantic > general
                             if not memories:
                                 logger.info(f"[记忆提取] {model_label} 模型返回空 memories（判定为无可记内容）")
                             valid_memories = []
+                            skipped_leak = 0
 
                             # 有效的记忆类型列表
                             valid_types = ['preference', 'fact', 'episodic', 'semantic', 'procedural', 'general']
@@ -1822,6 +1832,15 @@ preference > fact > episodic > procedural > semantic > general
                                         tags = []
 
                                     if len(content) >= 5:
+                                        # 2026-11-25 P1-4：占位符无条件丢弃；旧示例句只在
+                                        # 对话原文无支撑时丢弃（用户真说了同一句 → 放行）。
+                                        if is_example_leak(content, conversation):
+                                            logger.warning(
+                                                "[记忆提取] 丢弃示例句泄漏（模型把 prompt 示例当结果）: %r",
+                                                content
+                                            )
+                                            skipped_leak += 1
+                                            continue
                                         valid_memories.append({
                                             "content": content,
                                             "importance": importance,
@@ -1829,7 +1848,7 @@ preference > fact > episodic > procedural > semantic > general
                                             "tags": tags                  # 🔥 保留标签
                                         })
 
-                            return {"memories": valid_memories}
+                            return {"memories": valid_memories, "skipped_leak": skipped_leak}
 
             except asyncio.TimeoutError:
                 logger.warning(f"[记忆提取] {model_label} 超时 (第{attempt}次, {timeout_seconds}s)")
@@ -1841,7 +1860,7 @@ preference > fact > episodic > procedural > semantic > general
     # ⚠ 2026-11-13：这里原来裸返回 {"memories": []} —— 和「模型认为这段对话没内容可记」
     #   长得一模一样，/add 一律显示「无有效记忆」，等于记忆静默丢失。带上 error 让调用方能区分。
     logger.error("[记忆提取] 所有模型/重试均未成功（超时或报错），不是「没有可记的内容」")
-    return {"memories": [], "error": "all_models_failed",
+    return {"memories": [], "skipped_leak": 0, "error": "all_models_failed",
             "reason": "所有模型调用均超时或报错，这一轮记忆未写入；检查 memos_config.json 的 llm.config 与网络"}
 
 
@@ -1921,6 +1940,7 @@ async def add_memory(request: AddMemoryRequest):
         added_count = 0
         merged_count = 0
         skipped_count = 0
+        skipped_leak = 0
         preference_count = 0
         entity_count = 0
         added_memory_ids = []
@@ -1950,6 +1970,7 @@ async def add_memory(request: AddMemoryRequest):
                 "ok": False,
                 "added": 0,
                 "merged": 0,
+                "skipped_leak": 0,
                 "skipped_scaffold": scaffold_skipped,
                 "error": "无有效对话：messages 为空、全空白或全是程序脚手架",
                 "message": "无有效对话",
@@ -1975,6 +1996,8 @@ async def add_memory(request: AddMemoryRequest):
             full_conversation,
             context_summary=context_summary
         )
+        if isinstance(processed_result, dict):
+            skipped_leak += int(processed_result.get("skipped_leak") or 0)
 
         if processed_result.get("memories"):
             # 处理每条记忆
@@ -1995,6 +2018,13 @@ async def add_memory(request: AddMemoryRequest):
                     tags = []
 
                 if not content or len(content) < 5:
+                    continue
+
+                # 双保险：process_conversation_batch 已过滤；/add 直连写库前再挡一次。
+                # 传 full_conversation：旧示例句若在原文有支撑（用户真说过）仍放行。
+                if is_example_leak(content, full_conversation):
+                    logger.warning("[记忆提取] 丢弃示例句泄漏（/add 写库前兜底）: %r", content)
+                    skipped_leak += 1
                     continue
 
                 if importance < 0.3:
@@ -2137,6 +2167,8 @@ async def add_memory(request: AddMemoryRequest):
             result_parts.append(f"合并 {merged_count} 条")
         if skipped_count > 0:
             result_parts.append(f"跳过 {skipped_count} 条")
+        if skipped_leak > 0:
+            result_parts.append(f"丢弃示例 {skipped_leak} 条")
         if preference_count > 0:
             result_parts.append(f"提取偏好 {preference_count} 条")
         if entity_count > 0:
@@ -2174,6 +2206,7 @@ async def add_memory(request: AddMemoryRequest):
         print(f"   📝 新增记忆: {added_count} 条")
         print(f"   🔄 合并记忆: {merged_count} 条")
         print(f"   ⏭️ 跳过低重要度: {skipped_count} 条")
+        print(f"   🧹 丢弃示例句: {skipped_leak} 条")
         print(f"   💝 提取偏好: {preference_count} 条")
         print(f"   🕸️ 提取实体: {entity_count} 个")
         print(f"{'='*60}\n")
@@ -2186,6 +2219,7 @@ async def add_memory(request: AddMemoryRequest):
             "added": added_count,
             "merged": merged_count,
             "skipped": skipped_count,
+            "skipped_leak": skipped_leak,
             "skipped_scaffold": scaffold_skipped,
             "preferences_extracted": preference_count,
             "entities_extracted": entity_count
