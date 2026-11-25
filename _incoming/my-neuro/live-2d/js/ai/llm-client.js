@@ -1,5 +1,5 @@
 // llm-client.js - 统一的LLM API客户端
-const { logToTerminal, handleAPIError } = require('../api-utils.js');
+const { logToTerminal, handleAPIError, noteLlmNetworkFailure } = require('../api-utils.js');
 const { sanitizeToolMessageSequence } = require('./tool-message-utils.js');
 const { applyReasoningToRequestBody } = require('./reasoning-request.js');
 const promptLayout = require('../core/prompt-layout.js');
@@ -395,6 +395,9 @@ class LLMClient {
             if (!isMultimodalError) {
                 logToTerminal('error', `LLM API调用失败: ${error.message}`);
             }
+            // P0-2（2026-11-25）：重试已用尽后，把**传输层**最终失败记进 llm-health
+            // （status=0 退避）。每次重试都记会让退避阶梯提前打满，所以只在最外层记一次。
+            try { noteLlmNetworkFailure(error); } catch (e) { /* 记账失败不影响抛错 */ }
             throw error;
         }
     }

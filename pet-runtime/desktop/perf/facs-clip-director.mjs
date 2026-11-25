@@ -69,13 +69,47 @@ export const EMOTION_ALIASES = Object.freeze({
 });
 
 export const DIRECTOR_DEFAULTS = Object.freeze({
-  minEnergy: 150,          // 片段可迁移强度下限（实测中位 222；<150 基本是微动）
+  minEnergy: 150,          // 片段可迁移强度下限（实测中位 162；<150 基本是微动）
   weakBelow: 0.35,         // 情绪强度低于它就不演
   gapMs: 90 * 1000,        // 两次表演之间的全局间隔
   sameClipMs: 6 * 60 * 1000, // 同一段多久内不重复
   maxPer10Min: 4,          // 10 分钟最多演几次
   windowMs: 10 * 60 * 1000,
+  // ── 2026-11-25 P0 内容快胜（ADR-015 §3.0 组件 0.4，不改素材）────────────
+  // 审计 §2.2：minEnergy=150 时 47/97 段不可达、playful 只剩 1 段、top4 长中性段
+  // 吃掉 89% 播放。三条纯逻辑止血：
+  //   ① 稀缺情绪把能量门放宽到 minEnergy × relaxFactor（不放弃弱段，但排在强段之后）；
+  //   ② 时长预算 maxMs = f(intensity)：低强度只允许 ≤8s，高强度才放长段；
+  //   ③ 每段每日播放上限（内存计数，防 top4 垄断；跨重启清零可接受）。
+  relaxFactor: 0.5,        // 第二档能量门 = minEnergy × 0.5（75）
+  minPoolPerEmotion: 5,    // 每个情绪至少要有 5 段可用（不够就借 neutral 通用段，排最后）
+  maxPlaysPerClipPerDay: 8,
+  shortMs: 8000,
+  mediumMs: 12000,
+  longMs: 20000,
+  maxMs: 45000,
 });
+
+/**
+ * 时长预算（与 perf/director.mjs 同一口径；这里独立一份是为了片段导演可单测、
+ * 不依赖 director 的会话逻辑）。
+ * 低强度（≤0.4）只允许 ≤8s；0.4–0.8 逐步放宽；>0.8 才允许长段。
+ */
+export function maxMsForIntensity(intensity) {
+  const i = Number.isFinite(Number(intensity)) ? Math.max(0, Math.min(1, Number(intensity))) : 0;
+  if (i <= 0.4) return DIRECTOR_DEFAULTS.shortMs;
+  if (i <= 0.6) return DIRECTOR_DEFAULTS.mediumMs;
+  if (i <= 0.8) return DIRECTOR_DEFAULTS.longMs;
+  return DIRECTOR_DEFAULTS.maxMs;
+}
+
+/** 通用段（稀缺情绪的兜底）：neutral 的两组 label */
+const GENERIC_LABELS = Object.freeze(['自然放松', '思考专注']);
+
+function dayKeyOf(ms) {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
 
 /** 把各种写法归一到 6 类情绪键 */
 export function normalizeEmotion(name) {
@@ -150,7 +184,19 @@ export function createClipDirector(index, opts = {}) {
     playedAt: new Map(),     // clipId → ms
     recent: [],              // 最近播放时刻（用于 10 分钟上限）
     stats: { decisions: 0, played: 0, skipped: 0, byReason: {} },
+    // P0：每段每日播放上限（内存计数；跨重启清零可接受 —— 重启后 top4 也只是多播几次）
+    daily: { key: '', counts: new Map() },
   };
+
+  function rollDaily(now) {
+    const key = dayKeyOf(now);
+    if (state.daily.key !== key) state.daily = { key, counts: new Map() };
+    return state.daily;
+  }
+
+  function dailyCount(clipId) {
+    return Number(state.daily.counts.get(String(clipId)) || 0);
+  }
 
   const reason = (code, detail) => {
     state.stats.byReason[code] = (state.stats.byReason[code] || 0) + 1;
@@ -186,23 +232,64 @@ export function createClipDirector(index, opts = {}) {
     }
 
     const labels = EMOTION_TO_LABELS[emotion] || [];
+    // P0：时长预算（调用方可显式传 maxMs；否则由强度推）
+    const maxMs = Number.isFinite(Number(ctx.maxMs)) ? Math.max(1, Number(ctx.maxMs)) : maxMsForIntensity(intensity);
+    rollDaily(now);
     const pool = [];
+    let ownAvailable = 0;
+
+    /**
+     * 段能不能进候选池：时长门 + 日上限 + 同段冷却（冷却单独判，因为「可用性」统计不含它）。
+     * @returns {'added'|'cooldown'|'skip'}
+     */
+    const consider = (clip, label, labelRank, tier) => {
+      const energy = Number(clip.energy) || 0;
+      const duration = Number(clip.durationMs);
+      if (Number.isFinite(duration) && duration > 0 && duration > maxMs) return 'skip';
+      if (dailyCount(clip.id) >= cfg.maxPlaysPerClipPerDay) return 'skip';
+      const played = state.playedAt.get(clip.id) || 0;
+      // D6：同段冷却 × 倍率（>1 隔更久、<1 更快回来）；缺省 1。
+      const cooldownMult = tuneMultiplier(tune && tune.cooldownMultiplier, [clip.id, clip.label, emotion]);
+      if (played && now - played < cfg.sameClipMs * cooldownMult) return 'cooldown';
+      const priority = tuneMultiplier(tune && tune.segmentMultiplier, [clip.id, clip.label, emotion]);
+      pool.push({ clip, energy, labelRank, priority, tier, h: hash32(clip.id + ':' + seed) });
+      return 'added';
+    };
+
     for (const label of labels) {
       for (const c of byLabel.get(label) || []) {
         const energy = Number(c.energy) || 0;
-        if (energy < cfg.minEnergy) continue;
-        const played = state.playedAt.get(c.id) || 0;
-        // D6：同段冷却 × 倍率（>1 隔更久、<1 更快回来）；缺省 1。
-        const cooldownMult = tuneMultiplier(tune && tune.cooldownMultiplier, [c.id, c.label, emotion]);
-        if (played && now - played < cfg.sameClipMs * cooldownMult) continue;
-        const priority = tuneMultiplier(tune && tune.segmentMultiplier, [c.id, c.label, emotion]);
-        pool.push({ clip: c, energy, labelRank: labels.indexOf(label), priority, h: hash32(c.id + ':' + seed) });
+        // 两档能量门：强段（tier 0）永远排在放宽段（tier 1）之前。
+        // 放宽只救「稀缺情绪」（playful/星星眼/爱心眼这些整组 <150 的），不凑数到噪声段。
+        let tier = -1;
+        if (energy >= cfg.minEnergy) tier = 0;
+        else if (energy >= cfg.minEnergy * cfg.relaxFactor) tier = 1;
+        if (tier < 0) continue;
+        const duration = Number(c.durationMs);
+        const durationOk = !(Number.isFinite(duration) && duration > 0 && duration > maxMs);
+        const dailyOk = dailyCount(c.id) < cfg.maxPlaysPerClipPerDay;
+        if (durationOk && dailyOk) ownAvailable += 1;
+        consider(c, label, labels.indexOf(label), tier);
       }
     }
-    if (!pool.length) return reason('no-candidate', { emotion, labels });
 
-    // 排序：优先级（label 顺序 × 倍率）→ 能量 → 与上次不同 → 确定性 hash
+    // 稀缺兜底：本情绪（能量+时长+日上限之后）不足 minPoolPerEmotion 段时，
+    // 借 neutral 的通用段（自然放松/思考专注）补到 5 段；tier 9 = 永远排最后，
+    // 只在本情绪真的没段可演时才上（smug 这类素材总共只有 3 段）。
+    if (ownAvailable < cfg.minPoolPerEmotion) {
+      for (const label of GENERIC_LABELS) {
+        if (labels.includes(label)) continue;
+        for (const c of byLabel.get(label) || []) {
+          consider(c, label, labels.length + 1, 9);
+        }
+      }
+    }
+
+    if (!pool.length) return reason('no-candidate', { emotion, labels, maxMs, ownAvailable });
+
+    // 排序：档位（强段 > 放宽段 > 借用段）→ 优先级（label 顺序 × 倍率）→ 能量 → 与上次不同 → 确定性 hash
     pool.sort((a, b) => {
+      if (a.tier !== b.tier) return a.tier - b.tier;
       const aRank = (a.labelRank + 1) / a.priority;
       const bRank = (b.labelRank + 1) / b.priority;
       if (aRank !== bRank) return aRank - bRank;
@@ -217,7 +304,11 @@ export function createClipDirector(index, opts = {}) {
       clipId: pick.id,
       label: pick.label,
       reason: 'ok',
-      detail: { emotion, intensity: +Number(intensity).toFixed(2), energy: Number(pick.energy) || 0, durationMs: pick.durationMs },
+      detail: {
+        emotion, intensity: +Number(intensity).toFixed(2),
+        energy: Number(pick.energy) || 0, durationMs: pick.durationMs,
+        maxMs, tier: pool[0].tier, poolSize: pool.length,
+      },
     };
   }
 
@@ -230,6 +321,8 @@ export function createClipDirector(index, opts = {}) {
     state.lastLabel = clip ? clip.label : null;
     state.playedAt.set(clipId, now);
     state.recent.push(now);
+    rollDaily(now);
+    state.daily.counts.set(String(clipId), dailyCount(clipId) + 1);
     state.stats.played += 1;
   }
 
@@ -251,6 +344,55 @@ export function createClipDirector(index, opts = {}) {
         label,
         clips: (byLabel.get(label) || []).map((c) => ({ id: c.id, energy: c.energy, durationMs: c.durationMs })),
       }));
+    },
+    /**
+     * 诊断（P0）：每个情绪的**可用段数**（能量两档 + 时长门 + 日上限；不含冷却）。
+     * `performanceDebug().poolStats` 与验收脚本读这个 —— 「playful 从 1 → ≥5」是可量化的。
+     */
+    poolStats(nowMs, maxMs) {
+      const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+      rollDaily(now);
+      const capMs = Number.isFinite(Number(maxMs)) ? Math.max(1, Number(maxMs)) : DIRECTOR_DEFAULTS.maxMs;
+      const pass = (c) => {
+        const duration = Number(c.durationMs);
+        if (Number.isFinite(duration) && duration > 0 && duration > capMs) return false;
+        return dailyCount(c.id) < cfg.maxPlaysPerClipPerDay;
+      };
+      const emotions = {};
+      for (const emotion of Object.keys(EMOTION_TO_LABELS)) {
+        const labels = EMOTION_TO_LABELS[emotion] || [];
+        let tier0 = 0;
+        let tier1 = 0;
+        for (const label of labels) {
+          for (const c of byLabel.get(label) || []) {
+            if (!pass(c)) continue;
+            const energy = Number(c.energy) || 0;
+            if (energy >= cfg.minEnergy) tier0 += 1;
+            else if (energy >= cfg.minEnergy * cfg.relaxFactor) tier1 += 1;
+          }
+        }
+        let borrowed = 0;
+        if (tier0 + tier1 < cfg.minPoolPerEmotion) {
+          for (const label of GENERIC_LABELS) {
+            if (labels.includes(label)) continue;
+            for (const c of byLabel.get(label) || []) if (pass(c)) borrowed += 1;
+          }
+        }
+        emotions[emotion] = { tier0, tier1, borrowed, total: tier0 + tier1 + borrowed, labels };
+      }
+      const dailyTop = [...state.daily.counts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([id, count]) => ({ id, count, label: (clips.find((c) => c.id === id) || {}).label || '' }));
+      return {
+        maxMs: capMs,
+        minEnergy: cfg.minEnergy,
+        relaxedEnergy: cfg.minEnergy * cfg.relaxFactor,
+        minPoolPerEmotion: cfg.minPoolPerEmotion,
+        maxPlaysPerClipPerDay: cfg.maxPlaysPerClipPerDay,
+        emotions,
+        dailyTop,
+      };
     },
   };
 }

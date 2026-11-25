@@ -93,6 +93,15 @@ export const EXTERNALLY_OWNED = Object.freeze({
  */
 export const EXTERNALLY_OWNED_PARAMS = Object.freeze({
   ParamMouthOpenY: 'TTS 口型层',
+  // 2026-11-25 P0（ADR-015 §3.0）：ParamMouthForm 与 LeanInput 以前根本不在表里，
+  // 而它们各有 2 个以上写者 —— 于是「谁抢了谁」在运行期无法断言。
+  //   ParamMouthForm：LIP viseme + perf 的 mouthSmile/mouthFrown + v2 的 37 条轨
+  //   LeanInput：body-director 的前倾/后仰 + v2 头身轨
+  // 注意：ParamMouthForm 对 **perf 自己是共享的**（画像的嘴形通道就写它），
+  // 所以 perf 的越权断言要用 PERF_SHARED_OWNED_PARAMS 豁免，避免狼来了；
+  // v2 的越权断言不豁免（表演轨不该去抢口型层的基线）。
+  ParamMouthForm: 'TTS 口型层 / LIP viseme',
+  LeanInput: 'body-director（前倾后仰）',
   ParamEyeBallX: 'GazeFollow',
   ParamEyeBallY: 'GazeFollow',
   ParamAngleX: 'interaction-motion（头）',
@@ -109,6 +118,13 @@ export const EXTERNALLY_OWNED_PARAMS = Object.freeze({
   PositionZ: 'body-director（位移）',
   ParamBreath: 'body-director（呼吸）',
 });
+
+/**
+ * perf 层可以**共享**的外部所有权参数：画像里就有这些通道，perf 是合法写者。
+ * 只用于 perf 自己的越权断言（`findExternalOwnershipViolations` 结果做减法）；
+ * v2 的写入集不走这份豁免。
+ */
+export const PERF_SHARED_OWNED_PARAMS = new Set(['ParamMouthForm']);
 
 /**
  * 按运行时真实存在的参数裁剪画像。缺的通道直接摘掉，返回降级报告。

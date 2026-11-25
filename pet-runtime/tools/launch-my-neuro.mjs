@@ -22,6 +22,13 @@ const electron = join(appDir, 'node_modules', 'electron', 'dist', 'electron.exe'
 const logDir = resolve(here, '..', '.state');
 const logFile = join(logDir, 'my-neuro.out.log');
 const LOCK_PATH = process.env.PET_LAUNCHER_LOCK || join(logDir, 'launcher.lock');
+// 心跳写进 restart-pet.ps1 已经在重定向的同一个 stdout 文件，不另开日志；
+// 死因单独一个 JSON，供下次启动/排障直接用眼睛读。
+const OUT_LOG = process.env.PET_LAUNCHER_OUT || join(logDir, 'launcher.out.log');
+const DEATH_PATH = process.env.PET_LAUNCHER_DEATH || join(logDir, 'launcher-death.json');
+const HEARTBEAT_INTERVAL_MS = 60000;
+const HEARTBEAT_STALE_MS = 180000;     // 3 个心跳周期没更新 → 视为僵尸 launcher
+const PROCESS_STARTED_AT = Date.now();
 const SELF = fileURLToPath(import.meta.url);
 
 // Python 解释器统一走宿主的 runtime-paths（排除微软商店占位符），别裸 spawn('py')。
@@ -137,7 +144,9 @@ export function acquireInstanceLock(lockPath, opts = {}) {
   // （restart-pet 等 90s 后回退直起 electron，失去监督）。现在允许注入持有人校验。
   const isHolder = opts.isHolder ?? (() => true);
   const previous = readInstanceLock(lockPath);
-  if (previous && Number(previous.pid) !== Number(pid) && isAlive(previous.pid) && isHolder(previous)) {
+  // staleReason：boot() 已判定「pid 活着但不是 launcher / 心跳超时」时强制接管。
+  // 没有它时保持原语义：pid 活着且持有人校验通过就拒绝双开。
+  if (!opts.staleReason && previous && Number(previous.pid) !== Number(pid) && isAlive(previous.pid) && isHolder(previous)) {
     return { ok: false, reason: 'held', holder: previous };
   }
   const lock = {
@@ -172,6 +181,104 @@ export function releaseInstanceLock(lockPath, pid) {
   if (!cur) return false;
   if (Number(cur.pid) !== Number(pid)) return false;
   try { unlinkSync(lockPath); return true; } catch (e) { return false; }
+}
+
+/** 心跳同时刷新锁里的 heartbeatAt —— 陈旧判定需要「最后一口气」的时间。 */
+export function touchLockHeartbeat(lockPath, pid, now = Date.now()) {
+  const cur = readInstanceLock(lockPath);
+  if (!cur || Number(cur.pid) !== Number(pid)) return false;
+  try {
+    writeFileSync(lockPath, JSON.stringify({
+      ...cur,
+      heartbeatAt: now,
+      heartbeatAtISO: new Date(now).toISOString(),
+    }, null, 2));
+    return true;
+  } catch (e) { return false; }
+}
+
+// ── 心跳 / 死因 / 陈旧锁（2026-11-25）：纯函数，测试只碰临时目录 ──────────
+// 一行说明「还活着、活了多久、几个服务在线」，写进已有的 launcher.out.log。
+export function formatHeartbeatLine(opts = {}) {
+  const pid = Number(opts.pid) || 0;
+  const uptimeS = Math.max(0, Math.round((Number(opts.uptimeMs) || 0) / 1000));
+  const up = Math.max(0, Number(opts.servicesUp) || 0);
+  const total = Math.max(0, Number(opts.servicesTotal) || 0);
+  return '[launcher] heartbeat pid=' + pid + ' uptime=' + uptimeS + 's services=' + up + '/' + total;
+}
+
+/** 追加一行；任何失败只返回 false，绝不把 launcher 拖下水。 */
+export function safeAppendLine(file, line) {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    appendFileSync(file, String(line) + String.fromCharCode(10));
+    return true;
+  } catch (e) { return false; }
+}
+
+export function buildDeathRecord(opts = {}) {
+  const now = opts.now ?? Date.now();
+  const code = opts.code === undefined ? null : opts.code;
+  return {
+    at: new Date(now).toISOString(),
+    pid: Number.isInteger(Number(opts.pid)) ? Number(opts.pid) : null,
+    code,
+    signal: opts.signal || null,
+    reason: String(opts.reason || 'unknown'),
+    uptimeMs: Math.max(0, Math.round(Number(opts.uptimeMs) || 0)),
+    lastServiceSnapshot: (opts.serviceSnapshot && typeof opts.serviceSnapshot === 'object')
+      ? opts.serviceSnapshot : {},
+    previousPid: (opts.previousPid === undefined || opts.previousPid === null)
+      ? null : (Number.isInteger(Number(opts.previousPid)) ? Number(opts.previousPid) : null),
+  };
+}
+
+export function readDeathRecord(file) {
+  try { return JSON.parse(readFileSync(file, 'utf8')); } catch (e) { return null; }
+}
+
+/** 写死因：tmp + rename 原子替换，并发/断电不会留半截 JSON；失败只返回 false。 */
+export function writeDeathRecord(file, record) {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    const tmp = file + '.' + process.pid + '.tmp';
+    writeFileSync(tmp, JSON.stringify(record, null, 2));
+    renameSync(tmp, file);
+    return true;
+  } catch (e) {
+    try { if (existsSync(file + '.' + process.pid + '.tmp')) unlinkSync(file + '.' + process.pid + '.tmp'); } catch (e2) { /* 清理失败忽略 */ }
+    return false;
+  }
+}
+
+/**
+ * 陈旧锁判定（返回 null = 锁有效）。
+ * 三种陈旧：pid 已不存在 / pid 活着但不是本 launcher / 心跳超时（锁有 heartbeatAt 才算，
+ * 兼容旧版锁：没有心跳字段的老锁不因「启动很久」被误判）。
+ */
+export function classifyStaleLock(lock, opts = {}) {
+  if (!lock) return null;
+  const pid = Number(lock.pid);
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return { reason: 'pid-missing', pid: null, message: 'lock 里没有有效 pid' };
+  }
+  const isAlive = opts.isAlive || defaultIsPidAlive;
+  if (!isAlive(pid)) {
+    return { reason: 'pid-gone', pid, message: 'lock pid=' + pid + ' 不存在' };
+  }
+  if (typeof opts.isHolder === 'function' && !opts.isHolder(lock)) {
+    return { reason: 'not-launcher', pid, message: 'lock pid=' + pid + ' 活着但不是 launcher' };
+  }
+  const timeoutMs = Number(opts.heartbeatTimeoutMs) || 0;
+  if (timeoutMs > 0 && lock.heartbeatAt !== undefined && lock.heartbeatAt !== null) {
+    const hb = Number(lock.heartbeatAt);
+    const now = Number(opts.now) || Date.now();
+    if (Number.isFinite(hb) && (now - hb) > timeoutMs) {
+      const ageS = Math.round((now - hb) / 1000);
+      return { reason: 'heartbeat-timeout', pid, message: 'lock pid=' + pid + ' 心跳超时（' + ageS + 's 未更新）' };
+    }
+  }
+  return null;
 }
 
 // 时间窗失败计数 + 退避。**不再用「本轮存活时长」清零**：
@@ -422,6 +529,78 @@ function trackPid(child) {
 function persistPids() {
   if (!lockHeld) return;
   updateLockPids(LOCK_PATH, process.pid, [...spawnedPids]);
+}
+
+// ── 运行时观测：服务快照 / 心跳 / 死因（2026-11-25）──────────────────────
+let deathWritten = false;
+let previousPid = null;
+let exitReason = null;
+let pendingSignal = null;
+
+function serviceSnapshot() {
+  const items = [
+    ['electron', currentChild],
+    ['memos', memosChild],
+    ['local-llm', localLlmChild],
+    ['tts', ttsChild],
+    ['asr', asrChild],
+    ['loop', loopChild],
+    ['voiceprint', vpChild],
+    ['semantic', semChild],
+    ['ollama', ollamaChild],
+  ];
+  const pids = {};
+  let up = 0;
+  for (const [name, child] of items) {
+    const alive = !!(child && child.exitCode === null && !child.killed);
+    if (alive) { up += 1; pids[name] = child.pid; }
+  }
+  return { up, total: items.length, pids };
+}
+
+function recordDeath(reason, code = null, signal = null) {
+  if (deathWritten) return false;
+  deathWritten = true;
+  const rec = buildDeathRecord({
+    pid: process.pid,
+    code,
+    signal,
+    reason,
+    uptimeMs: Date.now() - PROCESS_STARTED_AT,
+    serviceSnapshot: serviceSnapshot(),
+    previousPid,
+    now: Date.now(),
+  });
+  const ok = writeDeathRecord(DEATH_PATH, rec);
+  if (!ok) {
+    try { console.warn('[launcher] 死因写入失败（不影响退出）:', DEATH_PATH); } catch (e) { /* 控制台都没了 */ }
+  }
+  return ok;
+}
+
+function startHeartbeat() {
+  const tick = () => {
+    try {
+      const snap = serviceSnapshot();
+      const line = formatHeartbeatLine({
+        pid: process.pid,
+        uptimeMs: Date.now() - PROCESS_STARTED_AT,
+        servicesUp: snap.up,
+        servicesTotal: snap.total,
+      });
+      if (!safeAppendLine(OUT_LOG, line)) {
+        // 心跳写失败不能阻断启动/服务：一行 warn 足够
+        try { console.warn('[launcher] 心跳写入失败（继续运行）:', OUT_LOG); } catch (e) { /* 忽略 */ }
+      }
+      touchLockHeartbeat(LOCK_PATH, process.pid);
+    } catch (e) {
+      try { console.warn('[launcher] 心跳异常（继续运行）:', (e && e.message) || e); } catch (e2) { /* 忽略 */ }
+    }
+  };
+  tick();
+  const timer = setInterval(tick, HEARTBEAT_INTERVAL_MS);
+  if (timer.unref) timer.unref();
+  return timer;
 }
 
 const portUp = (port) => new Promise((res) => {
@@ -1069,7 +1248,27 @@ export async function boot() {
 
   // ① 单实例锁：第二个 launcher 直接退出（缺陷 3）。锁里带 pid + 启动时间 + 子进程清单。
   //    pid 活着还要核对「它真是本 launcher」（镜像+启动时间），否则 pid 复用会永久挡住启动。
-  const got = acquireInstanceLock(LOCK_PATH, { isHolder: isRealLauncherHolder });
+  //    2026-11-25：先判「陈旧」并把理由写清（pid 不存在 / 不是 launcher / 心跳超时），
+  //    再让 acquireInstanceLock 带 staleReason 强制接管；旧锁 pid 留给 death.json 的 previousPid。
+  const previousLock = readInstanceLock(LOCK_PATH);
+  const oldDeath = readDeathRecord(DEATH_PATH);
+  if (oldDeath && oldDeath.reason) {
+    console.log('[launcher] 上次退出记录: at=' + (oldDeath.at || '?')
+      + ' pid=' + (oldDeath.pid ?? '?')
+      + ' code=' + (oldDeath.code ?? 'null')
+      + ' signal=' + (oldDeath.signal || 'null')
+      + ' reason=' + oldDeath.reason
+      + ' uptime=' + (Number(oldDeath.uptimeMs) || 0) + 'ms');
+  }
+  const stale = classifyStaleLock(previousLock, {
+    isAlive: defaultIsPidAlive,
+    isHolder: isRealLauncherHolder,
+    heartbeatTimeoutMs: HEARTBEAT_STALE_MS,
+    now: Date.now(),
+  });
+  if (stale) console.log('[launcher] 检测到陈旧锁，准备接管：' + stale.message);
+
+  const got = acquireInstanceLock(LOCK_PATH, { isHolder: isRealLauncherHolder, staleReason: stale && stale.reason });
   if (!got.ok) {
     const h = got.holder || {};
     if (got.reason === 'held') {
@@ -1080,18 +1279,49 @@ export async function boot() {
     process.exit(1);
   }
   if (got.previous && Number(got.previous.pid) !== Number(process.pid)) {
-    console.log('[launcher] 锁里是陈旧实例 pid=' + got.previous.pid + '（不是活着的本 launcher），已接管');
+    previousPid = Number(got.previous.pid);
+    console.log('[launcher] 锁里是陈旧实例 pid=' + got.previous.pid
+      + (stale ? '（' + stale.reason + '：' + stale.message + '）' : '（不是活着的本 launcher）')
+      + '，已接管');
   }
   lockHeld = true;
   spawnedPids.add(process.pid);
   persistPids();
+  // 启动即写一条基线死因：若这次被 taskkill /F（无任何退出钩子），下次启动至少能看到
+  // 「哪个 pid 在什么时候跑到哪一步」，而不是一条都没有。
+  try {
+    writeDeathRecord(DEATH_PATH, buildDeathRecord({
+      pid: process.pid, reason: 'running', uptimeMs: 0, serviceSnapshot: {}, previousPid, now: Date.now(),
+    }));
+  } catch (e) { /* 启动不因死因文件失败 */ }
+  startHeartbeat();
 
   // ② 只清理上一次「自己」留下的子进程（不再按端口杀别人的监听者）
   killStaleFromLock(got.previous);
 
-  process.on('exit', () => {
+  process.on('exit', (code) => {
+    // 死因先落盘（同步），再拆进程树：即使 taskkill 半路到来，也已有记录。
+    recordDeath(exitReason || 'exit', code, pendingSignal);
     for (const child of [currentChild, memosChild, ttsChild, asrChild, loopChild, vpChild, semChild, ollamaChild, notifyChild]) killTree(child);
     if (lockHeld) releaseInstanceLock(LOCK_PATH, process.pid);
+  });
+  // 信号：统一走 process.exit → 上面的 exit 钩子负责写 death.json/清锁。
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP']) {
+    try {
+      process.on(sig, () => {
+        pendingSignal = sig;
+        exitReason = 'signal:' + sig;
+        console.log('[launcher] 收到 ' + sig + '，准备退出');
+        process.exit(0);
+      });
+    } catch (e) { /* Windows 上个别信号不支持，忽略 */ }
+  }
+  // 未捕获异常：旧实现由 Node 直接崩，death.json 里只有空；现在先留证再退出（行为仍是退出）。
+  process.on('uncaughtException', (err) => {
+    exitReason = 'uncaught-exception:' + String((err && err.message) || err).slice(0, 200);
+    try { console.error('[launcher] 未捕获异常:', err); } catch (e) { /* 控制台不可用 */ }
+    recordDeath(exitReason, 1, null);
+    process.exit(1);
   });
 
   console.log('[launcher] app =', appDir);

@@ -286,5 +286,33 @@
       "noise_confidence_threshold": 0.35,
       "barge_defer_timeout_ms": 1500
     }
+  },
+  "network": {
+    "proxy_bypass": "commandcode.ai;*.commandcode.ai;localhost;127.0.0.1;<local>",
+    "proxy_bypass_note": "LLM 网关直连（Cloudflare 前置，直连 1-3s）；不依赖代理节点存活"
+  },
+  "performance": {
+    "scheduler": {
+      "enabled": true
+    },
+    "director": {
+      "enabled": true,
+      "dry_run": false,
+      "max_plays_per_day": 40,
+      "max_long_per_day": 12,
+      "max_per_10min": 2,
+      "min_reply_rate": 0.15
+    },
+    "ambient": {
+      "enabled": true,
+      "scale": 0.3
+    },
+    "program": {
+      "enabled": true,
+      "max_per_day": 2
+    },
+    "writer": {
+      "enabled": false
+    }
   }
 }

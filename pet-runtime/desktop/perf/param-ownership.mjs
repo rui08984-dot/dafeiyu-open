@@ -163,6 +163,89 @@ export function filterPinnedParams(params, pinned) {
   return { accepted, skippedPinned };
 }
 
+// ── v2 长表演的 exp3 锁 → 参数 id（2026-11-25 P0）────────────────────────
+// v2 的「脸红/流泪/流冷汗」不是参数轨道，而是 `setPerformanceFaces` 锁一张 exp3
+// （`cubism-renderer.mjs:117-174`），由 ExpressionManager 写 key7/key2/key13。
+// 这条路径绕过了 `filterPinnedParams`（它只过滤 perf 的 out.params）——
+// 用户手动点「脸红」pin 住 key7 后，9/15 段 v2 仍会因为剧情锁「脸红」而叠加。
+// 这里把「表情名 → 它会写的参数」变成数据，让 pin 过滤也覆盖 exp3。
+export const EXPRESSION_PARAM_LOCKS = Object.freeze({
+  脸红: ['key7'],
+  流泪: ['key2'],
+  流冷汗: ['key13'],
+});
+
+/**
+ * 表情锁的 pin 过滤：某个 exp3 会写的参数只要有一个被资产层 pin，就整张脸不锁。
+ * （key2/key7/key13 都是 0..1 的单通道，半张脸「锁一半」没有意义。）
+ *
+ * @param {string[]|Iterable<string>} names 本帧想锁的表情名
+ * @param {Set<string>|Iterable<string>|null|undefined} pinned 资产层已 pin 的参数
+ * @returns {{accepted: string[], skippedPinned: Array<{name:string, params:string[]}>}}
+ */
+export function filterPinnedExpressions(names, pinned) {
+  const accepted = [];
+  const skippedPinned = [];
+  const pinSet = pinned instanceof Set ? pinned : new Set(pinned ? Array.from(pinned) : []);
+  for (const raw of names || []) {
+    const name = String(raw);
+    const params = EXPRESSION_PARAM_LOCKS[name] || [];
+    const locked = params.filter((p) => pinSet.has(p));
+    if (locked.length) skippedPinned.push({ name, params: locked });
+    else accepted.push(name);
+  }
+  return { accepted, skippedPinned };
+}
+
+/**
+ * v2 本帧真正会写到的参数集合（`view.choreo` 加法 + `view.choreoOverride` 覆盖）。
+ *
+ * 为什么需要它：v2 绕过 mixer 直接写 Cubism 参数，`checkWriteSet` 以前只给 perf 用，
+ * 于是「v2 有没有写别人的参数」在运行期没有断言（审计叫它「所有权黑洞」）。
+ *
+ * 注意 AngleX/Y/Z 是**双写**：物理输入 `Angle*` + 骨头 `ParamAngle*`
+ * （见 cubism-renderer updateView 的 A/B 结论），两条都要算进写入集。
+ *
+ * @param {{choreo?:Record<string,number>, choreoOverride?:Record<string,number>}|null} view
+ * @returns {Set<string>}
+ */
+export function v2WriteSet(view) {
+  const out = new Set();
+  if (!view || typeof view !== 'object') return out;
+  for (const channel of ['choreo', 'choreoOverride']) {
+    const map = view[channel];
+    if (!map || typeof map !== 'object') continue;
+    for (const raw of Object.keys(map)) {
+      const id = String(raw);
+      const value = Number(map[raw]);
+      if (!Number.isFinite(value) || Math.abs(value) < 1e-6) continue;
+      out.add(id);
+      if (id === 'AngleX' || id === 'AngleY' || id === 'AngleZ') out.add('Param' + id);
+    }
+  }
+  return out;
+}
+
+/**
+ * 离线轨道 id → 运行期写入集（含 Angle* → ParamAngle* 双写）。
+ * 用于 `checkWriteSet('choreo', 写入集, { params: declared })`：声明来自编译数据，
+ * 写入来自本帧采样 —— 两边对不上就说明运行时凭空多写了参数。
+ */
+export function declaredChoreoParams(trackIds) {
+  const out = new Set();
+  for (const raw of trackIds || []) {
+    const id = String(raw);
+    out.add(id);
+    if (id === 'AngleX' || id === 'AngleY' || id === 'AngleZ') out.add('Param' + id);
+  }
+  return out;
+}
+
+/** v2 写入集的越权断言（薄封装，便于单测与 entry 共用同一口径） */
+export function checkChoreoWriteSet(view, declared) {
+  return checkWriteSet(OWNERSHIP_LAYER.CHOREO, v2WriteSet(view), { params: declaredChoreoParams(declared) });
+}
+
 /**
  * 把 perf 目标写进 renderer.defaults（跨帧基线），资产 pin 的参数跳过。
  *

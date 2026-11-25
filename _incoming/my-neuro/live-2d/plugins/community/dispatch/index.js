@@ -222,6 +222,10 @@ function probeAppSync(context, name) {
 //     返回 page/next/artifactPath，detail 只描述当前页；
 //   · 全文落 `data/tool-artifacts/`，模型可以继续 offset 取下一页，或 `file read` 读全文。
 const ARTIFACT_THRESHOLD_CHARS = 12000;
+// P0-1（2026-11-25 审计）：SoM 标注图的 base64 上限。正常图 ~180KB；
+// 超过 8MB（≈6MB 原图）的图进上下文没有收益，只会被下游 cap 保护性跳过 ——
+// 这里直接省略，让模型按 elements 的编号/坐标继续操作，并标注 imageTooLarge。
+const MAX_TOOL_IMAGE_BASE64 = 8 * 1024 * 1024;
 const PAGE_DEFAULTS = Object.freeze({ elements: 20, windows: 10, apps: 30 });
 // 单页硬上限的历史值（也是缺省值）：config.context.tool_result_max_chars 改小后，
 // 「单页 12000」会把刚改小的回执又撑回去，且 cap 再截一遍 → 「可续读」读不全。
@@ -349,6 +353,26 @@ function paginateToolResult(name, params, raw, opts) {
         pageSize = nextSize;
     }
     return payload;
+}
+
+/**
+ * SoM 标注图的产物整形（P0-1，纯函数）：补 `imageIsBase64`，超 8MB 只留元素清单。
+ * 返回**新对象**，不改后端结果；没有 image 字段时字段一个不加（旧回执形状不变）。
+ * @param {object} r
+ * @returns {object}
+ */
+function capToolImageResult(r) {
+    const out = Object.assign({}, r || {});
+    if (!out.image) return out;
+    if (typeof out.image === 'string' && out.image.length > MAX_TOOL_IMAGE_BASE64) {
+        delete out.image;
+        delete out.imageIsBase64;
+        out.imageTooLarge = true;
+        out.note = '标注图超过 8MB 上限，已省略图片；请按 elements 的编号/坐标继续操作';
+        return out;
+    }
+    out.imageIsBase64 = true;
+    return out;
 }
 
 class DispatchPlugin extends Plugin {
@@ -1372,6 +1396,16 @@ class DispatchPlugin extends Plugin {
                 //   index.js 也会把它改回 ok:true，AI 永远看到成功。
                 //   现在改成 r.ok 原样透传。
                 this.context.log(r.ok === false ? 'warn' : 'info', '[直控] ' + (r.ok === false ? '✗ ' : '✓ ') + String(r.detail || r.error || '').slice(0, 160));
+                // ── P0-3（2026-11-25）：verified:false 必须留一条 warn（含 reason）──────
+                // 为什么单独记：这类结果**动作已经发出去了、但验证通道明说「没法确认」**
+                // （遮挡 / 屏外 / 最小化 / 没有验证通道）。它既不是 not_sent（别重试会做两遍），
+                // 也不是 confirmed（别当成功）。日志里只有 ✓ 会让人误以为成了。
+                // 注意：不把整轮判失败 —— 交给模型决定是否重试（契约里 ok:false + action_sent:true）。
+                if (r && r.verified === false) {
+                    const why = String(r.reason || r.verifyReason || r.error || r.effect || 'unknown');
+                    this.context.log('warn', '[直控] 验证未通过（verified:false, reason=' + why + '）：'
+                        + String(r.detail || r.evidence || '').slice(0, 160));
+                }
                 // 记执行历史（供 skill save 切片）+ **自动累积经验**（2026-11-09 三十五轮）
                 //
                 // 原来只有 semantic 会落经验（game-control 里手写的一句 recordFromResult）。
@@ -1420,9 +1454,8 @@ class DispatchPlugin extends Plugin {
                 // 之前只把列出来的字段透传给 AI，后端算了但不在这份名单里的字段全丢——
                 // 表现就是「功能做了但 AI 拿不到」。现在改为**全量透传**：
                 // 后端返回什么就给什么，只补一个 imageIsBase64 标记。
-                return JSON.stringify(Object.assign({}, r, {
-                    ...(r.image ? { imageIsBase64: true } : {}),
-                }));
+                // P0-1：图片超过 8MB 上限时只回元素清单（imageTooLarge），不把巨图带进上下文。
+                return JSON.stringify(capToolImageResult(r));
             } catch (e) {
                 this.context.log('warn', '[直控] ✗ ' + action + ': ' + (e && e.message || e));
                 // 参数不合法 / 抛出异常 → 动作根本没发出去
@@ -2344,5 +2377,8 @@ DispatchPlugin.ARTIFACT_THRESHOLD_CHARS = ARTIFACT_THRESHOLD_CHARS;
 DispatchPlugin.PAGE_DEFAULTS = PAGE_DEFAULTS;
 // 第四轮 P2：file read 单页上限（纯函数，测试可直接断言 config → 上限映射）
 DispatchPlugin.fileReadPageCap = fileReadPageCap;
+// P0-1：SoM 标注图整形（8MB 上限 / imageIsBase64）纯函数，测试可直接断言
+DispatchPlugin.capToolImageResult = capToolImageResult;
+DispatchPlugin.MAX_TOOL_IMAGE_BASE64 = MAX_TOOL_IMAGE_BASE64;
 
 module.exports = DispatchPlugin;

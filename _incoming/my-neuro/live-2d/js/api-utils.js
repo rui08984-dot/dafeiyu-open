@@ -156,6 +156,70 @@ async function handleAPIError(response) {
     throw err;
 }
 
+// ── 后台/插件 LLM 的**网络失败**记账（P0-2，2026-11-25 审计）───────────────
+// 为什么需要：llm-health 的 `status===0` 退避分支在生产里没有 producer ——
+//   fetch reject / ECONNRESET / 超时都没有 HTTP 状态码，`handleAPIError` 只处理
+//   「已经拿到 Response」的 429/5xx，于是 `ensureCanRun` 永远放行，后台每个周期继续撞。
+//
+// 2026-11-25 收尾：**不能把任意 TypeError 当网络错误**。旧实现 `name==='TypeError'`
+//   直接返回 true，callLLM 内部一个编程错误（`x is not a function`）也会记一次
+//   status=0 → 后台被误熔断 5 分钟。现在只认：
+//     · message 命中网络/中断特征（fetch failed / Failed to fetch / ECONNRESET / …）；
+//     · error.code 在常见网络码集合里（含 undici 超时码与请求 deadline 的超时代码）。
+const NETWORK_ERROR_RE = /fetch failed|Failed to fetch|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|network|socket hang up|aborted/i;
+const NETWORK_ERROR_CODES = new Set([
+    // 系统网络错误
+    'ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT',
+    'ECONNABORTED', 'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH', 'ENETDOWN',
+    // undici（Node fetch）超时/连接类
+    'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
+    'UND_ERR_SOCKET', 'UND_ERR_CLOSED',
+    // 本仓请求 deadline（request-deadline.js）的超时：传输层没答，不是业务错误
+    'PLUGIN_LLM_TIMEOUT', 'REQUEST_TIMEOUT',
+]);
+
+/**
+ * 这个错误是不是「传输层网络失败」（没有 HTTP 状态码）。
+ * 纯编程型 TypeError（`x is not a function`）**不算** —— 否则会误熔断后台。
+ * @param {Error|*} err
+ * @returns {boolean}
+ */
+function isNetworkError(err) {
+    if (!err) return false;
+    // 有 HTTP 状态 = 服务端答了（429/5xx 由 handleAPIError 记，其它 4xx 不熔断）
+    if (Number(err.status) > 0) return false;
+    const code = String(err.code || '');
+    // 用户主动打断（AbortController）不是网络故障：否则每次打断都让后台停 5 分钟
+    if (err.name === 'AbortError' || code === 'ABORT_ERR') return false;
+    if (code && NETWORK_ERROR_CODES.has(code)) return true;
+    const msg = String(err.message || err || '');
+    return NETWORK_ERROR_RE.test(msg);
+}
+
+/**
+ * 把一次网络失败记进 llm-health（status=0 会走 5→10→20… 退避）。
+ * 同一条错误只记一次：插件层记过会打 `__llmHealthNoted`，调用方 catch 再记会被跳过 ——
+ * 否则一次失败计两次，退避阶梯会提前打满。
+ *
+ * @param {Error|*} err
+ * @returns {boolean} 是否真的记了
+ */
+function noteLlmNetworkFailure(err) {
+    try {
+        if (!isNetworkError(err)) return false;
+        if (err && err.__llmHealthNoted) return false;
+        require('./core/llm-health.js').llmHealth.noteFailure({
+            status: 0,
+            reason: 'network',
+            message: String((err && err.message) || err || 'network error').slice(0, 200),
+        });
+        try { err.__llmHealthNoted = true; } catch (e) { /* 冻结对象也允许记一次 */ }
+        return true;
+    } catch (e) {
+        return false;   // 熔断模块不可用不影响主链
+    }
+}
+
 // 统一的工具列表合并函数
 function getMergedToolsList() {
     let allTools = [];
@@ -212,5 +276,7 @@ module.exports = {
     logToTerminal,
     logToolAction,
     handleAPIError,
-    getMergedToolsList
+    getMergedToolsList,
+    isNetworkError,
+    noteLlmNetworkFailure,
 };

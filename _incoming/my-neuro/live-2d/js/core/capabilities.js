@@ -91,7 +91,14 @@ const CAPABILITIES = [
 
   // ── 演出（她自己动）─────────────────────────────────────────────────
   { id: 'perf.choreo_v1', name: '情绪微动作', group: '演出', kind: 'config', key: 'ui.petbody_choreo', default: false, hot: true, impl: 'pet-runtime/desktop/choreo-tracks.mjs', note: '2–4 秒，跟每句话的情绪；default 对齐代码（driver 用 === true，键缺失即关）。能力页/总览/托盘三个入口都会立即下发给皮套（2026-11-23 补下发）' },
-  { id: 'perf.long_v2', name: '自动演长戏', group: '演出', kind: 'config', key: 'ui.petbody_perf_auto', default: true, hot: true, impl: 'pet-runtime/desktop/choreo-auto.mjs', note: '19–38 秒；四层节流（强度 0.45 / 全局 4 分钟 / 同段 15 分钟 / 单会话 6 段）。能力页/总览/托盘同源，立即生效' },
+  { id: 'perf.long_v2', name: '自动演长戏', group: '演出', kind: 'config', key: 'ui.petbody_perf_auto', default: true, hot: true, impl: 'pet-runtime/desktop/choreo-auto.mjs', note: '19–38 秒；四层节流（强度门槛 / 全局冷却 / 同段冷却 / 单会话上限）由 choreo-auto 默认值决定，代码是唯一真源（本 note 不再写死数字，避免前后端漂移）。能力页/总览/托盘同源，立即生效' },
+  // 2026-11-25 P0（ADR-015 §4.2）：演出编排四件套。P0 只登记键与默认值（director 走 dry-run），
+  // 实现分别落在 P2 调度器 / P1 待机层 / P3 节目单；impl 暂不填，避免能力自检误报「声明了没实现」。
+  { id: 'perf.scheduler', name: '演出调度器', group: '演出', kind: 'config', key: 'performance.scheduler.enabled', default: true, hot: true, note: '已接线（relax 点抢占 + 收势 + 排队 + program/scenes 优先级）。关掉只回旧 arbiter 路径（调度/收势逐位一致）；导演/待机仍按各自开关生效' },
+  { id: 'perf.director', name: '演出导演', group: '演出', kind: 'config', key: 'performance.director.enabled', default: true, hot: true, impl: 'pet-runtime/desktop/perf/director.mjs', note: 'P1 已开闸（enabled=true + dry_run=false）：presence/密度门 + 日预算（只统计自动来源，手点不吃额度）；强度/预算阈值全部见 performance.director.*，不再复制默认值' },
+  { id: 'perf.ambient', name: '待机层（ambient）', group: '演出', kind: 'config', key: 'performance.ambient.enabled', default: true, hot: true, impl: 'pet-runtime/desktop/perf/ambient.mjs', note: 'P1 已接线：6 态待机 + 对数正态停留 + 加权池 + 程序化呼吸，幅度上限由 performance.ambient.scale 决定（默认 0.3 = 表演的 30%）' },
+  { id: 'perf.program', name: '节目单（连戏）', group: '演出', kind: 'config', key: 'performance.program.enabled', default: true, hot: true, note: 'P3 接线：跨段串戏（单条 ≤90 秒 / ≤3 段），日上限 performance.program.max_per_day' },
+  { id: 'perf.writer', name: '慢回路编剧', group: '演出', kind: 'config', key: 'performance.writer.enabled', default: false, hot: true, note: 'P4 才接线：每日/每 3 小时云端产节目单草案 + beat 规则，产物只写 programs/draft-*.json；默认 false，且永不进实时回路' },
   { id: 'perf.game_actions', name: '游戏动作注册', group: '演出', kind: 'plugin', key: 'community/game-actions', default: true, hot: true, note: '按 profile 动态注册动作工具；工具名随 profile 变，不占固定工具面' },
 
   // ── 模型 ──────────────────────────────────────────────────────────────

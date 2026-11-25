@@ -268,6 +268,153 @@ const MIN = 60 * 1000;
             H.llmHealth.noteSuccess();
             ok('成功后 background-llm 恢复可跑', BL.canRun({ getConfig: () => ({}) }, now).ok === true);
         }
+
+        // ═══════════════════════════════════════════════════════════════
+        // ⑫ P0-2（2026-11-25）：网络失败（status=0）必须有 producer
+        //    审计：llm-health 的 `status===0` 分支存在，但 fetch reject / 超时 /
+        //    ECONNRESET 没人记 → ensureCanRun 永远放行，后台每周期继续撞。
+        // ═══════════════════════════════════════════════════════════════
+        {
+            const api = require(path.join(LIVE, 'js', 'api-utils.js'));
+
+            // ── 判据（只认网络/中断特征或网络码；编程型 TypeError 不算）──
+            ok('isNetworkError: fetch failed / TypeError', api.isNetworkError(new TypeError('fetch failed')) === true);
+            ok('isNetworkError: ECONNRESET', api.isNetworkError(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })) === true);
+            ok('isNetworkError: 编程型 TypeError（x is not a function）**不算**网络错误',
+                api.isNetworkError(new TypeError('x is not a function')) === false);
+            ok('isNetworkError: 编程型 TypeError（Cannot read properties）不算',
+                api.isNetworkError(new TypeError('Cannot read properties of undefined (reading \'a\')')) === false);
+            ok('isNetworkError: AbortError（用户主动打断）不算网络错误',
+                api.isNetworkError(Object.assign(new Error('aborted'), { name: 'AbortError' })) === false);
+            ok('isNetworkError: code=ABORT_ERR 不算网络错误',
+                api.isNetworkError(Object.assign(new Error('aborted'), { code: 'ABORT_ERR' })) === false);
+            ok('isNetworkError: code=ENOTFOUND / ETIMEDOUT 认（即使 message 无特征）',
+                api.isNetworkError(Object.assign(new Error('boom'), { code: 'ENOTFOUND' })) === true
+                && api.isNetworkError(Object.assign(new Error('boom'), { code: 'ETIMEDOUT' })) === true);
+            ok('isNetworkError: 请求 deadline 超时（PLUGIN_LLM_TIMEOUT）算传输失败',
+                api.isNetworkError(Object.assign(new Error('Plugin LLM request timed out after 1000ms'),
+                    { name: 'TimeoutError', code: 'PLUGIN_LLM_TIMEOUT' })) === true);
+            ok('isNetworkError: 有 HTTP 状态 → 不算网络错误（429 走原路径）',
+                api.isNetworkError(Object.assign(new Error('LLM API error: 429'), { status: 429 })) === false);
+            ok('isNetworkError: 普通业务错误不误判', api.isNetworkError(new Error('bad json')) === false);
+
+            // ── status=0 退避分支可达 + 文案标明「网络错误」──
+            {
+                const { h, logs } = mk();
+                const now = Date.parse('2026-11-25T10:00:00Z');
+                const r = h.noteFailure({ status: 0, reason: 'network', message: 'fetch failed' }, now);
+                const st = h.getStatus();
+                ok('status=0 → source=backoff、退避 5 分钟',
+                    st.source === 'backoff' && st.nextAttemptAt === now + 5 * MIN, JSON.stringify({ source: st.source, at: st.nextAttemptAt - now }));
+                ok('status=0 → canCall 立即拒绝（reason=backoff）',
+                    h.canCall(now).ok === false && h.canCall(now).reason === 'backoff');
+                ok('status=0 的日志文案说明是网络错误', logs.some((m) => /网络错误/.test(m)), logs.join(' | ').slice(0, 80));
+                ok('noteFailure 返回 retryAt = 退避到点', r.retryAt === now + 5 * MIN, String(r.retryAt));
+                // 第二次网络失败 → 10 分钟（阶梯真的在走）
+                h.noteFailure({ status: 0, message: 'fetch failed' }, now);
+                ok('连续网络失败 5→10 分钟', h.getStatus().nextAttemptAt === now + 10 * MIN,
+                    String((h.getStatus().nextAttemptAt - now) / MIN));
+            }
+
+            // ── api-utils.noteLlmNetworkFailure：记账 + 同一错误只记一次 ──
+            {
+                const p = statePath();
+                H.llmHealth.resetForTests({ path: p });
+                // 编程型 TypeError 必须**不**记账（旧实现会把 callLLM 内部 bug 误判成网络故障，
+                // 后台被无谓熔断 5 分钟）
+                const progErr = new TypeError('x is not a function');
+                ok('noteLlmNetworkFailure：编程型 TypeError 不 noteFailure（状态保持空）',
+                    api.noteLlmNetworkFailure(progErr) === false
+                    && H.llmHealth.getStatus().consecutiveFailures === 0
+                    && H.llmHealth.canCall().ok === true);
+
+                const netErr = new TypeError('fetch failed');
+                const t0 = Date.now();
+                ok('noteLlmNetworkFailure 记一次（返回 true）', api.noteLlmNetworkFailure(netErr) === true);
+                const st = H.llmHealth.getStatus();
+                ok('共享熔断已进入 backoff（1 次失败）',
+                    st.consecutiveFailures === 1 && st.source === 'backoff', JSON.stringify({ n: st.consecutiveFailures, src: st.source }));
+                const waitMin = (st.nextAttemptAt - t0) / MIN;
+                ok('网络失败退避 ≈5 分钟', waitMin > 4.5 && waitMin < 5.5, waitMin.toFixed(2) + 'min');
+                ok('同一条错误再记一次被跳过（不重复计数）',
+                    api.noteLlmNetworkFailure(netErr) === false && H.llmHealth.getStatus().consecutiveFailures === 1);
+                ok('错误对象带 __llmHealthNoted（调用方 catch 再记会被 llm-health 跳过）',
+                    netErr.__llmHealthNoted === true);
+                ok('带着标记的错误再进 noteFailure 不计数',
+                    (H.llmHealth.noteFailure(netErr), H.llmHealth.getStatus().consecutiveFailures === 1));
+                ok('HTTP 429 错误不会被网络分支记账',
+                    api.noteLlmNetworkFailure(Object.assign(new Error('429'), { status: 429 })) === false
+                    && H.llmHealth.getStatus().consecutiveFailures === 1);
+            }
+
+            // ── 连败 5 次网络错误 → 停当天（与 HTTP 失败同一条规则）──
+            {
+                const p = statePath();
+                H.llmHealth.resetForTests({ path: p });
+                const now = Date.parse('2026-11-25T10:00:00Z');
+                for (let i = 0; i < 4; i += 1) H.llmHealth.noteFailure({ status: 0, message: 'fetch failed' }, now);
+                ok('4 次网络失败仍在 backoff（未停当天）', H.llmHealth.getStatus().source === 'backoff');
+                H.llmHealth.noteFailure({ status: 0, message: 'fetch failed' }, now);
+                ok('第 5 次网络失败 → day_stop', H.llmHealth.getStatus().source === 'day_stop',
+                    H.llmHealth.getStatus().source);
+                ok('day_stop 后 background-llm.canRun=false',
+                    BL.canRun({ getConfig: () => ({}) }, now).ok === false);
+                H.llmHealth.noteSuccess();
+                ok('成功清空后 canRun 恢复', BL.canRun({ getConfig: () => ({}) }, now).ok === true
+                    && H.llmHealth.getStatus().consecutiveFailures === 0);
+            }
+
+            // ── plugin-context.callLLM：fetch reject 真的落进熔断（端到端）──
+            {
+                const p = statePath();
+                H.llmHealth.resetForTests({ path: p });
+                const origFetch = global.fetch;
+                global.fetch = async () => { throw new TypeError('fetch failed'); };
+                let thrown = null;
+                try {
+                    await PC.PluginContext.prototype.callLLM.call({}, 'hi', {
+                        api_url: 'http://127.0.0.1:9/v1', api_key: 'k', model: 'm',
+                    });
+                } catch (e) { thrown = e; }
+                finally { global.fetch = origFetch; }
+                ok('callLLM 网络失败原样抛出（不吞错）', !!thrown && /fetch failed/.test(String(thrown.message)));
+                ok('callLLM 网络失败已记进 llm-health（status=0）',
+                    H.llmHealth.getStatus().consecutiveFailures === 1 && H.llmHealth.getStatus().source === 'backoff',
+                    JSON.stringify({ n: H.llmHealth.getStatus().consecutiveFailures, src: H.llmHealth.getStatus().source }));
+                ok('抛出的错误带 __llmHealthNoted（调用方再记不双计）', thrown && thrown.__llmHealthNoted === true);
+                ok('ensureCanRun/后台闸随即拒绝（同一份共享状态）',
+                    BL.ensureCanRun({ getConfig: () => ({}) }, { kind: 'probe-net' }).ok === false
+                    || BL.canRun({ getConfig: () => ({}) }).ok === false);
+            }
+
+            // ── plugin-context.callLLM：HTTP 429 也进熔断（旧实现整条路径无 producer）──
+            {
+                const p = statePath();
+                H.llmHealth.resetForTests({ path: p });
+                const origFetch = global.fetch;
+                global.fetch = async () => ({
+                    ok: false,
+                    status: 429,
+                    statusText: 'Too Many Requests',
+                    headers: { get: () => null },
+                    text: async () => '{"error":{"message":"rate limited"}}',
+                });
+                let thrown = null;
+                try {
+                    await PC.PluginContext.prototype.callLLM.call({}, 'hi', {
+                        api_url: 'http://127.0.0.1:9/v1', api_key: 'k', model: 'm',
+                    });
+                } catch (e) { thrown = e; }
+                finally { global.fetch = origFetch; }
+                ok('callLLM 429 错误对象形状不变（status 仍在）', !!thrown && thrown.status === 429, thrown && String(thrown.status));
+                ok('callLLM 429 也进 llm-health（backoff）',
+                    H.llmHealth.getStatus().consecutiveFailures === 1 && H.llmHealth.getStatus().source === 'backoff',
+                    JSON.stringify({ n: H.llmHealth.getStatus().consecutiveFailures, src: H.llmHealth.getStatus().source }));
+                ok('429 错误同样带 __llmHealthNoted（memory-evolve 再记不双计）',
+                    thrown && thrown.__llmHealthNoted === true
+                    && (H.llmHealth.noteFailure(thrown), H.llmHealth.getStatus().consecutiveFailures === 1));
+            }
+        }
     } finally {
         try { fs.rmSync(TMP_ROOT, { recursive: true, force: true }); } catch (e) { /* 清理失败不影响结论 */ }
     }

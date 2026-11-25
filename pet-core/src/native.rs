@@ -1756,19 +1756,59 @@ pub struct RegionGrayResult {
     pub width: i32,
     pub height: i32,
     pub us: u64,
+    /// 实际采样矩形（钳位之后）。留痕用：验证采错屏时一眼能看出来。
+    pub x0: i32,
+    pub y0: i32,
+    pub w0: i32,
+    pub h0: i32,
 }
 
+/// 兼容入口：不给显示器矩形 = 钳到**整个虚拟屏**（不再只认主屏）。
 pub fn region_gray(x: i32, y: i32, w: i32, h: i32) -> Result<RegionGrayResult, String> {
+    region_gray_in(x, y, w, h, None)
+}
+
+/// 带「目标显示器矩形」的局部灰度（2026-11-25 P0-3）。
+///
+/// 修的是什么：原实现用 `SM_CXSCREEN/SM_CYSCREEN`（主屏尺寸）并把 x/y `max(0)` ——
+/// 左侧副屏（负坐标）和移出主屏的窗口，采样坐标被钳到主屏左上，验证采的根本不是
+/// 目标窗口的像素。后果：遮挡/副屏场景下「region 变化」来自别的窗口（假成功），
+/// 静止桌面又被当成「没反应」（假 noop）。
+///
+/// 现在的钳位口径：
+///   · 调用方给了显示器矩形（dx,dy,dw,dh 来自 Electron 的物理像素并集）→ 钳到这块屏；
+///   · 没给 → 钳到虚拟屏（SM_XVIRTUALSCREEN / SM_CXVIRTUALSCREEN），支持负坐标。
+pub fn region_gray_in(
+    x: i32, y: i32, w: i32, h: i32,
+    clip: Option<(i32, i32, i32, i32)>,
+) -> Result<RegionGrayResult, String> {
     let t0 = std::time::Instant::now();
     if w < 16 || h < 16 || w > 4096 || h > 4096 {
         return Err(format!("区域尺寸非法：{}×{}", w, h));
     }
     // clamp 到屏幕内（BitBlt 对出屏区域的处理不可靠）
-    let (sw, sh) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
-    let x0 = x.max(0).min(sw - 1);
-    let y0 = y.max(0).min(sh - 1);
-    let w0 = w.min(sw - x0).max(16);
-    let h0 = h.min(sh - y0).max(16);
+    // SAFETY: GetSystemMetrics 只读系统参数。
+    let (vx, vy, vw, vh) = unsafe {
+        (
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        )
+    };
+    let (mut cx, mut cy, mut cw, mut ch) = match clip {
+        Some((dx, dy, dw, dh)) if dw >= 16 && dh >= 16 => (dx, dy, dw, dh),
+        _ => (vx, vy, vw, vh),
+    };
+    if cw <= 1 || ch <= 1 {
+        // 虚拟屏读不到（极少见：无显示器/安全桌面）→ 退回主屏，保持旧行为不乱采
+        let (sw, sh) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+        cx = 0; cy = 0; cw = sw; ch = sh;
+    }
+    let x0 = x.max(cx).min(cx + cw - 1);
+    let y0 = y.max(cy).min(cy + ch - 1);
+    let w0 = w.min(cx + cw - x0).max(16);
+    let h0 = h.min(cy + ch - y0).max(16);
 
     const CW: usize = 12;
     const CH: usize = 10;
@@ -1852,6 +1892,7 @@ pub fn region_gray(x: i32, y: i32, w: i32, h: i32) -> Result<RegionGrayResult, S
             width: w0,
             height: h0,
             us: t0.elapsed().as_micros() as u64,
+            x0, y0, w0, h0,
         })
     }
 }

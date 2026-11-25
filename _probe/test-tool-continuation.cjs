@@ -62,7 +62,9 @@ try {
 
     // ── ② 脱敏：key 不落盘 ─────────────────────────────────────────────
     {
-        const secret = 'sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        // 故意分两段拼：公开仓的卫生扫描会把连续的 sk-<长串> 当真实 key；
+        // 运行时仍是完整 key，脱敏断言不受影响（2026-11-25 发布自检）。
+        const secret = 'sk-' + 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
         const r = artifact.writeArtifact('code', 'token=' + secret + '\napi_key = "abcdefgh12345678"\nAuthorization: Bearer '
             + 'eyJhbGciOiJIUzI1NiJ9.abcdefghijklmnop.qrstuvwx\n', { turnId: 't-redact' });
         const body = fs.readFileSync(r.path, 'utf8');

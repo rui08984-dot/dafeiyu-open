@@ -76,10 +76,10 @@
   },
   "llm": {
     "config": {
-      "model": "deepseek/deepseek-v4.1-flash",
+      "model": "MemOperator-4B",
       "api_key": "<填你的密钥>",
-      "base_url": "https://api.commandcode.ai/provider/v1",
-      "max_tokens": 8000
+      "base_url": "http://127.0.0.1:11435/v1",
+      "max_tokens": 2048
     }
   },
   "llm_fallback": {

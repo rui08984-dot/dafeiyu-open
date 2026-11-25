@@ -416,11 +416,142 @@ function Invoke-Element([string]$titleSub, [string]$ridStr) {
     }
 }
 
+# ── 元素可观察状态回读（2026-11-25 P0-3）────────────────────────────────
+#
+# 为什么需要：click_element 走 UIA Invoke 时**不需要前台/可见性**，所以「点完看屏幕像素」
+# 验证的是另一块屏幕（遮挡/副屏/屏外时完全是别人的像素）。审计 P0-3 的修法是
+# 「首选回读 UIA：比较 ToggleState / Value / IsEnabled / 焦点 / 选中项 / 名称」。
+#
+# 身份：优先 RuntimeId（同一棵树内唯一）；没有 rid 时按 Name（+ ControlType）找 ——
+# som_annotate 的 marks 只带 name/type，没有 rid。
+#
+# 返回：{ok, found, name, ctype, enabled, offscreen, focused, toggleState, value,
+#        selected, expandState, iconic, x, y, w, h, pid, error}
+# 读不到的字段一律 $null（**不造假默认值**：造了会把「读不到」变成「没变化」）。
+function Get-ElementState([long]$hwndArg, [string]$ridStr, [string]$titleSub, [string]$nameQuery, [string]$ctypeQuery) {
+    $win = $null
+    if ($hwndArg -gt 0) {
+        $h = [IntPtr]$hwndArg
+        $sb = New-Object System.Text.StringBuilder 512
+        [void][WinEnum]::GetWindowTextW($h, $sb, 512)
+        $r = New-Object WinEnum+RECT
+        [void][WinEnum]::GetWindowRect($h, [ref]$r)
+        if (-not $sb.ToString() -and (($r.R - $r.L) -le 0) -and (($r.B - $r.T) -le 0)) {
+            return @{ ok = $false; found = $false; error = "hwnd $hwndArg 不是有效窗口（已关闭？）" }
+        }
+        $win = [pscustomobject]@{
+            hwnd = $hwndArg; title = $sb.ToString()
+            x = [int]$r.L; y = [int]$r.T; w = [int]($r.R - $r.L); h = [int]($r.B - $r.T)
+            iconic = [bool][WinEnum]::IsIconic($h)
+        }
+    } else {
+        if (-not $titleSub) { return @{ ok = $false; found = $false; error = '缺少 hwnd / title' } }
+        $wins = [WinEnum]::FindAll($titleSub)
+        if (-not $wins -or $wins.Count -eq 0) { return @{ ok = $false; found = $false; error = "没找到窗口：$titleSub" } }
+        $win = [WinEnum]::PickBest($wins)
+    }
+    if ($win.iconic) {
+        return @{ ok = $false; found = $true; iconic = $true; error = "「$($win.title)」最小化了——先聚焦" }
+    }
+    try {
+        $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$win.hwnd)
+        if (-not $root) { return @{ ok = $false; found = $false; error = 'FromHandle 返回空（窗口可能刚关闭）'; iconic = $false } }
+        $target = $null
+        # ① RuntimeId（同树唯一）
+        if ($ridStr) {
+            $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.Condition]::TrueCondition)
+            foreach ($el in $all) {
+                try {
+                    $rid = [int[]]$el.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::RuntimeIdProperty)
+                    if (($rid -join '-') -eq $ridStr) { $target = $el; break }
+                } catch { }
+            }
+        }
+        # ② Name（+ ControlType）：som_annotate 的 marks 没有 rid
+        if (-not $target -and $nameQuery) {
+            $cond = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::NameProperty, $nameQuery)
+            $hit = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+            if ($hit) { $target = $hit }
+            if (-not $target -and $nameQuery.Length -ge 16) {
+                # som_annotate 把名称截到 60 字；拼接/后缀场景用前缀兜底（只在长串时，降低误配）
+                $all2 = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                    [System.Windows.Automation.Condition]::TrueCondition)
+                foreach ($el in $all2) {
+                    try {
+                        $n = "$($el.Current.Name)"
+                        if ($n -and $n.StartsWith($nameQuery)) { $target = $el; break }
+                    } catch { }
+                }
+            }
+        }
+        if (-not $target) {
+            return @{
+                ok = $false; found = $false; iconic = $false
+                error = '元素不存在（窗口内容变了，重新 snapshot 拿新编号）'; stale = $true
+            }
+        }
+        if ($ctypeQuery) {
+            $ct0 = "$($target.Current.ControlType.ProgrammaticName)" -replace 'ControlType\.', ''
+            if ($ct0.ToLower() -ne $ctypeQuery.ToLower()) {
+                # 类型对不上 = 同名但不同控件；宁可不判，也别把别的控件状态当证据
+                return @{ ok = $false; found = $false; error = "同名元素类型不符（期望 $ctypeQuery，实际 $ct0）"; stale = $true }
+            }
+        }
+        $res = @{
+            ok = $true; found = $true; iconic = $false
+            name = "$($target.Current.Name)"
+            ctype = ("$($target.Current.ControlType.ProgrammaticName)" -replace 'ControlType\.', '').ToLower()
+            enabled = ($target.Current.IsEnabled -eq $true)
+            offscreen = ($target.Current.IsOffscreen -eq $true)
+            focused = ($target.Current.HasKeyboardFocus -eq $true)
+            toggleState = $null; value = $null; selected = $null; expandState = $null
+            pid = [int]$target.Current.ProcessId
+            x = 0; y = 0; w = 0; h = 0
+        }
+        try {
+            $rc = $target.Current.BoundingRectangle
+            $res.x = [int]$rc.X; $res.y = [int]$rc.Y; $res.w = [int]$rc.Width; $res.h = [int]$rc.Height
+        } catch { }
+        try {
+            $p = $null
+            if ($target.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$p)) {
+                $res.toggleState = "$($p.Current.ToggleState)"
+            }
+        } catch { }
+        try {
+            $p = $null
+            if ($target.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$p)) {
+                $v = "$($p.Current.Value)"
+                if ($v.Length -gt 200) { $v = $v.Substring(0, 200) }
+                $res.value = $v
+            }
+        } catch { }
+        try {
+            $p = $null
+            if ($target.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$p)) {
+                $res.selected = ($p.Current.IsSelected -eq $true)
+            }
+        } catch { }
+        try {
+            $p = $null
+            if ($target.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$p)) {
+                $res.expandState = "$($p.Current.ExpandCollapseState)"
+            }
+        } catch { }
+        return $res
+    } catch {
+        return @{ ok = $false; found = $false; error = "$($_.Exception.Message)" }
+    }
+}
+
 # ── 一次性模式 ─────────────────────────────────────────────────────
 if (-not $Serve) {
     switch ($Action) {
         'elements' { Write-Json (Get-Elements $Title $Max) }
         'click' { Write-Json (Invoke-Element $Title $Rid) }
+        'element_state' { Write-Json (Get-ElementState 0 $Rid $Title '' '') }
         'list' {
             $root = [System.Windows.Automation.AutomationElement]::RootElement
             $children = $root.FindAll([System.Windows.Automation.TreeScope]::Children,
@@ -486,6 +617,10 @@ while ($true) {
             $out = Write-Json (Get-Elements ([string]$p.title) ([int]($p.max + 0)) ([long]($p.hwnd + 0)))
         } elseif ($path -eq '/click') {
             $out = Write-Json (Invoke-Element ([string]$p.title) ([string]$p.rid))
+        } elseif ($path -eq '/element_state') {
+            # 元素可观察状态（2026-11-25 P0-3）：点击验证的「首选通道」。
+            # rid 优先；som_click 只有 name/type（marks 无 rid）→ 按 Name 找。
+            $out = Write-Json (Get-ElementState ([long]($p.hwnd + 0)) ([string]$p.rid) ([string]$p.title) ([string]$p.name) ([string]$p.ctype))
         } elseif ($path -eq '/focus') {
             # 2026-11-09 三十五轮新增：把聚焦做成毫秒级常驻操作。
             # 原来 game-control 的 focusWindow() 每次 spawn pwsh（300ms+ 启动开销），

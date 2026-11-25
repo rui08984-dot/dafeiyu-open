@@ -90,10 +90,10 @@
       },
       "max_tokens": {
         "title": "最大输出 Token",
-        "description": "画像分析输出 token 上限（云端 4000）",
+        "description": "画像分析输出 token 上限（2026-11-25 起 1200：候选观察 JSON 不需要 4000，旧值会被 finish_reason=length 截断）",
         "type": "int",
-        "default": 4000,
-        "value": 4000
+        "default": 1200,
+        "value": 1200
       },
       "timeout_seconds": {
         "title": "超时时间（秒）",

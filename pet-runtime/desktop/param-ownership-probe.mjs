@@ -45,11 +45,17 @@ export const CONFLICT_MIN_DELTA = 0.02;
  *
  * 真机基线（2026-11-18，宿主跑 100 秒）：不分类时有 15 条「冲突」，其中
  *   choreo+proc-motion / perf-override+blink / lip+perf-override 全是长表演的正常叠加
- * （加法偏置叠在待机摆动上、覆盖层是表演的最终裁决）；
+ *   （加法偏置叠在待机摆动上、覆盖层是表演的最终裁决）；
  * 只有 emotion-blend+expression-preset 那种「两个基础层都以为自己说了算」才是真抢写。
  * 混在一起判红，健康哨兵会永久红 —— 那就是狼来了，最后没人看。
+ *
+ * 2026-11-25 P0（ADR-015 §3.0 / 审计 §4.1 硬伤 2）：**choreo（v2 长表演的加法轨）
+ * 从白名单移除**。它绕过 mixer 直接写 Cubism 参数（Angle / Position / ParamEyeBall 系列），
+ * 把 blink/lip/proc-motion 的写入压掉是真实抢写，不是「同层内部的最终裁决」。
+ * 留在白名单里会让「冲突为 0」永远为真（假绿），叠层/节目单之前必须看见它。
+ * perf-override 仍保留：它是表演的最终覆盖层，语义上确实是最后一道。
  */
-const COMPOSING_LAYERS = new Set([LAYER.CHOREO, LAYER.PERF_OVERRIDE, LAYER.ACTION]);
+const COMPOSING_LAYERS = new Set([LAYER.PERF_OVERRIDE, LAYER.ACTION]);
 
 /** @param {string[]} owners */
 export function classifyConflict(owners) {

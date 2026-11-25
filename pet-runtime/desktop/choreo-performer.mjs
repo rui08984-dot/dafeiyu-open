@@ -200,14 +200,116 @@ export function lifeLayer(t) {
 /**
  * 建一个播放器实例。渲染层每帧调 sample()，把结果塞进 updateView 的 view。
  * 单实例单表演：start() 会顶掉当前表演（不做队列，避免「排队演戏」）。
+ *
+ * ── P2b（2026-11-25，ADR-015 §3.1 前提）──
+ * 旧实现只有 stop()（一帧硬切），于是「收势」无从谈起，且中途停止不补手势 exit
+ * （审计 §1.5/§2.4：竖指/抚胸/狗尾草资产会留在手上）。现在补三样：
+ *   · fadeOut(ms)：ms 内所有权重线性降到 0，然后 stop()（旧 stop 仍是立即硬切）；
+ *   · stop()：把「已进入但还没收回」的手势补成 exit 事件（有 exitDuration 就带上 fadeMs）；
+ *   · canCutAt(at, relaxPreempt)：给调度器查「现在能不能切」，sync 仍由调度器持有。
  */
 export function createPerformer(options = {}) {
   const envelope = options.envelope || performanceEnvelope;
   const life = options.life === false ? null : (options.life || lifeLayer);
+  const clock = typeof options.now === 'function' ? options.now : () => (
+    typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now());
   let cur = null;
+  // 停止时补发的手势 exit：等下一次 sample（或调用方 takeExits）取走再下发。
+  // 上限 8 条：一段戏最多 2 个手势，正常不会溢出；溢出说明有人忘了取。
+  let pendingExits = [];
 
-  function stop() {
+  function exitEventsFor(c, reason) {
+    const out = [];
+    if (!c) return out;
+    const gsteps = (c.data && c.data.gestureSteps) || [];
+    for (let i = 0; i < gsteps.length; i += 1) {
+      const g = gsteps[i];
+      const map = GESTURE_GROUP[g.name];
+      if (!map) continue;
+      const enterKey = `g${i}:in`;
+      const exitKey = `g${i}:out`;
+      // 只补「进过但没出过」的：已经正常收回的不重复发
+      if (!c.fired.has(enterKey) || c.fired.has(exitKey)) continue;
+      c.fired.add(exitKey);
+      const exitDuration = Number.isFinite(g.exitDuration) ? Math.max(0, g.exitDuration) : 0.6;
+      out.push({
+        group: map.group,
+        asset: map.asset,
+        on: false,
+        index: 1,
+        label: `${g.label || g.name}·收回（${reason || 'stop'}）`,
+        // 资产开关本身没有淡出 API；把作者的 exitDuration 带出去，宿主/资产层要淡出时用它
+        fadeMs: Math.round(exitDuration * 1000),
+        forced: true,
+      });
+    }
+    return out;
+  }
+
+  /** 取走待发的 exit（entry 每帧调一次；没有就是空数组，零分配语义） */
+  function takeExits() {
+    if (!pendingExits.length) return [];
+    const out = pendingExits;
+    pendingExits = [];
+    return out;
+  }
+
+  /**
+   * 立即停止（旧语义：一帧硬切）。**新增**：补发未收回的手势 exit。
+   * 返回本次补发的 exit 数组（同时进 pendingExits，sample 也会带出去）。
+   */
+  function stop(reason) {
+    if (!cur) return takeExits();
+    const exits = exitEventsFor(cur, reason || 'stop');
+    if (exits.length) pendingExits = pendingExits.concat(exits).slice(-8);
     cur = null;
+    return exits;
+  }
+
+  /**
+   * 收势：ms 内把本段所有权重线性降到 0，降到 0 时走 stop()（补发手势 exit）。
+   * ms<=0 等价 stop()。时间锚点取**第一次 sample 的 now** —— 单测/调用方
+   * 用的时钟不必和内部一致，也不会出现「fadeOut 时锚到另一个时钟」的漂移。
+   */
+  function fadeOut(ms) {
+    if (!cur) return false;
+    const dur = Math.max(0, Number(ms) || 0);
+    if (!(dur > 0)) { stop('fade'); return true; }
+    cur.fade = { ms: dur, at: null };
+    return true;
+  }
+
+  /** 已播毫秒（调度器/调试读；没有表演时 0） */
+  function elapsedMs(at) {
+    if (!cur) return 0;
+    const t = Number.isFinite(Number(at)) ? Number(at) : clock();
+    return Math.max(0, Math.round((t - cur.startedAt) * 10) / 10);
+  }
+
+  /**
+   * 给调度器查询「现在能不能切」。sync（relax 点）由调度器从 perf-sync.json 持有，
+   * 这里**不重复实现**，只把 elapsedMs 与调用方给的 relaxPreempt 对一下：
+   *   · 没有 relax 点 → atomic=true / canCut=false（只能等这一段结束）
+   *   · 已到/过了某个 relax 点 → canCut=true + 最近一个点的相对毫秒
+   * @param {number} at
+   * @param {number[]} [relaxPreempt] 允许抢占的 relax 点（相对本段起点的毫秒）
+   */
+  function canCutAt(at, relaxPreempt) {
+    if (!cur) return { active: false, elapsedMs: 0, atomic: false, nextRelaxMs: 0, canCut: false, fading: false };
+    const elapsed = elapsedMs(at);
+    const list = (Array.isArray(relaxPreempt) ? relaxPreempt : [])
+      .map((v) => Number(v))
+      .filter((v) => Number.isFinite(v) && v >= 0)
+      .sort((a, b) => a - b);
+    const next = list.find((v) => v >= elapsed - 1e-6);
+    return {
+      active: true,
+      elapsedMs: elapsed,
+      atomic: list.length === 0,
+      nextRelaxMs: next == null ? 0 : Math.round(next * 10) / 10,
+      canCut: next != null,
+      fading: Boolean(cur.fade),
+    };
   }
 
   /** 开始一段表演。返回 false 表示没有这段（名字写错）。 */
@@ -246,10 +348,17 @@ export function createPerformer(options = {}) {
     const t = (now - cur.startedAt) / 1000;
     const duration = Number(data.duration) || 0;
     if (t > duration + 0.4) {
-      cur = null;
+      stop('natural');
       return null;
     }
-    const w = envelope(t, duration);
+    // 收势权重：线性的 1 → 0（fadeOut 只在收势窗口里乘，不影响正常包络）
+    let fadeW = 1;
+    if (cur.fade) {
+      if (cur.fade.at == null) cur.fade.at = now;
+      fadeW = Math.max(0, 1 - (now - cur.fade.at) / cur.fade.ms);
+      if (fadeW <= 0) { stop('fade-out'); return null; }
+    }
+    const w = envelope(t, duration) * fadeW;
     const gain = cur.gain;
     const speaking = ctx.speaking === true;
 
@@ -320,7 +429,8 @@ export function createPerformer(options = {}) {
     }
 
     // 手势：进入/退出各触发一次（原生 motion 只播一遍，不能每帧重发）
-    const gestures = [];
+    // 先把「上一次 stop() 补发的 exit」带出去，再按时间轴发本帧进出。
+    const gestures = takeExits();
     const gsteps = data.gestureSteps || [];
     for (let i = 0; i < gsteps.length; i += 1) {
       const g = gsteps[i];
@@ -348,6 +458,7 @@ export function createPerformer(options = {}) {
       additive,
       override,
       overrideW: w * gain,
+      fadeW,
       expression: expressions[0] || null,
       expressions,
       gestures,
@@ -358,9 +469,21 @@ export function createPerformer(options = {}) {
     start,
     stop,
     sample,
+    fadeOut,
+    takeExits,
+    elapsedMs,
+    canCutAt,
     get active() { return !!cur; },
     get key() { return cur ? cur.key : ''; },
     get title() { return cur ? (cur.data.title || cur.key) : ''; },
+    /** 正在收势时非 0（剩余毫秒由调用方自己按 fadeOut 的 ms 推） */
+    get fading() { return Boolean(cur && cur.fade); },
+    /** 某段**声明**会写哪些参数（编译数据里的轨道 id）。用于所有权断言，不参与渲染。 */
+    params(key) {
+      const data = PERFORMANCES[String(key)];
+      if (!data) return [];
+      return (data.tracks || []).map((tr) => String(tr.id));
+    },
     list() {
       return PERFORMANCE_KEYS.map((k) => ({
         key: k,

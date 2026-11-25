@@ -173,11 +173,19 @@ function tokenFromKey(key) {
 /**
  * 用**已抽好的记忆 token** 判回复是否用了这条记忆（纯函数；noteUsed 走这条，
  * 因为落盘条目里只有 token key，没有记忆全文）。
+ *
+ * opt（2026-11-25 P1-2）：
+ *   · opts.role === 'assistant' → entity 通道不计（她自己的旧台词，共现是必然的「自引」）；
+ *     fragment（原样 ≥6 字）仍是强证据，不改口径。
+ *   · opts.query → 用户本轮这句话（查询词）里本来就有的内容 token 不算「引用了记忆」，
+ *     否则「回复重复了用户的问题」会被记成兑现。
  * @param {Array|string[]} memoryTokens token 对象数组或 token key 数组
  * @param {string} replyText
  * @param {string[]} [fragments] 旧的 ≥6 字片段（强信号）
+ * @param {{role?:string, query?:string}} [opts]
  */
-function judgeTokens(memoryTokens, replyText, fragments) {
+function judgeTokens(memoryTokens, replyText, fragments, opts) {
+  const o = opts || {};
   const reply = String(replyText == null ? '' : replyText);
   const normReply = normalizeText(reply);
   if (!normReply) {
@@ -194,13 +202,24 @@ function judgeTokens(memoryTokens, replyText, fragments) {
   }
 
   // ② entity：内容 token 共现
+  //
+  // 2026-11-25 P1-2（审计 §4 P1-6「双路口径」）：
+  //   · role=assistant 的条目是**她自己说过的旧台词**，新回复与它共现是自引而不是
+  //     「想起了旧事」——entity 通道直接不算（fragment 已在 ① 命中，口径不变）。
+  //   · 查询词（用户本轮这句话）里本来就有的 token 不算：回复顺着用户的话复述
+  //     「你在青岚湖…」不等于她引用了记忆。调用方通过 noteInjected({query}) 传入。
+  if (String(o.role || '') === 'assistant') {
+    return { used: false, verdict: 'not-used', method: null, reason: 'assistant-self-reference', tokens: [], fragment: null };
+  }
   const memTokens = (Array.isArray(memoryTokens) ? memoryTokens : [])
     .map((t) => (t && typeof t === 'object' ? t : tokenFromKey(t)))
     .filter(Boolean);
   if (!memTokens.length) {
     return { used: false, verdict: 'not-used', method: null, reason: 'no-memory-tokens', tokens: [], fragment: null };
   }
-  const hits = intersectTokens(memTokens, entityTokens(reply));
+  const queryKeys = o.query ? new Set(entityTokens(String(o.query)).map((t) => t.key)) : null;
+  const hits = intersectTokens(memTokens, entityTokens(reply))
+    .filter((t) => !(queryKeys && queryKeys.has(t.key)));
   if (!hits.length) {
     return { used: false, verdict: 'not-used', method: null, reason: 'no-entity-overlap', tokens: [], fragment: null };
   }
@@ -218,8 +237,8 @@ function judgeTokens(memoryTokens, replyText, fragments) {
 }
 
 /** 便捷入口：直接给记忆原文。单测与 memory-recall 对账都可用。 */
-function judgeUsage(memoryText, replyText, fragments) {
-  return judgeTokens(entityTokens(memoryText), replyText, fragments);
+function judgeUsage(memoryText, replyText, fragments, opts) {
+  return judgeTokens(entityTokens(memoryText), replyText, fragments, opts);
 }
 
 const CLAUSE_SPLIT = /[\s，。！？!?；;、,.~～…—\-—()\[\]{}"'“”‘’《》<>|/\\]+/u;
@@ -556,7 +575,8 @@ function createMemoryUsage(options = {}) {
     }
 
     if (!ids.length) return { ok: true, ids: [], batchId: null, added: 0, error: null };
-    pending = { ids, batchId, at, turnId };
+    // P1-2（2026-11-25）：记下本轮注入的**用户查询**，结算时把查询词本身的共现剔除。
+    pending = { ids, batchId, at, turnId, query: String(args.query || '').slice(0, 200) };
     const ok = save();
     return { ok, ids, batchId, added, error: lastError || null };
   }
@@ -585,6 +605,8 @@ function createMemoryUsage(options = {}) {
     const ids = explicitIds || (current ? current.ids.slice() : []);
     const batchId = String(args.batchId || (current && current.batchId) || '');
     const text = String(args.text == null ? '' : args.text);
+    // 查询词：显式参数优先，其次沿用本轮注入时记下的那句（P1-2）。
+    const query = String(args.query != null ? args.query : ((current && current.query) || ''));
 
     if (!ids.length) return { ok: true, checked: 0, matched: [], used: 0, verdict: 'unknown', reason: 'no-ids' };
     if (current && at - Number(current.at || 0) > PENDING_TTL_MS) {
@@ -612,7 +634,7 @@ function createMemoryUsage(options = {}) {
       const tokens = entry.tokens && entry.tokens.length
         ? entry.tokens
         : entityTokens(entry.preview || '');
-      const verdict = judgeTokens(tokens, text, entry.fragments);
+      const verdict = judgeTokens(tokens, text, entry.fragments, { role: entry.role, query });
       if (!verdict.used) continue;
       entry.used = (Number(entry.used) || 0) + 1;
       entry.lastUsedAt = at;

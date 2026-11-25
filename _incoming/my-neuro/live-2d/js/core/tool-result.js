@@ -34,7 +34,18 @@ function parse(value) {
                 const j = JSON.parse(s);
                 return (j && typeof j === 'object') ? j : { ok: true, value: j };
             } catch (e) {
-                return { ok: true, text: s };
+                // 2026-11-25 P1-5：`{`/`[` 开头但 JSON.parse 失败 = **被截断/损坏的 JSON**，
+                // 不是成功。旧实现返回 {ok:true,text}，于是 tool-executor 走成功分支、
+                // telemetry 记 tool.end，模型拿到半截 JSON 还以为是完整回执。
+                // 现在显式判失败（不 throw，不打断整轮），raw 保留前 500 字便于排障；
+                // text 保留全文只为兼容既有调用方（判成败只看 ok/parseError）。
+                return {
+                    ok: false,
+                    parseError: true,
+                    truncated: true,
+                    raw: s.slice(0, 500),
+                    text: s,
+                };
             }
         }
         return { ok: true, text: s };
@@ -56,6 +67,11 @@ function isFailure(value) {
 /** 失败原因。**失败时这个字符串必须非空**（A3 的核心契约）。 */
 function detailOf(value) {
     const v = parse(value) || {};
+    // 2026-11-25 P1-5：截断 JSON 没有 detail/error，但 raw 就是原因本身——
+    // 不补这句会触发 backfilled（「失败却没原因」），模型也不知道是 JSON 坏了。
+    if (v.parseError === true) {
+        return ('JSON 解析失败（可能被截断）：' + String(v.raw || '')).slice(0, MAX_DETAIL);
+    }
     const raw = v.detail || v.error || v.message || v.reason || v.text || '';
     return String(raw).trim().slice(0, MAX_DETAIL);
 }

@@ -9,6 +9,9 @@
 const __silentAudit = require('../../core/silent-audit.js');
 const { logToTerminal } = require("../../api-utils.js");
 const { createEmotionBridge } = require("./actions-bridge.js");
+// 12 段场景台词单一真源（2026-11-25 P3b）：以前这里和 js/ui/ui-controller.js
+// 各写一份只有 6 段的硬编码表，另外 6 段点了不出字幕。现在两边 require 同一份。
+const { SCENE_LINES: SCENE_HINT } = require('../../core/scene-lines.js');
 
 // 「一起看」耳朵的暂停开关：她自己说话时不能录，
 // 否则回环会把她的 TTS 录进去，再被识别成「用户在说话」——自激。
@@ -617,7 +620,7 @@ function installSayBridge(context, dbg) {
           const steps = global.petBody.perform ? global.petBody.perform(msg.name) : false;
           dbg("perform " + msg.name + " → " + steps + " 步");
           if (steps && msg.hint !== false && global.showSubtitle) {
-            const SCENE_HINT = { '打招呼': '哟，来了。', '撒娇': '……你就不能多陪我一会儿嘛。', '生气': '哼，你自己玩去吧。', '难过': '……算了，没事。', '得意': '怎么样，服不服。', '晚安': '睡了，别熬夜。' };
+            // 台词表在文件顶部 require（js/core/scene-lines.js，单一真源）
             try { global.showSubtitle(SCENE_HINT[msg.name] || '', 3200); } catch (e) { try { __silentAudit.audit('driver.js:478', e); } catch (e2) {} }
           }
         } catch (e) { dbg("perform failed: " + (e && e.message || e)); }
@@ -852,6 +855,15 @@ try { require("./ui.js"); } catch (e) { logToTerminal("warn", "[PetBody] ui.js �
         if (typeof body.setPerformanceAuto === 'function') body.setPerformanceAuto(perfAutoOn);
         dbg('[perf-auto] 初始 = ' + perfAutoOn);
       } catch (e) { try { __silentAudit.audit('driver.js:perf-auto-init', e); } catch (e2) {} }
+      // 演出编排配置（2026-11-25 P0，ADR-015 §4.1）：director dry-run / ambient / program /
+      // scheduler 整组下发。缺键由 perf/director.mjs 的默认值兜底（enabled=false + dry_run=true
+      // = 只写 perf.request，不拦任何表演）。不读 config 就永远拿不到 Pi/控制中心的改动。
+      try {
+        const perfCfg = (context && context.config && context.config.performance) || null;
+        if (typeof window !== 'undefined') window.__petPerformanceConfig = perfCfg;
+        if (typeof body.setPerformanceConfig === 'function') body.setPerformanceConfig(perfCfg);
+        dbg('[perf-config] ' + JSON.stringify((perfCfg && perfCfg.director) || null));
+      } catch (e) { try { __silentAudit.audit('driver.js:perf-config-init', e); } catch (e2) {} }
       stage("ready");
       try { installGaze(require('electron').remote ? require('electron').remote.getCurrentWindow() : null); } catch (e) { dbg('gaze install skipped: ' + (e && e.message || e)); }
       try { global.currentModel = body.renderer; } catch (e) { try { __silentAudit.audit('driver.js:661', e); } catch (e2) {} }

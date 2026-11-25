@@ -6,12 +6,21 @@ import { JellyfishRenderer } from './cubism-renderer.mjs';
 import { applyAsset, getState, listAssets, listPresets, applyPreset, currentPreset, applyAssetValue, getPinnedAssetParams } from './asset-toggles.mjs';
 import { createPetBodyUi } from './ui/petbody-ui.mjs';
 import { createEmotionEngine, blendParam, EMOTIONS, bindCanvasListeners } from './emotion-engine.mjs';
-import { createPerfEngine, buildProfile, PROFILE_SPECS, EXTERNALLY_OWNED, EXTERNALLY_OWNED_PARAMS } from './perf/index.mjs';
+import { createPerfEngine, buildProfile, PROFILE_SPECS, EXTERNALLY_OWNED, EXTERNALLY_OWNED_PARAMS, PERF_SHARED_OWNED_PARAMS } from './perf/index.mjs';
 import { selectPhysicsOutputTargets } from './perf/param-commit.mjs';
 import { classifyParam } from './perf/physics-io.mjs';
 import { findExternalOwnershipViolations } from './param-ownership-probe.mjs';
 import { createPerformanceArbiter, buildPerformanceStatus } from './perf/performance-arbiter.mjs';
-import { checkWriteSet, writePerfParams, detectExternalPins, SHARED_ASSET_PARAM_SET } from './perf/param-ownership.mjs';
+// P2b（2026-11-25，ADR-015 §3.1）：调度器只管「什么时候换人」（排队/relax 抢占/收势），
+// claim 仍由 perfArbiter 单点持有。performance.scheduler.enabled !== true 时根本不创建它。
+import { createScheduler, loadSync as loadPerfSync, syncFor as selectPerfSync } from './perf/perf-scheduler.mjs';
+// P3a（2026-11-25，ADR-015 §3.5）：节目单运行器。只依赖注入的 scheduler/播放器/台词/音效，
+// 抢占与收势仍归调度器；scheduler 关着时 playProgram 直接返回 scheduler-off（不偷偷走旧路径）。
+import { createProgramRunner } from './perf/program-runner.mjs';
+import { checkWriteSet, writePerfParams, detectExternalPins, SHARED_ASSET_PARAM_SET, filterPinnedExpressions, checkChoreoWriteSet } from './perf/param-ownership.mjs';
+import { readPresence } from './perf/presence.mjs';
+import { decide as directorDecide, gate as directorGate, resolvePerformanceConfig, PERFORMANCE_DEFAULTS, budgetsFromSummary } from './perf/director.mjs';
+import { createAmbient } from './perf/ambient.mjs';
 import { expressionAffect } from './pad-expression.mjs';
 import { validateRanges } from './perf/param-inventory.mjs';
 import { GazeFollow } from './ui/gaze.mjs';
@@ -114,7 +123,10 @@ export function createPetBody(canvas, options = {}) {
     if (nowMs - _tuneCache.at < 30000) return _tuneCache.value;
     let value = null;
     try { value = choreoTune.loadTuning(); } catch (e) { value = null; }
-    _tuneCache = { at: nowMs, value };
+    // P1：loadTuning 已改为「先回上次值 + 异步重算」。首次调用会拿到 reason='warming'
+    // 的空表 —— 这时候不要缓存 30 秒，否则启动后半分钟都不调参。
+    const warming = Boolean(value && value.meta && value.meta.reason === 'warming');
+    _tuneCache = { at: warming ? 0 : nowMs, value };
     return value;
   }
   // 自动触发器（2026-11-16）：情绪驱动的节流决策 + 冷却记账。决策逻辑在 choreo-auto.mjs。
@@ -123,6 +135,41 @@ export function createPetBody(canvas, options = {}) {
   const perfIdle = { lastSpeakingAt: (typeof performance !== 'undefined' ? performance.now() : Date.now()), lastCheckAt: 0 };
   // 情绪到位通道（v3.1）：引擎算出的强情绪先暂存，等这句说完再演
   const perfEmo = { lastKey: '', lastAt: 0, pending: null, lastYieldAt: 0 };
+
+  // ── 导演层（2026-11-25 P0，ADR-015 §3.3）────────────────────────────────
+  // presence/density 门：默认 **dry-run**（只写 perf.request，不拦任何表演）。
+  // 配置来源优先级：window.__petPerformanceConfig（driver 下发）> 默认值。
+  // 不做每帧决策：只在「本来就要 consider」的那几个点问一次（T1 说话沿 / T2 情绪到位 /
+  // T3 空闲 20s 一次 / clip 峰值 2s 一次 / clip 空闲 8min 一次）。
+  const perfDirector = {
+    cfg: resolvePerformanceConfig(null),
+    lastDecision: null,
+    lastAt: 0,
+  };
+  // perf.request 日志去重（2026-11-25 P1 真机实测）：启动打招呼时 TTS 分段让
+  // speaking 反复上升沿，3 秒内写了 6 条 auto:speech —— 决策照算，只是少写日志。
+  const perfRequestLogAt = new Map();
+  const perfSkipLogAt = new Map();
+  const PERF_REQUEST_LOG_GAP_MS = 2000;
+  const PERF_SKIP_LOG_GAP_MS = 10000;
+  // 会话统计（导演强度曲线用）：开始时间 / 轮数 / 用户最近一次主动交互
+  const perfSession = { startedAt: Date.now(), turns: 0, userActionAt: 0, lastTextAt: 0 };
+
+  // ── 待机层（2026-11-25 P1，ADR-015 §3.4）────────────────────────────────
+  // 6 态 Markov + 对数正态停留 + 加权待机池 + 程序化呼吸；每帧 O(1)。
+  // 配置来源：perfDirector.cfg.ambient（缺键 = enabled:true / scale:0.3）。
+  const ambient = createAmbient({
+    enabled: (perfDirector.cfg.ambient || PERFORMANCE_DEFAULTS.ambient).enabled !== false,
+    scale: (perfDirector.cfg.ambient || PERFORMANCE_DEFAULTS.ambient).scale,
+    seed: 20261125,
+  });
+  // 待机上下文（读 world-sense/会话现场是同步函数调用，1 秒采样一次就够，别每帧问）
+  const ambientCtx = { at: 0, presence: 'unknown', idleSec: 0, conversationEndedAt: 0, lastSpeaking: false };
+  // 导演 intensity → ambient（幅度/状态偏好）：最近一次决策的 intensity
+  function ambientIntensity() {
+    const d = perfDirector.lastDecision;
+    return d && Number.isFinite(Number(d.intensity)) ? Number(d.intensity) : 0;
+  }
 
   // ── 表演占用仲裁（2026-11-21 P1/P2）：单一 claim + 播放进度 ─────────────
   // 片段导演（clip）、长表演（v2）、显式手动（manual/scenes）启动前都必须先 begin()。
@@ -135,6 +182,254 @@ export function createPetBody(canvas, options = {}) {
     log: (line) => { try { console.info('[petbody:perf-claim] ' + line); } catch (e) { /* ignore */ } },
   });
   const perfClaim = perfArbiter.claim;
+
+  // ── 演出调度器（2026-11-25 P2b，ADR-015 §3.1）────────────────────────────
+  // 三个刻意的设计决定：
+  //   1. **默认不建**：enabled !== true 时 ensureScheduler() 返回 null，所有调用点
+  //      原样走旧 arbiter 路径（逐位一致；P2a 的 begin/end 兼容层只用于热重载空窗）。
+  //   2. **懒创建**：第一次 request/tick 时才建（applyPerfConfig 在 perfLog 定义之前跑，
+  //      提前建会在闭包里碰到 TDZ）。
+  //   3. **热滚动**：中途把 enabled 改 false → reset + 交还 claim（不留幽灵占用）。
+  let perfSched = null;
+  let perfSyncDoc = null;
+  const perfSyncInfo = { file: '', items: 0, loaded: 0, version: 0, error: '' };
+  const schedPending = new Map();   // token → { kind, owner, key, apply(ev) }（收势期间排队的请求）
+  let schedLastEvent = null;        // 最近一次调度事件（performanceDebug 看「最近一次 yield 原因」）
+  const SCHED_PENDING_LIMIT = 8;
+
+  function schedulerEnabled() {
+    const cfg = perfDirector.cfg || resolvePerformanceConfig(null);
+    const s = cfg.scheduler || PERFORMANCE_DEFAULTS.scheduler;
+    return s.enabled === true;
+  }
+
+  /** pet-runtime/data 目录（与 performance-log/FACS 片段同一套向上查找；没有 fs 返回空） */
+  function perfDataDir() {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const starts = [];
+      try { starts.push(__dirname); } catch (e) { /* bundle 里可能没有 */ }
+      if (typeof process !== 'undefined' && process.cwd) starts.push(process.cwd());
+      for (const start of starts) {
+        let d = path.resolve(start);
+        for (let i = 0; i < 8; i += 1) {
+          const cand = path.join(d, 'pet-runtime', 'data');
+          if (fs.existsSync(cand)) return cand;
+          const up = path.dirname(d);
+          if (up === d) break;
+          d = up;
+        }
+      }
+    } catch (e) { /* 没有 fs = 没有 sync（调度器退化 atomic，不报错） */ }
+    return '';
+  }
+
+  /** 读 perf-sync.json（一次性；缺文件/坏 JSON 都返回 null，调度器退化 atomic） */
+  function loadPerfSyncDoc() {
+    if (perfSyncDoc) return perfSyncDoc;
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const dir = perfDataDir();
+      if (!dir) { perfSyncInfo.error = 'no-data-dir'; return null; }
+      const file = path.join(dir, 'perf-sync.json');
+      perfSyncInfo.file = file;
+      perfSyncDoc = loadPerfSync({ file, readFile: (f) => fs.readFileSync(f, 'utf8') });
+      if (!perfSyncDoc) { perfSyncInfo.error = 'missing-or-broken'; return null; }
+      const items = perfSyncDoc.items && typeof perfSyncDoc.items === 'object' ? Object.keys(perfSyncDoc.items) : [];
+      perfSyncInfo.version = Number(perfSyncDoc.version) || 0;
+      perfSyncInfo.items = items.length;
+      perfSyncInfo.loaded = items.length;   // 整份解析进内存；缺 key 时 syncFor 返回 null
+      perfSyncInfo.error = '';
+      return perfSyncDoc;
+    } catch (e) {
+      perfSyncInfo.error = String((e && e.message) || e);
+      return null;
+    }
+  }
+
+  function ensureScheduler() {
+    if (!schedulerEnabled()) return null;
+    if (perfSched) return perfSched;
+    try {
+      loadPerfSyncDoc();
+      perfSched = createScheduler({
+        now: () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
+        arbiter: perfArbiter,
+        log: (line) => { try { console.info('[petbody:perf-sched] ' + line); } catch (e) { /* ignore */ } },
+        onChange: onSchedulerEvent,
+      });
+    } catch (e) {
+      console.warn('[petbody] 调度器创建失败，继续走旧 arbiter 路径', e);
+      perfSched = null;
+    }
+    return perfSched;
+  }
+
+  /** 调度器事件 → 日志账 + 真正启停各层（抢人的视觉收势在 'retract' 里做） */
+  function onSchedulerEvent(ev) {
+    if (!ev || typeof ev !== 'object') return;
+    const type = String(ev.type || '');
+    schedLastEvent = {
+      type, owner: ev.owner || ev.from || '', key: ev.key || '', reason: ev.reason || '',
+      at: Number(ev.at) || Date.now(),
+    };
+    if (type === 'start') {
+      // 账：画面真的换到它了（与决策日志 'play' 分开，P3 节目单按这个算真实开始）
+      try { perfLog.noteStart({ key: ev.key, owner: ev.owner, plannedMs: ev.plannedMs }); } catch (e) { /* ignore */ }
+      const p = schedPending.get(ev.token);
+      if (p) {
+        schedPending.delete(ev.token);
+        try { p.apply(ev); } catch (e) { /* 单次启动失败不影响调度 */ }
+      } else if (ev.owner === 'v2' || ev.owner === 'manual') {
+        // 兜底：队列由 tick 拉起但没有登记（P2c 节目单会走这条）
+        beginV2Playback(ev.key, ev.owner, null);
+      }
+      return;
+    }
+    if (type === 'retract') {
+      // 账：旧层收势、新层 pending（atRelax=false 就是显式手动立即抢）
+      try {
+        perfLog.noteInterrupt({
+          from: ev.from, to: ev.to, atRelax: ev.atRelax === true, retractMs: ev.ms,
+        });
+      } catch (e) { /* ignore */ }
+      // 视觉收势：v2/manual/program 有权重可淡；clip 有自己的逐通道平滑（stop 时会淡出）；
+      // scenes 是 setTimeout 串，最后一步的情绪包络自己会落。
+      if ((ev.from === 'v2' || ev.from === 'manual' || ev.from === 'program') && performer.active) {
+        try { performer.fadeOut(Number(ev.ms) || 0); } catch (e) { /* ignore */ }
+      }
+      return;
+    }
+    if (type === 'expired' || type === 'cancelled') {
+      // 队列里的请求过期/被取消（ttl、queue-full、被同 owner 新请求顶掉）：
+      // 待启动表必须同步删掉，否则会留一条永远等不到 start 的登记（pending 泄漏）。
+      schedPending.delete(ev.token);
+      return;
+    }
+    if (type === 'end') {
+      // 账：一次演出结束（endedBy 只暴露 natural/interrupt/budget，与 ADR §4.4 一致）
+      // 'replace' 是同一 owner 的换段：新段的 play 已经写在 lastPlay 上，
+      // 此时再 noteEnd 会把**刚开演的新段**结掉 → 跳过（旧段只是被替换，不留独立账）。
+      if (ev.endedBy !== 'replace') {
+        const endedBy = mapSchedEndedBy(ev.endedBy);
+        try {
+          perfLog.noteEnd({ endedBy, clipId: ev.key, plannedMs: ev.plannedMs, actualMs: ev.actualMs });
+        } catch (e) { /* ignore */ }
+      }
+      // 真正停掉旧层的写者（'replace' 是同一 owner 换段，新的一段已经在写，绝不能停）
+      if (ev.endedBy !== 'replace' && ev.endedBy !== 'superseded') stopLayerFor(ev.owner, ev.key, ev.endedBy);
+    }
+  }
+
+  function mapSchedEndedBy(v) {
+    const s = String(v || '');
+    if (s === 'natural') return 'natural';
+    if (s === 'interrupt' || s === 'replace' || s === 'released') return 'interrupt';
+    if (s === 'expired' || s === 'cancelled') return 'budget';
+    return 'natural';
+  }
+
+  function clearSceneTimers() {
+    try {
+      if (api && Array.isArray(api._sceneTimers)) {
+        for (const id of api._sceneTimers) clearTimeout(id);
+        api._sceneTimers = [];
+      }
+    } catch (e) { /* api 还没初始化（理论上到不了） */ }
+  }
+
+  /** 旧 owner 的写者停掉（收势完成后才调；同 owner 换段由 'replace' 排除） */
+  function stopLayerFor(owner, key, why) {
+    try {
+      if (owner === 'clip') {
+        // cancelPending:false —— 队列里的「下一条」属于调度器，不能被旧层的停止顺手取消
+        if (emotion.facsClips && emotion.facsClips.isPlaying) emotion.facsClips.stop('interrupt', { cancelPending: false });
+      } else if (owner === 'scenes') {
+        clearSceneTimers();
+      } else if (owner === 'v2' || owner === 'manual') {
+        if (performer.active && (!key || performer.key === String(key))) performer.stop(why || 'interrupt');
+      }
+    } catch (e) { /* 停止失败不影响调度状态 */ }
+  }
+
+  /**
+   * 交还占用：调度器接管时走 finish（它同时负责拉起队列下一条），否则旧 arbiter。
+   * 调度器是「热开启」的（开启前已有旧 claim）时 finish 找不到 current → 回落 arbiter.end，
+   * 绝不留下「画面停了但 claim 还在」的静默占用。
+   */
+  function endClaim(owner, token, endedBy) {
+    if (perfSched) {
+      try { if (perfSched.finish(token || owner, { endedBy: endedBy || 'natural' })) return true; } catch (e) { /* 回落 */ }
+    }
+    try { return perfArbiter.end(owner, token); } catch (e) { return false; }
+  }
+
+  /** 取消队列里/待启动表里属于某个 owner 的请求（显式停止、dispose 用） */
+  function cancelSchedPending(match) {
+    if (!perfSched) return 0;
+    const tokens = [];
+    try {
+      for (const q of perfSched.status().queue || []) {
+        if (match(q.owner) && !tokens.includes(q.token)) tokens.push(q.token);
+      }
+    } catch (e) { /* ignore */ }
+    for (const [token, p] of Array.from(schedPending.entries())) {
+      const owner = p.owner || (p.kind === 'v2' ? 'v2' : p.kind);
+      if (match(owner) && !tokens.includes(token)) tokens.push(token);
+    }
+    let n = 0;
+    for (const t of tokens) {
+      schedPending.delete(t);
+      try { if (perfSched.finish(t, { endedBy: 'cancelled' })) n += 1; } catch (e) { /* ignore */ }
+    }
+    return n;
+  }
+
+  /** v2 真正开演（scheduler 的 'start' 时调；旧路径在 requestPerformance 里直接调） */
+  function beginV2Playback(key, owner, perfOpts, logInfo) {
+    if (!key) return false;
+    // 换人时旧写者必须真的停（收势已由 retract 的 fadeOut 做；这里只兜底）
+    try {
+      if (performer.active && performer.key !== String(key)) performer.stop('switch');
+      if (emotion.facsClips && emotion.facsClips.isPlaying) emotion.facsClips.stop('interrupt', { cancelPending: false });
+      clearSceneTimers();
+    } catch (e) { /* ignore */ }
+    // 幂等：scheduler.request 的 'start' 事件是**同步**发的（回调里已经兜底启动过一次），
+    // 调用方紧接着的那次 begin 不能把刚起势的表演又重启一遍（会重置 startedAt/手势 fired）。
+    const sameJustStarted = performer.active && performer.key === String(key)
+      && performer.elapsedMs(performance.now()) < 60;
+    if (!sameJustStarted) {
+      const started = performer.start(String(key), performance.now(), perfOpts || {});
+      if (!started) {
+        try { endClaim(owner || 'v2', '', 'interrupt'); } catch (e) { /* ignore */ }
+        return false;
+      }
+    }
+    // v1 让位：两套同时演会互相盖参数（与旧路径 requestPerformance 调用点一致）
+    try { choreo.perf = null; } catch (e) { /* ignore */ }
+    // 决策日志在**真开演**这一刻写（见 requestPerformance 的账目说明）
+    if (logInfo) {
+      try {
+        perfLog.noteDecision({
+          source: owner === 'manual' ? 'manual' : 'auto',
+          emotion: '',
+          intensity: null,
+          played: true,
+          perfKind: 'v2',
+          decision: {
+            clipId: String(key),
+            label: (logInfo.meta && logInfo.meta.title) || String(key),
+            reason: logInfo.logReason || 'v2-long',
+            detail: { durationMs: logInfo.durationMs },
+          },
+        });
+      } catch (e) { /* 日志失败绝不影响表演 */ }
+    }
+    return true;
+  }
+
   // 表演库元数据（时长/标题）：performer.list() 是唯一现成来源，缓存一次。
   const perfMetaByKey = new Map();
   function performanceMeta(key) {
@@ -143,6 +438,295 @@ export function createPetBody(canvas, options = {}) {
       try { for (const item of performer.list()) perfMetaByKey.set(String(item.key), item); } catch (e) { /* ignore */ }
     }
     return perfMetaByKey.get(k) || null;
+  }
+
+  // ── 节目单（P3a，ADR-015 §3.5）───────────────────────────────────────────
+  // 节目单 = 几段长表演 + 台词 + 音效串成一次「事件」（45–90s、≤3 段），不是把单段拉长。
+  //   · 运行器只管「按 beat 串」；抢占/排队/收势仍由 perf-scheduler 决定（owner='program'）。
+  //   · 数据：pet-runtime/data/programs/*.json（离线产物；tools/check-programs.mjs 校验）。
+  //   · 预算：performance.program.max_per_day，只计节目单（不吃导演的自动演出额度）。
+  //   · 台词：宿主有 globalThis.petSpeak 就走真 TTS（字幕/口型由它带），否则字幕 + 事件 +
+  //     按字数估算时长。TTS 不可用不会卡死：运行器另有 maxMs/2 超时。
+  const programsInfo = { list: [], byId: new Map(), dir: '', error: '', loadedAt: 0 };
+  let programRunner = null;
+  const programBudget = { day: '', used: 0, plays: 0, byEndedBy: {} };
+
+  function programCfg() {
+    const cfg = perfDirector.cfg || resolvePerformanceConfig(null);
+    return cfg.program || PERFORMANCE_DEFAULTS.program;
+  }
+
+  function programDayKey(ts) {
+    const d = new Date(Number(ts) || Date.now());
+    return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  }
+
+  function rollProgramDay(ts) {
+    const key = programDayKey(ts);
+    if (programBudget.day !== key) { programBudget.day = key; programBudget.used = 0; }
+    return key;
+  }
+
+  function programMaxPerDay() {
+    return Math.max(0, Number(programCfg().max_per_day) || 0);
+  }
+
+  // 运行器注入的预算口：只计 program（takeProgram 在启动前调用，失败会 release 退还）
+  const programBudgetApi = {
+    takeProgram() {
+      rollProgramDay();
+      const max = programMaxPerDay();
+      if (programBudget.used >= max) return { ok: false, reason: 'budget', left: 0, max };
+      programBudget.used += 1;
+      return { ok: true, left: Math.max(0, max - programBudget.used), max };
+    },
+    releaseProgram() {
+      rollProgramDay();
+      if (programBudget.used > 0) programBudget.used -= 1;
+      return true;
+    },
+    left() {
+      rollProgramDay();
+      return Math.max(0, programMaxPerDay() - programBudget.used);
+    },
+  };
+
+  /** 读 pet-runtime/data/programs/*.json（懒加载一次；缺目录/坏 JSON 只记 error，不抛） */
+  function loadProgramsDoc() {
+    if (programsInfo.loadedAt) return programsInfo;
+    programsInfo.loadedAt = Date.now();
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const dir = perfDataDir();
+      if (!dir) { programsInfo.error = 'no-data-dir'; return programsInfo; }
+      const pdir = path.join(dir, 'programs');
+      programsInfo.dir = pdir;
+      if (!fs.existsSync(pdir)) { programsInfo.error = 'missing-dir'; return programsInfo; }
+      const files = fs.readdirSync(pdir).filter((n) => /\.json$/i.test(n)).sort();
+      const list = [];
+      for (const name of files) {
+        try {
+          const doc = JSON.parse(fs.readFileSync(path.join(pdir, name), 'utf8'));
+          if (!doc || !doc.id) { programsInfo.error = 'bad-item:' + name; continue; }
+          list.push(doc);
+          programsInfo.byId.set(String(doc.id), doc);
+        } catch (e) {
+          programsInfo.error = 'parse:' + name;
+        }
+      }
+      programsInfo.list = list;
+      if (!programsInfo.error) programsInfo.error = list.length ? '' : 'empty';
+    } catch (e) {
+      programsInfo.error = String((e && e.message) || e);
+    }
+    return programsInfo;
+  }
+
+  /** 节目单里的「换一段」：直接开演该段（claim 已在 program 手上，写参数路径与 v2 相同） */
+  function programPlaySegment(seg) {
+    const key = String(seg || '');
+    if (!performanceMeta(key)) return false;
+    try {
+      if (performer.active) performer.stop('program-switch');
+      if (emotion.facsClips && emotion.facsClips.isPlaying) {
+        emotion.facsClips.stop('interrupt', { cancelPending: false });
+      }
+    } catch (e) { /* ignore */ }
+    let ok = false;
+    try { ok = performer.start(key, performance.now(), {}) === true; } catch (e) { ok = false; }
+    // v1 让位：两套同时演会互相盖参数（与 v2 路径一致）
+    try { choreo.perf = null; } catch (e) { /* ignore */ }
+    return ok;
+  }
+
+  /** 段间/收尾的收势：先让权重线性落到 0，再等它真的走完（performer 按采样时钟计时） */
+  function programFadeOut(ms) {
+    const dur = Math.max(0, Number(ms) || 0);
+    try { if (performer.active) performer.fadeOut(dur); } catch (e) { /* ignore */ }
+    if (!(dur > 0)) return undefined;
+    return new Promise((resolve) => { try { setTimeout(resolve, dur); } catch (e) { resolve(); } });
+  }
+
+  /**
+   * 一句台词：说完的 promise。
+   * 优先级：宿主 petSpeak（真 TTS，字幕/口型它包了）→ 事件 petbody:speak + 气泡字幕。
+   * 完成判据：嘴动过又停了（真 TTS）→ 立刻返回；否则按字数估算（不假装知道）。
+   */
+  function programSpeak(line, opts = {}) {
+    const text = String(line || '');
+    if (!text) return Promise.resolve({ ms: 0, via: 'empty' });
+    try { showBubble(text); } catch (e) { /* ignore */ }
+    let host = null;
+    try {
+      if (typeof globalThis !== 'undefined' && typeof globalThis.petSpeak === 'function') host = globalThis.petSpeak;
+      else if (typeof window !== 'undefined' && typeof window.petSpeak === 'function') host = window.petSpeak;
+    } catch (e) { host = null; }
+    let via = 'estimate';
+    let hostPromise = null;
+    if (host) {
+      try {
+        const r = host(text);           // 宿主 TTS：真播（字幕/口型/音频都在它那边）
+        if (r && typeof r.then === 'function') hostPromise = r;
+        via = 'tts';
+      } catch (e) { via = 'estimate'; }
+    }
+    if (via !== 'tts') {
+      try {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('petbody:speak', { detail: { text } }));
+        }
+      } catch (e) { /* 没有宿主监听也不影响时序 */ }
+    }
+    let span = 0;
+    try { span = Array.from(text).length; } catch (e) { span = text.length; }
+    const estMs = Math.max(700, Math.min(9000, span * 210));
+    return new Promise((resolve) => {
+      const t0 = Date.now();
+      const sig = opts && opts.signal;
+      let iv = null;
+      let settled = false;
+      let sawSpeaking = false;
+      const onAbort = () => finish('abort');
+      function finish(reason) {
+        if (settled) return;
+        settled = true;
+        try { if (iv) clearInterval(iv); } catch (e) { /* ignore */ }
+        try { if (sig && typeof sig.removeEventListener === 'function') sig.removeEventListener('abort', onAbort); } catch (e) { /* ignore */ }
+        resolve({ ms: Date.now() - t0, via, reason });
+      }
+      if (sig && typeof sig.addEventListener === 'function') {
+        if (sig.aborted) { finish('abort'); return; }
+        try { sig.addEventListener('abort', onAbort); } catch (e) { /* ignore */ }
+      }
+      // 宿主 TTS 的 promise 是**最准**的完成信号（processTextToSpeech 说完才 resolve）
+      if (hostPromise) {
+        hostPromise.then(() => finish('tts'), () => finish('tts-error'));
+      }
+      iv = setInterval(() => {
+        const speaking = state.speaking === true;
+        if (speaking) sawSpeaking = true;
+        const elapsed = Date.now() - t0;
+        if (hostPromise) {
+          // 有 TTS：嘴动过又停下就是说完（比 promise 更实时），15s 兜底
+          if (elapsed > 400 && sawSpeaking && !speaking) finish('tts');
+          else if (elapsed >= 15000) finish('cap');
+        } else if (elapsed >= estMs) {
+          finish('estimate');
+        }
+      }, 100);
+    });
+  }
+
+  /** 音效：与 SCENES 同一条路（渲染层不播，交给宿主 sfx 插件） */
+  function programSfx(id) {
+    try {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('petbody:sfx', { detail: { id: String(id) } }));
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  /**
+   * 运行器遥测 → performance-log。
+   * start → 一条 play（perfKind:'program'，source 记 manual：P3a 只有用户点播，没有自动通道，
+   *         所以不该吃导演的自动日预算；节目单有自己的 max_per_day）。
+   * beat/end → perf.program（new，字段见 ADR §4.4 扩展；旧字段不受影响）。
+   * end 的 perf.end 由调度器 'end' 事件照旧写，这里不重复。
+   */
+  function onProgramTelemetry(evt) {
+    try {
+      if (!evt || typeof evt !== 'object') return;
+      if (evt.scope === 'program' && evt.phase === 'start') {
+        programBudget.plays = (Number(programBudget.plays) || 0) + 1;
+        perfLog.noteDecision({
+          source: 'manual',
+          emotion: '',
+          intensity: null,
+          played: true,
+          perfKind: 'program',
+          decision: {
+            clipId: evt.programId,
+            label: evt.title || evt.programId,
+            reason: 'program',
+            detail: { durationMs: evt.plannedMs },
+          },
+        });
+        return;
+      }
+      if (evt.scope === 'program' && evt.phase === 'end') {
+        const k = String(evt.endedBy || 'natural');
+        programBudget.byEndedBy[k] = (Number(programBudget.byEndedBy[k]) || 0) + 1;
+      }
+      perfLog.noteProgram(evt);
+    } catch (e) { /* 遥测失败绝不影响演出 */ }
+  }
+
+  /** 懒建运行器（program 依赖 scheduler；scheduler 关着 → null） */
+  function ensureProgramRunner() {
+    if (!schedulerEnabled()) return null;
+    if (programRunner) return programRunner;
+    const sched = ensureScheduler();
+    if (!sched) return null;
+    loadProgramsDoc();
+    loadPerfSyncDoc();
+    const nowFn = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    try {
+      programRunner = createProgramRunner({
+        now: nowFn,
+        scheduler: sched,
+        programs: programsInfo.list,
+        playSegment: programPlaySegment,
+        fadeOut: programFadeOut,
+        speak: programSpeak,
+        sfx: programSfx,
+        log: (line) => { try { console.info('[petbody:program] ' + line); } catch (e) { /* ignore */ } },
+        telemetry: onProgramTelemetry,
+        budget: programBudgetApi,
+        syncFor: (seg) => selectPerfSync(perfSyncDoc, seg),
+        relaxMsFor: (seg) => {
+          const s = perfSyncDoc ? selectPerfSync(perfSyncDoc, seg) : null;
+          return s && Array.isArray(s.relaxPreempt) ? s.relaxPreempt : null;
+        },
+        segmentDurationMs: (seg) => {
+          const m = performanceMeta(seg);
+          return m && Number(m.duration) > 0 ? Number(m.duration) * 1000 : 0;
+        },
+      });
+    } catch (e) {
+      console.warn('[petbody] 节目单运行器创建失败', e);
+      programRunner = null;
+    }
+    return programRunner;
+  }
+
+  /** performanceDebug().program 的快照（只读内存，不做 I/O） */
+  function programDebugSnapshot() {
+    const cfg = programCfg();
+    let st = null;
+    try { st = programRunner ? programRunner.status() : null; } catch (e) { st = null; }
+    return {
+      enabled: cfg.enabled === true,
+      scheduler: schedulerEnabled(),
+      active: Boolean(st && st.active),
+      programId: (st && st.programId) || '',
+      title: (st && st.title) || '',
+      beatIdx: st ? st.beatIdx : -1,
+      beatKey: (st && st.beatKey) || '',
+      beatCount: st ? Number(st.beatCount) || 0 : 0,
+      pending: Boolean(st && st.pending),
+      elapsedMs: st ? st.elapsedMs : 0,
+      stopAtNextRelax: Boolean(st && st.stopAtNextRelax),
+      lastEndedBy: (st && st.lastEndedBy) || '',
+      lastProgramId: (st && st.lastProgramId) || '',
+      budgetLeft: programBudgetApi.left(),
+      budgetUsed: programBudget.used,
+      maxPerDay: programMaxPerDay(),
+      plays: programBudget.plays,
+      byEndedBy: Object.assign({}, programBudget.byEndedBy),
+      loaded: programsInfo.loadedAt ? programsInfo.list.length : 0,
+      dataError: programsInfo.loadedAt ? programsInfo.error : 'not-loaded',
+    };
   }
 
   /**
@@ -159,12 +743,61 @@ export function createPetBody(canvas, options = {}) {
     const meta = performanceMeta(key);
     // 先验名字再抢占用：写错 key 时不能先把正在演的片段/长表演停掉再失败。
     if (!meta) return { ok: false, reason: 'unknown-performance' };
+    const durationMs = Number(meta.duration) > 0 ? Number(meta.duration) * 1000 : 0;
+
+    // ── 调度器路径（enabled=true）──────────────────────────────────────────
+    // 规则：manual/v2 都声明 segmented（按 perf-sync 的 relax 点可打断），manual 带 preempt。
+    // 返回 pending/preempting 时**先不启动**：等 scheduler 的 'start' 事件（收势结束后）。
+    const sched = ensureScheduler();
+    if (sched) {
+      // 自动层「占用就不问」的旧门保留：60fps 的自动通道不能把队列塞满（旧行为是直接让位）。
+      if (!preempt && !perfArbiter.availableFor(owner)) {
+        const holder = perfClaim.snapshot();
+        perfClaim.recordYield(owner, { reason: 'busy', heldBy: holder.owner, key: key });
+        return { ok: false, reason: 'busy', heldBy: holder.owner };
+      }
+      const req = sched.request({
+        owner,
+        key: String(key),
+        kind: 'segmented',
+        sync: selectPerfSync(perfSyncDoc, key),
+        maxMs: durationMs,
+        preempt,
+      });
+      if (!req.ok) {
+        return { ok: false, reason: req.reason || 'busy', heldBy: (perfClaim.snapshot() || {}).owner || '' };
+      }
+      // 决策日志推迟到**真正开演**时写（P2b 账目）：
+      // perfLog 的 lastPlay 是单槽 —— 如果在 request 时就写 manual 的 play，被顶掉的
+      // v2 在 150/400ms 后的 perf.end 会因为「lastPlay 已经不是它」而丢掉一条结束账。
+      const logInfo = { meta, durationMs, logReason: opts.logReason };
+      if (req.status === 'started') {
+        const started = beginV2Playback(key, owner, opts.performer, logInfo);
+        if (!started) return { ok: false, reason: 'unknown-performance' };
+        return { ok: true, owner, key: String(key), token: req.token, durationMs, scheduler: 'started' };
+      }
+      if (schedPending.size >= SCHED_PENDING_LIMIT) {
+        try { endClaim(owner, req.token, 'cancelled'); } catch (e) { /* ignore */ }
+        return { ok: false, reason: 'queue-full' };
+      }
+      schedPending.set(req.token, {
+        kind: 'v2',
+        owner,
+        key: String(key),
+        apply: () => beginV2Playback(key, owner, opts.performer, logInfo),
+      });
+      return {
+        ok: true, owner, key: String(key), token: req.token, durationMs,
+        pending: true, status: req.status, relaxAt: req.relaxAt || 0,
+      };
+    }
+
+    // ── 旧路径（scheduler 关）：逐位不变 ──────────────────────────────────
     if (!preempt && !perfArbiter.availableFor(owner)) {
       const holder = perfClaim.snapshot();
       perfClaim.recordYield(owner, { reason: 'busy', heldBy: holder.owner, key: key });
       return { ok: false, reason: 'busy', heldBy: holder.owner };
     }
-    const durationMs = Number(meta.duration) > 0 ? Number(meta.duration) * 1000 : 0;
     const admitted = perfArbiter.begin(owner, {
       key: String(key),
       title: (meta && meta.title) || String(key),
@@ -184,6 +817,8 @@ export function createPetBody(canvas, options = {}) {
         }
       } catch (e) { /* api 还没初始化（理论上到不了） */ }
     } else if (admitted.preempted && admitted.preempted !== 'micro') {
+      // P0.2：被顶掉的长演出一律记 interrupt（v2 没有收势，硬切也是打断）
+      try { if (performer.key) perfLog.noteEnd({ endedBy: 'interrupt', clipId: performer.key }); } catch (e) { /* ignore */ }
       try { performer.stop(); } catch (e) { /* ignore */ }
     }
     const started = performer.start(String(key), now, opts.performer || {});
@@ -201,6 +836,7 @@ export function createPetBody(canvas, options = {}) {
         emotion: '',
         intensity: null,
         played: true,
+        perfKind: 'v2',
         decision: {
           clipId: String(key),
           label: (meta && meta.title) || String(key),
@@ -216,8 +852,161 @@ export function createPetBody(canvas, options = {}) {
   function releasePerformance(owner) {
     try {
       const holder = perfClaim.snapshot();
-      if (holder.owner === owner) perfArbiter.end(owner, holder.token);
+      if (holder.owner === owner) endClaim(owner, holder.token, 'interrupt');
     } catch (e) { /* ignore */ }
+  }
+
+  // ── 导演接线（2026-11-25 P0）─────────────────────────────────────────────
+  // 只做两件事：① 每次「本来要演」前问一次；② 把决定写进 perf.request。
+  // dry-run 时 gate() 永远 proceed=true —— **不改变 consider 行为**，也就不白吃冷却
+  // （现有注释见 T1 的 claim 判断：占用时不跑 consider，否则冷却被白吃）。
+  function perfConfigFromScope() {
+    try {
+      if (typeof window !== 'undefined' && window.__petPerformanceConfig) return window.__petPerformanceConfig;
+      if (typeof globalThis !== 'undefined' && globalThis.__petPerformanceConfig) return globalThis.__petPerformanceConfig;
+    } catch (e) { /* 读不到就用默认 */ }
+    return null;
+  }
+
+  /** 宿主/测试可下发 performance.* 配置（驱动 config.json → 渲染层的唯一入口） */
+  function applyPerfConfig(raw) {
+    perfDirector.cfg = resolvePerformanceConfig(raw === undefined ? perfConfigFromScope() : raw);
+    // 待机层跟着配置走（热改 scale/enabled 立刻生效，不需要重载）
+    try {
+      const a = perfDirector.cfg.ambient || PERFORMANCE_DEFAULTS.ambient;
+      ambient.setEnabled(a.enabled !== false);
+      ambient.setScale(a.scale);
+    } catch (e) { /* ambient 异常不影响表演 */ }
+    // 调度器热滚动（P2b）：开 → 立刻建（要赶在第一次 request 前把 sync 读进来）；
+    // 关 → reset + 交还 claim + 清待启动表，否则会留下「画面停了 claim 还在」的幽灵占用。
+    try {
+      if (schedulerEnabled()) {
+        ensureScheduler();
+      } else if (perfSched) {
+        // P0-3（对抗审计）：先停节目单（finishClaim + 退额度），再 reset；
+        // 否则 reset 清掉 claim 表后 runner 的 finish 找不到，arbiter 仍持 program 到 ttl。
+        try { if (programRunner) programRunner.stop('disabled'); } catch (e) { /* ignore */ }
+        try { perfSched.reset(); } catch (e) { /* ignore */ }
+        schedPending.clear();
+        try {
+          perfArbiter.end('program');
+          perfArbiter.end('clip');
+          perfArbiter.end('v2');
+          perfArbiter.end('manual');
+          perfArbiter.end('scenes');
+        } catch (e) { /* ignore */ }
+      }
+    } catch (e) { /* 配置异常不影响旧路径 */ }
+    // 节目单跟着开关走（P3a）：关掉 program 或关掉 scheduler → 立刻收势，
+    // 否则会出现「演到一半没人管」的幽灵 loop（它还持有 performer 的写入）。
+    try {
+      const pcfg = perfDirector.cfg.program || PERFORMANCE_DEFAULTS.program;
+      if (programRunner && (pcfg.enabled !== true || !schedulerEnabled())) programRunner.stop('disabled');
+    } catch (e) { /* ignore */ }
+    return perfDirector.cfg;
+  }
+  // 初始化即按 window 下发的配置对齐（缺省走默认）；ambient 也一起同步 scale/enabled
+  applyPerfConfig(perfConfigFromScope());
+
+  function directorPresence() {
+    try { return readPresence(globalThis, Date.now()); } catch (e) { return null; }
+  }
+
+  function directorSession() {
+    const now = Date.now();
+    const sum = perfLog.summary(now);
+    return {
+      startedAt: perfSession.startedAt,
+      ageMs: Math.max(0, now - perfSession.startedAt),
+      turns: perfSession.turns,
+      userActionAt: perfSession.userActionAt,
+      // 被接率只统计 afterEnd（演完 90s 内被吸引）；打断率单独看，不混算。
+      // 全部来自 perfLog 的内存 ring（最近 10 次），不读文件。
+      replyRate: sum.replyRateAfterEnd != null ? sum.replyRateAfterEnd : sum.replyRate,
+      replySamples: sum.replySamplesAfterEnd != null && sum.replySamplesAfterEnd > 0 ? sum.replySamplesAfterEnd : sum.replySamples,
+      interruptRate: sum.interruptRate,
+    };
+  }
+
+  /**
+   * 问一次导演。
+   * @param {'v2'|'clip'|'program'} kind
+   * @param {{key?:string}} [ctx]
+   * @returns {{proceed:boolean, dec:object|null, reason:string}}
+   */
+  function directorDecideFor(kind, ctx = {}) {
+    const cfg = perfDirector.cfg || resolvePerformanceConfig(null);
+    const dirCfg = cfg.director || PERFORMANCE_DEFAULTS.director;
+    // 两个开关都关 = 导演不存在（旧行为，连日志都不写）
+    if (dirCfg.enabled !== true && dirCfg.dry_run !== true) return { proceed: true, dec: null, reason: 'off' };
+    let dec = null;
+    let sum = null;
+    try {
+      sum = perfLog.summary(Date.now());
+      dec = directorDecide({
+        presence: directorPresence(),
+        session: directorSession(),
+        now: Date.now(),
+        lastPerfAt: perfLog.lastPlay ? perfLog.lastPlay.at : 0,
+        // 日预算/长段预算只统计自动来源（手点不吃额度）；见 director.budgetsFromSummary
+        budgets: budgetsFromSummary(sum),
+        config: { director: dirCfg, program: cfg.program },
+      });
+    } catch (e) { return { proceed: true, dec: null, reason: 'director-error' }; }
+    const g = directorGate(dec, kind === 'program' ? 'program' : kind);
+    // 审计口径：allowed = 「按决策本应允许」；dry-run 下 gate 仍 proceed（不拦）
+    const allowed = dec.allow === true && Array.isArray(dec.allowedKinds) && dec.allowedKinds.includes(kind);
+    perfDirector.lastDecision = {
+      at: Date.now(), kind, mode: dec.mode, allow: dec.allow === true,
+      allowed, allowedKinds: (dec.allowedKinds || []).slice(),
+      reason: dec.reason, intensity: dec.intensity, maxMs: dec.maxMs,
+      presence: dec.presence, budgetLeft: dec.budgetLeft, proceed: g.proceed,
+    };
+    perfDirector.lastAt = Date.now();
+    // 导演 intensity 变化 → 待机层（幅度上限与状态偏好都跟着走）
+    try { ambient.setIntensity(dec.intensity); } catch (e) { /* ignore */ }
+    // 2 秒窗口内同 kind:key 只写一条日志（决策照算，不白吃冷却）
+    const logKey = String(kind) + ':' + String(ctx.key || '');
+    const logNow = Date.now();
+    const lastLog = Number(perfRequestLogAt.get(logKey) || 0);
+    if (logNow - lastLog >= PERF_REQUEST_LOG_GAP_MS) {
+      perfRequestLogAt.set(logKey, logNow);
+      try {
+        perfLog.noteRequest({
+          owner: kind === 'v2' ? 'v2' : (kind === 'clip' ? 'clip' : 'program'),
+          key: ctx.key || null,
+          perfKind: kind,
+          presence: dec.presence,
+          intensity: dec.intensity,
+          maxMs: dec.maxMs,
+          allowed,
+          reason: dec.reason,
+          mode: dec.mode,
+          budgetLeft: dec.budgetLeft,
+        });
+      } catch (e) { /* 日志失败绝不影响表演 */ }
+    }
+    // 被导演拦下时：**不调用 consider、不碰 claim**（不白吃冷却/占用），
+    // 只在日志写一条 perf.skip.reason=director:<reason>（10 秒窗口去重，防止刷屏）。
+    if (!g.proceed) {
+      const skipKey = 'skip:' + logKey;
+      if (logNow - Number(perfSkipLogAt.get(skipKey) || 0) >= PERF_SKIP_LOG_GAP_MS) {
+        perfSkipLogAt.set(skipKey, logNow);
+        try {
+          perfLog.noteDecision({
+            source: 'auto',
+            emotion: '',
+            intensity: dec.intensity,
+            played: false,
+            perfKind: kind,
+            activity: dec.presence,
+            decision: { reason: 'director:' + (g.reason || 'blocked') },
+          });
+        } catch (e) { /* 日志失败绝不影响表演 */ }
+      }
+    }
+    try { if (typeof window !== 'undefined') window.__perfDirectorState = perfDirector.lastDecision; } catch (e) { /* ignore */ }
+    return { proceed: g.proceed, dec, reason: g.proceed ? 'ok' : g.reason };
   }
 
   // ── C-1b：情绪写盘 / 读回 ────────────────────────────────────────────
@@ -588,24 +1377,114 @@ export function createPetBody(canvas, options = {}) {
       return state.cache.get(id);
     }
 
-    function stop() {
+    function stop(reason, options) {
+      const opts = options && typeof options === 'object' ? options : {};
+      const wasPlaying = state.playing === true;
+      const clipId = state.clipId;
+      const startedAt = state.startedAt;
       if (state.timer) { clearInterval(state.timer); state.timer = null; }
       state.playing = false;
       state.clipId = null;
+      // P0.2：片段结束分账 —— 自然播完 vs 被顶掉/被停。只有「这段确实是日志里的 lastPlay」
+      // 才记（noteEnd 按 clipId 匹配），否则会误结 v2 的账。
+      if (wasPlaying) {
+        try {
+          perfLog.noteEnd({
+            endedBy: reason === 'natural' ? 'natural' : 'interrupt',
+            clipId,
+            actualMs: startedAt ? Math.max(0, Date.now() - startedAt) : undefined,
+          });
+        } catch (e) { /* 日志失败不影响播放 */ }
+      }
       // P1（2026-11-21）：片段停下就交还表演占用，否则 v2/自动层会被一个
-      // 已经结束的片段永久挡住。
+      // 已经结束的片段永久挡住。P2b：调度器接管时走 finish（顺带拉起队列下一条）。
       try {
-        if (state.claimToken) { perfArbiter.end('clip', state.claimToken); state.claimToken = ''; }
-        else { perfArbiter.end('clip'); }
+        const endedBy = reason === 'natural' ? 'natural' : 'interrupt';
+        if (state.claimToken) { endClaim('clip', state.claimToken, endedBy); state.claimToken = ''; }
+        else { endClaim('clip', '', endedBy); }
       } catch (e) { /* ignore */ }
+      // 显式停止/换段时，把自己还在队列里的请求一起取消（调度器收势清理时不能取消，
+      // 那条「下一条」是调度器要拉的 —— 见 stopLayerFor 的 cancelPending:false）。
+      if (opts.cancelPending !== false) {
+        try { cancelSchedPending((o) => o === 'clip'); } catch (e) { /* ignore */ }
+      }
       try { engine.setReaction(null); } catch (e) { /* 引擎不在也安全 */ }
       return status();
+    }
+
+    /** 片段真正开演（scheduler 'start' 时才调；旧路径在 play 里直接调） */
+    function beginClipPlayback(clip, token, logCtx, decisionForLog) {
+      // 换人时旧写者必须真的停（收势/结束路径已停过；这里兜底，绝不碰自己）
+      try {
+        if (performer.active) performer.stop('switch');
+        clearSceneTimers();
+      } catch (e) { /* ignore */ }
+      if (state.timer) { clearInterval(state.timer); state.timer = null; }
+      state.claimToken = token || '';
+      state.clipId = clip.id;
+      state.startedAt = Date.now();
+      state.playing = true;
+      // 决策日志在真正开演这一刻写（见 requestPerformance/auto 的账目说明）
+      if (logCtx) {
+        try {
+          const decision = decisionForLog || {
+            clipId: clip.id, label: clip.label, reason: 'ok', detail: { durationMs: clip.durationMs },
+          };
+          perfLog.noteDecision(Object.assign({ played: true, decision }, logCtx));
+        } catch (e) { /* 日志失败不影响播放 */ }
+      }
+      const tick = () => {
+        if (!state.playing) return;
+        const t = Date.now() - state.startedAt;
+        // 说话时屏蔽嘴：口型层拥有 mouthOpen/mouthSmile 等（mixer 里 speech 层「绝不碰嘴」）
+        const speaking = Boolean(engine && typeof engine.snapshot === 'function' && engine.snapshot().speaking);
+        const res = sampleFacsClip(clip, t, { speechActive: speaking });
+        try { engine.setReaction(res.done ? null : res.facs); } catch (e) { /* 忽略 */ }
+        if (res.done) stop('natural');
+      };
+      tick();
+      state.timer = setInterval(tick, 50);
+      if (state.timer.unref) state.timer.unref();
+      return { ok: true, id: clip.id, label: clip.label, durationMs: clip.durationMs, logged: Boolean(logCtx) };
     }
 
     function play(idOrLabel, opts = {}) {
       const clip = loadClip(idOrLabel);
       if (!clip) return { ok: false, error: state.lastError || '片段不可用' };
       stop();
+      // ── 调度器路径（P2b）────────────────────────────────────────────────
+      // 片段一律 atomic（短、且自己已有 240ms 淡入淡出）：自动层不可能打断它，
+      // 显式手动仍可（scheduler 里 priority 5 立即抢）。pending/preempting 时不启动，
+      // 等 'start' 事件（收势结束）再 beginClipPlayback。
+      const sched = ensureScheduler();
+      if (sched) {
+        try { cancelSchedPending((o) => o === 'clip'); } catch (e) { /* ignore */ }
+        const req = sched.request({
+          owner: 'clip',
+          key: clip.id,
+          kind: 'atomic',
+          channels: ['face'],
+          maxMs: Number(clip.durationMs) || 0,
+          preempt: opts.preempt === true,
+        });
+        if (!req.ok) {
+          const holder = perfClaim.snapshot();
+          perfClaim.recordYield('clip', { reason: req.reason || 'busy', heldBy: holder.owner, key: clip.id });
+          return { ok: false, error: req.reason || 'busy', reason: req.reason || 'busy', heldBy: holder.owner || '' };
+        }
+        if (req.status === 'started') return beginClipPlayback(clip, req.token, opts.logCtx || null, opts.decision || null);
+        const logCtx = opts.logCtx || null;
+        const decisionForLog = opts.decision || null;
+        schedPending.set(req.token, {
+          kind: 'clip', owner: 'clip', key: clip.id,
+          apply: () => beginClipPlayback(clip, req.token, logCtx, decisionForLog),
+        });
+        return {
+          ok: true, pending: true, id: clip.id, label: clip.label, durationMs: clip.durationMs,
+          status: req.status, token: req.token, logged: Boolean(logCtx),
+        };
+      }
+      // ── 旧路径（scheduler 关）：逐位不变 ────────────────────────────────
       // P1：claim 在 play 里拿（决策之后），拿不到就如实返回 busy；
       // 同一帧里 v2 稍后启动时会看到 'clip' 持有，从而让位。
       // 公开的 clips.play() 是显式手动（preempt=true，可顶掉 v2）；导演自动调用时不抢占。
@@ -621,14 +1500,10 @@ export function createPetBody(canvas, options = {}) {
       }
       if (admitted.preempted === 'v2' || admitted.preempted === 'manual') {
         // 手动点片段优先于自动长表演：被顶掉的 performer 必须真停，否则它还在写脸。
-        try { performer.stop(); } catch (e) { /* ignore */ }
+        try { if (performer.key) perfLog.noteEnd({ endedBy: 'interrupt', clipId: performer.key }); } catch (e) { /* ignore */ }
+        try { performer.stop('interrupt'); } catch (e) { /* ignore */ }
       } else if (admitted.preempted === 'scenes') {
-        try {
-          if (api && Array.isArray(api._sceneTimers)) {
-            for (const id of api._sceneTimers) clearTimeout(id);
-            api._sceneTimers = [];
-          }
-        } catch (e) { /* api 还没初始化 */ }
+        clearSceneTimers();
       }
       state.claimToken = admitted.token;
       state.clipId = clip.id;
@@ -641,7 +1516,7 @@ export function createPetBody(canvas, options = {}) {
         const speaking = Boolean(engine && typeof engine.snapshot === 'function' && engine.snapshot().speaking);
         const res = sampleFacsClip(clip, t, { speechActive: speaking });
         try { engine.setReaction(res.done ? null : res.facs); } catch (e) { /* 忽略 */ }
-        if (res.done) stop();
+        if (res.done) stop('natural');
       };
       tick();
       state.timer = setInterval(tick, 50);
@@ -680,6 +1555,7 @@ export function createPetBody(canvas, options = {}) {
         source: (ctx && ctx.source) || 'manual',
         emotion: ctx && ctx.emotion,
         intensity: ctx && ctx.intensity,
+        perfKind: 'clip',
         busy: ctx && ctx.busy,
         speaking: ctx && ctx.speaking,
         activity: ctx && ctx.activity,
@@ -688,12 +1564,14 @@ export function createPetBody(canvas, options = {}) {
         perfLog.noteDecision(Object.assign({ played: false, decision }, logCtx));
         return { ok: true, played: false, reason: decision.reason, detail: decision.detail || null };
       }
-      const r = play(decision.clipId);
-      perfLog.noteDecision(Object.assign({ played: r.ok === true, decision }, logCtx));
+      const r = play(decision.clipId, { logCtx, decision });
+      // 调度器路径下 play 自己会在**真正开演**时写 play（pending 时立刻写会顶掉旧层的
+      // lastPlay，让被顶掉的层丢一条 perf.end）；旧路径仍然由这里写，行为逐位不变。
+      if (r.logged !== true) perfLog.noteDecision(Object.assign({ played: r.ok === true, decision }, logCtx));
       if (r.ok) d.notePlayed(decision.clipId, Date.now());
       return {
         ok: true, played: r.ok === true,
-        reason: r.ok ? 'ok' : (r.reason === 'busy' ? 'busy' : 'play-failed'),
+        reason: r.ok ? (r.pending ? 'pending' : 'ok') : (r.reason === 'busy' ? 'busy' : 'play-failed'),
         clipId: decision.clipId, label: decision.label, detail: decision.detail || null, error: r.error || null,
       };
     }
@@ -750,6 +1628,12 @@ export function createPetBody(canvas, options = {}) {
       get isEnabled() { return !emotion.facsTrigger || emotion.facsTrigger.enabled !== false; },
       get isAuto() { return this.isEnabled; },
       directorStats: () => (director ? director.stats : null),
+      /** P0：每个情绪的可用段数（能量两档 + 时长门 + 日上限）；performanceDebug 读它 */
+      poolStats: (nowMs, maxMs) => {
+        const d = ensureDirector();
+        if (!d || typeof d.poolStats !== 'function') return null;
+        try { return d.poolStats(nowMs, maxMs); } catch (e) { return null; }
+      },
     /** 决策日志：累计统计 + 最近若干条（分析「演了之后有没有人理」） */
     logStats: () => perfLog.stats,
     recentLog: (n) => perfLog.recent(n),
@@ -861,7 +1745,10 @@ export function createPetBody(canvas, options = {}) {
     // 但 out.params 是引擎自己算的清单，那张表管不到它。越权写 = 口型和表情/眼神打架，
     // 必须在源头喊出来（每对参数只喊一次，别刷屏）。
     // 注意查的是参数级表（EXTERNALLY_OWNED 的键是通道名，对不上参数 id）。
-    const violations = findExternalOwnershipViolations(accepted, EXTERNALLY_OWNED_PARAMS);
+    // P0（2026-11-25）：ParamMouthForm 对 perf 是**共享**的（画像的嘴形通道就写它），
+    // 不能拿它喊越权，否则每次启动都一条狼来了；v2 的断言不走这份豁免。
+    const violations = findExternalOwnershipViolations(accepted, EXTERNALLY_OWNED_PARAMS)
+      .filter((v) => !PERF_SHARED_OWNED_PARAMS.has(v.param));
     for (const v of violations) {
       if (perfOwnershipSeen.has(v.param)) continue;
       perfOwnershipSeen.add(v.param);
@@ -1203,24 +2090,30 @@ export function createPetBody(canvas, options = {}) {
         trig.nextTryAt = 0;
       } else if (!trig.nextTryAt || nowMs >= Number(trig.nextTryAt)) {
         const peak = trig.peak;
-        let activity = '';
-        try {
-          const ua = globalThis.__userActivity;
-          if (ua && ua.state === 'away') activity = 'away';
-        } catch (e) { /* 读不到就不设 */ }
+        // P0：在场判定统一走 presence（六态）；片段导演只把 away 当硬门，
+        // gaming/watching 由外层 director 决定「只许短段」。
+        const presence = directorPresence();
+        const activity = presence ? presence.state : '';
+        // P0：导演门。dry-run 只记 perf.request（allowed:false + reason），auto 照旧；
+        // enforce 才不调用 auto（不白吃导演冷却）。
+        const dirPeak = directorDecideFor('clip', { key: 'clip:peak' });
         let res = null;
         try {
-          res = api.auto({
-            source: 'peak',
-            emotion: peak.emotion,
-            intensity: peak.intensity,
-            activity,
-            speaking: false,
-            // P1（2026-11-21）：busy 从**共享 claim** 取，而不是只问 performer.active。
-            // 旧写法在「v2 同帧稍后才启动」时读到 false → 片段先演、v2 又启动 → 双写。
-            // 现在 director 的 busy 门与 claim 同源；auto() 内部还有二次占用门。
-            busy: perfClaim.active && perfClaim.owner !== 'clip',
-          });
+          if (dirPeak.proceed) {
+            res = api.auto({
+              source: 'peak',
+              emotion: peak.emotion,
+              intensity: peak.intensity,
+              activity,
+              speaking: false,
+              // P1（2026-11-21）：busy 从**共享 claim** 取，而不是只问 performer.active。
+              // 旧写法在「v2 同帧稍后才启动」时读到 false → 片段先演、v2 又启动 → 双写。
+              // 现在 director 的 busy 门与 claim 同源；auto() 内部还有二次占用门。
+              busy: perfClaim.active && perfClaim.owner !== 'clip',
+              // 只有 enforce 才把时长预算交给片段导演；dry-run 不能改变选择结果。
+              maxMs: dirPeak.dec && dirPeak.dec.mode === 'enforce' ? dirPeak.dec.maxMs : undefined,
+            });
+          }
         } catch (e) { /* 片段出错绝不能影响渲染/对话 */ }
         if (res && res.reason === 'busy') {
           // 全身表演占着：2 秒后再试，但**最多 3 次**。
@@ -1253,14 +2146,15 @@ export function createPetBody(canvas, options = {}) {
       const idleFor = nowIdle - Number(trig.lastStrongAt);
       const needIdle = Number(trig.idleMs) || 150000;
       if (idleFor >= needIdle && nowIdle >= (Number(trig.nextIdleAt) || 0)) {
-        let activity = '';
-        try {
-          const ua = globalThis.__userActivity;
-          if (ua && ua.state === 'away') activity = 'away';
-        } catch (e) { /* 读不到就不设 */ }
+        const presence = directorPresence();
+        const activity = presence ? presence.state : '';
+        // P0：导演门（空闲通道 8 分钟一次）。
+        const dirIdle = directorDecideFor('clip', { key: 'clip:idle' });
         let res = null;
         try {
-          res = api.auto({ source: 'idle', emotion: 'neutral', intensity: 0.6, activity, speaking: false, busy: perfClaim.active && perfClaim.owner !== 'clip' });
+          if (dirIdle.proceed) {
+            res = api.auto({ source: 'idle', emotion: 'neutral', intensity: 0.6, activity, speaking: false, busy: perfClaim.active && perfClaim.owner !== 'clip' });
+          }
         } catch (e) { /* 同上，绝不影响渲染 */ }
         const gap = Number(trig.idleGapMs) || 8 * 60 * 1000;
         trig.nextIdleAt = nowIdle + (res && res.reason === 'busy' ? 60000 : gap);
@@ -1268,6 +2162,65 @@ export function createPetBody(canvas, options = {}) {
         if (res && res.played) trig.lastIdlePlayedAt = nowIdle;
       }
     }
+  }
+
+  /**
+   * 手势资产/动作下发（P2b 抽成单点）：正常帧手势与「停止时补发的 exit」共用。
+   * 资产 API 不在时（独立舞台页/非宿主环境）至少要发 petbody:asset 关闭事件 ——
+   * 否则竖指/抚胸/狗尾草会留在手上（审计 §1.5 第 5 条）。
+   */
+  function applyGestureEvent(g) {
+    if (!g || !g.group) return;
+    let applied = false;
+    try {
+      const assetApi = (typeof window !== 'undefined') && window.__petAssets;
+      if (g.asset && assetApi && typeof assetApi.apply === 'function') {
+        assetApi.apply(g.asset, g.on === true);
+        applied = true;
+      }
+    } catch (e) { /* 资产切换失败不阻断动作 */ }
+    if (!applied && g.asset && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      try {
+        window.dispatchEvent(new CustomEvent('petbody:asset', {
+          detail: {
+            asset: String(g.asset),
+            on: g.on === true,
+            reason: g.forced === true ? 'exit' : 'frame',
+            fadeMs: Number(g.fadeMs) || 0,
+          },
+        }));
+      } catch (e) { /* 没有 CustomEvent 的环境忽略 */ }
+    }
+    try { renderer.playMotion(g.group, g.index); } catch (e) { /* 单次动作失败不阻断整段表演 */ }
+  }
+
+  /** SCENES 真正开演（scheduler 'start' 时调；旧路径在 perform 里直接调） */
+  function beginScenePlayback(name, steps, sceneDuration, token) {
+    // 换人时旧写者必须真的停（收势已由 retract/fadeOut 做；这里只兜底）
+    try {
+      if (performer.active) performer.stop('switch');
+      if (emotion.facsClips && emotion.facsClips.isPlaying) emotion.facsClips.stop('interrupt', { cancelPending: false });
+    } catch (e) { /* ignore */ }
+    clearSceneTimers();
+    const timers = [];
+    for (const step of steps) {
+      timers.push(setTimeout(() => {
+        try { if (step.emotion) api.setEmotion(step.emotion); } catch (e) {}
+        try { if (step.motion) api.playMotion(step.motion); } catch (e) {}
+        try { if (step.costume) api.setCostume(step.costume[0], step.costume[1]); } catch (e) {}
+        // 音效不在渲染层播：它要经插件管理器（sfx 插件才有 SFX 目录与编码处理）。
+        // 这里只把需求抛出去，由宿主的 driver 接住。
+        try {
+          if (step.sfx && typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('petbody:sfx', { detail: { id: String(step.sfx) } }));
+          }
+        } catch (e) {}
+      }, step.at || 0));
+    }
+    // 场景演完交还占用；token 确保不会误杀之后新起的另一段场景/手动演出。
+    timers.push(setTimeout(() => { try { endClaim('scenes', token, 'natural'); } catch (e) {} }, sceneDuration));
+    try { api._sceneTimers = timers; } catch (e) { /* api 还没初始化（理论上到不了） */ }
+    return steps.length;
   }
 
   function frame(now) {
@@ -1281,6 +2234,12 @@ export function createPetBody(canvas, options = {}) {
     //   改成 16ms = 60fps；窗口隐藏时浏览器自动暂停 rAF，不需要额外省电逻辑。
     if (now - last < 16) return;
     last = now;
+    // 调度器节拍（P2b）：1 次/帧，O(队列 ≤4)。收势到点换人、到 relax 点开收势、
+    // 空闲时拉起队列都在这一行里；开关关着时 ensureScheduler() 返回 null（零成本）。
+    try {
+      const sched = ensureScheduler();
+      if (sched) sched.tick(now);
+    } catch (e) { /* 调度器异常绝不影响渲染 */ }
     // 拖动冻结（2026-11-21 用户反馈拖拽掉帧/残影/桌面卡顿）：
     //   真机实测「窗口移动幅度」直接决定渲染帧率 —— 静止 76fps、±1px 79、
     //   ±20px 62、±40px 53、±80px 38。真实拖动每帧几十 px，合成器被窗口移动占满，
@@ -1302,6 +2261,51 @@ export function createPetBody(canvas, options = {}) {
     if (state.mouthSmooth < 0.01 && rawMouth === 0) { state.mouthSmooth = 0; state.speaking = false; }
     if (state.mouthSmooth > 0.02) emotion.lastMouthAt = now;
     if (typeof options.onMouth === 'function') options.onMouth(state.mouthSmooth, rawMouth);
+    // ── 待机层（2026-11-25 P1）：每帧取一次偏置，上下文 1 秒采样一次 ─────────
+    // 为什么 1 秒：readPresence 是同步函数调用（world-sense/__userActivity），每帧问
+    // 60 次没必要；ambient.sample 本身是 O(1)（几个 sin + 一次比较）。
+    try {
+      const ambNow = Date.now();
+      if (ambNow - ambientCtx.at >= 1000) {
+        ambientCtx.at = ambNow;
+        const p = directorPresence();
+        ambientCtx.presence = p ? p.state : 'unknown';
+        const lastTouch = Number(perfSession.lastTextAt || perfSession.userActionAt || perfSession.startedAt) || ambNow;
+        ambientCtx.idleSec = Math.max(0, (ambNow - lastTouch) / 1000);
+        ambientCtx.hour = new Date(ambNow).getHours();
+        const sum = perfLog.summary(ambNow);
+        // 被接率样本 <20 时 ambient 不会调权重（门槛与 choreo-tune 同）
+        ambientCtx.reply = { rate: sum.replyRateAfterEnd, samples: sum.replySamplesAfterEnd };
+      }
+      const wasSpeaking = ambientCtx.lastSpeaking;
+      ambientCtx.lastSpeaking = state.speaking === true;
+      if (wasSpeaking && ambientCtx.lastSpeaking !== true) ambientCtx.conversationEndedAt = ambNow;
+      const amb = ambient.sample(ambNow, {
+        presence: ambientCtx.presence,
+        hour: ambientCtx.hour,
+        idleSec: ambientCtx.idleSec,
+        conversationEndedAt: ambientCtx.conversationEndedAt,
+        intensity: ambientIntensity(),
+        reply: ambientCtx.reply,
+      });
+      state.ambient = {
+        state: amb.state, dwellMs: amb.dwellMs, amp: amb.amp, action: amb.action,
+        transitions: amb.transitions, needsRecompute: amb.needsRecompute,
+      };
+      // 表演/说话/片段占着时，ambient 让位（幅度 1 = 旧行为，偏置 null）
+      const ambientVisible = state.speaking !== true && !performer.active && !perfClaim.active;
+      // P1.5：偏置要落到真正写参数的那一层。表演占着时同样让位；说话时仍推给渲染器，
+      // 由它把 head/gaze 系数减半（breath 不变）—— 这样「说话时不参与指向、但还在呼吸」
+      // 是一条可测的规则，而不是「说话时整层消失」。
+      const ambientApply = !performer.active && !perfClaim.active;
+      try { renderer.setAmbientAmp(ambientVisible ? amb.motionScale : 1); } catch (e) { /* ignore */ }
+      try {
+        renderer.setAmbientOffset(ambientApply ? Object.assign({}, amb.bias, { amp: amb.amp }) : null);
+      } catch (e) { /* ignore */ }
+      if (emotion.perf && typeof emotion.perf.setAmbientBias === 'function') {
+        emotion.perf.setAmbientBias(ambientVisible ? { amp: amb.amp, bias: amb.bias } : null);
+      }
+    } catch (e) { /* ambient 异常绝不影响主渲染 */ }
     // 情绪引擎：tick → 平滑逼近 → 写进 defaults（updateView 从 defaults 取基线）
     let emoSnap = null;
     let perfSnap = null;
@@ -1411,7 +2415,16 @@ export function createPetBody(canvas, options = {}) {
         const riseStrength = stateEmoFresh && Number(state.emotionStrength) > 0
           ? Number(state.emotionStrength)
           : (Number(faceStrength) || 0);
-        if (!claimFreeForV2) {
+        // P0（2026-11-25）：导演门在 consider **之前**。dry-run 时 gate 永远 proceed，
+        // 只多写一条 perf.request；enforce 时才真的跳过 consider（不白吃冷却）。
+        const dirT1 = directorDecideFor('v2', { key: 'auto:speech' });
+        if (!dirT1.proceed) {
+          if (typeof window !== 'undefined') window.__perfAutoState = {
+            decision: { play: false, reason: 'director:' + dirT1.reason },
+            input: { emotion: riseEmotion, strength: riseStrength, fresh: stateEmoFresh },
+            at: Date.now(),
+          };
+        } else if (!claimFreeForV2) {
           // 片段（或手动）正占着脸：让位并记账，不消耗自动触发的冷却。
           perfClaim.recordYield('v2', { reason: 'busy', heldBy: perfClaim.snapshot().owner, key: 'auto:speech' });
           if (typeof window !== 'undefined') window.__perfAutoState = {
@@ -1445,11 +2458,26 @@ export function createPetBody(canvas, options = {}) {
         const nowIdle = performance.now();
         if (nowIdle - perfIdle.lastCheckAt >= 20000) {
           perfIdle.lastCheckAt = nowIdle;
-          if (!claimFreeForV2) {
+          // P0：导演门（dry-run 只记 perf.request，不拦）。只有「安静到接近空闲触发阈值
+          // （2 分钟）」才问导演 —— 否则用户正在聊天时每 20 秒一条 perf.request，
+          // 24h dry-run 报告会被不是演出请求的样本灌成噪音。
+          const idleForDirector = nowIdle - perfIdle.lastSpeakingAt;
+          const dirT3 = idleForDirector >= 120000
+            ? directorDecideFor('v2', { key: 'auto:idle' })
+            : { proceed: true, dec: null };
+          if (!dirT3.proceed) {
+            if (typeof window !== 'undefined') window.__perfIdleState = { decision: { play: false, reason: 'director:' + dirT3.reason }, at: Date.now() };
+          } else if (!claimFreeForV2) {
             perfClaim.recordYield('v2', { reason: 'busy', heldBy: perfClaim.snapshot().owner, key: 'auto:idle' });
             if (typeof window !== 'undefined') window.__perfIdleState = { decision: { play: false, reason: 'busy' }, at: Date.now() };
           } else {
-            const di = perfAuto.considerIdle({ now: nowIdle, idleMs: nowIdle - perfIdle.lastSpeakingAt });
+            const di = perfAuto.considerIdle({
+              now: nowIdle,
+              idleMs: nowIdle - perfIdle.lastSpeakingAt,
+              // P1：空闲长段只在导演 intensity≥0.8 时允许；其余时间交给 ambient。
+              // 导演没开（dec=null）时传 undefined → 保持旧行为（不设门）。
+              intensity: dirT3.dec ? dirT3.dec.intensity : undefined,
+            });
             if (di.play) {
               const started = requestPerformance(di.key, nowIdle, { owner: 'v2' });
               if (started.ok) {
@@ -1498,15 +2526,21 @@ export function createPetBody(canvas, options = {}) {
             if (cand.emotion !== perfEmo.lastKey || performance.now() - perfEmo.lastAt > 15000) {
               perfEmo.lastKey = cand.emotion;
               perfEmo.lastAt = performance.now();
-              const de = perfAuto.consider({ emotion: cand.emotion, strength: cand.strength, now: performance.now() });
-              if (de.play) {
-                const started = requestPerformance(de.key, performance.now(), { owner: 'v2' });
-                if (started.ok) {
-                  v2Started = true;
-                  choreo.perf = null;
+              // P0：导演门（此分支最多 15 秒一次）。dry-run 只记日志，enforce 才跳过 consider。
+              const dirT2 = directorDecideFor('v2', { key: 'auto:felt' });
+              if (!dirT2.proceed) {
+                if (typeof window !== 'undefined') window.__perfEmoState = { decision: { play: false, reason: 'director:' + dirT2.reason }, input: cand, at: Date.now() };
+              } else {
+                const de = perfAuto.consider({ emotion: cand.emotion, strength: cand.strength, now: performance.now() });
+                if (de.play) {
+                  const started = requestPerformance(de.key, performance.now(), { owner: 'v2' });
+                  if (started.ok) {
+                    v2Started = true;
+                    choreo.perf = null;
+                  }
                 }
+                if (typeof window !== 'undefined') window.__perfEmoState = { decision: de, input: cand, at: Date.now() };
               }
-              if (typeof window !== 'undefined') window.__perfEmoState = { decision: de, input: cand, at: Date.now() };
             }
           }
         }
@@ -1551,34 +2585,80 @@ export function createPetBody(canvas, options = {}) {
     try {
       const nowPerf = performance.now();
       perfFrame = performer.sample(nowPerf, { speaking: state.speaking === true });
+      // P2b：停止时补发的手势 exit 可能落在「已经没有表演」的帧上（sample 返回 null），
+      // 所以每帧都取一次（空数组时零成本），保证资产一定会被收回。
+      try {
+        const exits = performer.takeExits();
+        for (let i = 0; i < exits.length; i += 1) applyGestureEvent(exits[i]);
+      } catch (e) { /* 资产收回失败不阻断渲染 */ }
       if (perfFrame) {
         // 表演层表情（v3）：把本帧所有该锁的脸交给渲染层按权重融合。
         // 旧实现只锁第一张（manualFace 单槽）→ 13 的「裙子+眼镜」、04 的「＞＜+脸红」会丢第二张。
+        // P0（2026-11-25）：exp3 锁也在资产 pin 的管辖内 —— 用户手动点「脸红」（pin key7）后，
+        // v2 不能再靠剧情锁「脸红」把 key7 叠回来。整张脸锁或整张不锁（单通道没有半张脸）。
+        let facesToLock = Array.isArray(perfFrame.expressions) ? perfFrame.expressions : [];
+        // 2026-11-25 实拍：10-resolution 的「加载」是作者做的 loading 动画（12 个灰胶囊），
+        // 在 40% 处贴在头发上像脏点/穿模。它不是剧情表情，是资源占位 —— 不进表演层。
+        // 硬编码黑名单而不是配置键：它来自素材本身，不是用户偏好。
+        const V2_FACE_BLOCKLIST = new Set(['加载']);
+        if (facesToLock.length) facesToLock = facesToLock.filter((n) => !V2_FACE_BLOCKLIST.has(String(n)));
+        let facePinSkips = [];
+        try {
+          const pinnedFaces = getPinnedAssetParams(renderer);
+          if (pinnedFaces && pinnedFaces.size) {
+            const filtered = filterPinnedExpressions(facesToLock, pinnedFaces);
+            facesToLock = filtered.accepted;
+            facePinSkips = filtered.skippedPinned;
+          }
+        } catch (e) { facePinSkips = []; }
+        if (facePinSkips.length) {
+          emotion.v2FacePinSkips = (Number(emotion.v2FacePinSkips) || 0) + facePinSkips.length;
+          for (const s of facePinSkips) {
+            const key = 'face:' + s.name;
+            if (emotion.v2FacePinSeen && emotion.v2FacePinSeen.has(key)) continue;
+            if (!emotion.v2FacePinSeen) emotion.v2FacePinSeen = new Set();
+            emotion.v2FacePinSeen.add(key);
+            console.info(`[param-ownership] v2 跳过表情锁「${s.name}」（${s.params.join('/')} 已被手动 pin）`);
+          }
+        }
         if (typeof renderer.setPerformanceFaces === 'function') {
-          renderer.setPerformanceFaces(perfFrame.expressions || []);
+          renderer.setPerformanceFaces(facesToLock);
         } else if (perfFrame.expression) {
           // 兜底旧渲染层
-          renderer.manualFace = perfFrame.expression;
-          renderer.manualFaceUntil = nowPerf + 600;
+          if (facesToLock.includes(perfFrame.expression)) {
+            renderer.manualFace = perfFrame.expression;
+            renderer.manualFaceUntil = nowPerf + 600;
+          }
         }
+        // P0：v2 写入集入册 —— 以前 checkWriteSet 只查 perf，v2 走 view.choreo/choreoOverride
+        // 完全绕过断言（审计叫它「所有权黑洞」）。这里把本帧真实写入集与编译数据的轨道 id 对账。
+        try {
+          const declared = Array.isArray(performer.params) ? performer.params(perfFrame.key) : [];
+          // 生命层（lifeLayer）是代码里写死的微漂移，不在编译数据里 —— 一起声明，否则永远红。
+          const audit = checkChoreoWriteSet(
+            { choreo: perfFrame.additive, choreoOverride: perfFrame.override },
+            declared.concat(['AngleX', 'AngleZ', 'ParamEyeBallX']),
+          );
+          emotion.v2OwnershipAudit = audit;
+          if (!audit.ok && !emotion.v2OwnershipWarned) {
+            emotion.v2OwnershipWarned = true;
+            console.warn('[param-ownership] v2 写入了编译数据未声明的参数：', JSON.stringify(audit.undeclared.slice(0, 8)));
+          }
+        } catch (e) { /* 断言失败不影响渲染 */ }
         // 原生手势：动作 + 资产必须成对（2026-11-15 实测：光播 motion 只轻微调手臂，
         // 「竖食指」出现靠 Movement1/2/3 的图层切换）。资产走 window.__petAssets 全局，
         // 不直接引 api.setCostume —— frame 可能早于 api 定义执行（TDZ）。
         for (let i = 0; i < perfFrame.gestures.length; i += 1) {
-          const g = perfFrame.gestures[i];
-          try {
-            const assetApi = (typeof window !== 'undefined') && window.__petAssets;
-            if (g.asset && assetApi && typeof assetApi.apply === 'function') {
-              assetApi.apply(g.asset, g.on === true);
-            }
-          } catch (e) { /* 资产切换失败不阻断动作 */ }
-          try { renderer.playMotion(g.group, g.index); } catch (e) { /* 单次动作失败不阻断整段表演 */ }
+          applyGestureEvent(perfFrame.gestures[i]);
         }
         if (perfFrame.done) {
           // P1：演完必须交还占用，否则自动层会被一段已经结束的表演永久挡住。
           const holder = perfClaim.snapshot();
-          performer.stop();
-          if (holder.owner === 'v2' || holder.owner === 'manual') perfArbiter.end(holder.owner, holder.token);
+          // P0.2：自然结束（淡出走到 duration，不是被打断）
+          try { perfLog.noteEnd({ endedBy: 'natural', clipId: perfFrame.key, actualMs: Math.round(Number(perfFrame.t) * 1000) }); } catch (e) { /* ignore */ }
+          performer.stop('natural');
+          // P2b：交还走统一出口（scheduler 开时 finish 会顺手拉起队列里的下一条）
+          if (holder.owner === 'v2' || holder.owner === 'manual') endClaim(holder.owner, holder.token, 'natural');
         }
       }
       // 表情/随机表情的所有权：表演在场时归表演（外部换脸会被 renderer 拒绝），
@@ -1589,7 +2669,7 @@ export function createPetBody(canvas, options = {}) {
         // performer 已经不在演了（手动 stop / 被顶掉），但 claim 可能还挂在 v2/manual：
         // 兜底交还（scenes/clip 的占用由各自的定时器/播放器释放）。
         const holder = perfClaim.snapshot();
-        if (holder.owner === 'v2' || holder.owner === 'manual') perfArbiter.end(holder.owner, holder.token);
+        if (holder.owner === 'v2' || holder.owner === 'manual') endClaim(holder.owner, holder.token, 'released');
         // 表演结束：脸集合清空（渲染层会用 0.22s 淡出，不会硬切回情绪脸）
         if (typeof renderer.setPerformanceFaces === 'function') renderer.setPerformanceFaces([]);
         if (renderer.expressionOwner === 'performance') {
@@ -1743,6 +2823,11 @@ const api = {
       try { emotion.facsClips && emotion.facsClips.stop && emotion.facsClips.stop(); } catch (e) {}
       emotion.facsClips = null;
       // P1：dispose 时把仲裁占用全部交还，避免热重载后旧 claim 挡住新实例。
+      // P2b：调度器先 reset（清队列/待启动表），再交还 arbiter 的四个 owner。
+      try { if (perfSched) perfSched.reset(); } catch (e) { /* ignore */ }
+      schedPending.clear();
+      // P3a：节目单的在途循环要一起掐掉，否则 dispose 后还会 await 然后写参数
+      try { if (programRunner) programRunner.reset(); } catch (e) { /* ignore */ }
       try { perfArbiter.end('clip'); perfArbiter.end('v2'); perfArbiter.end('manual'); perfArbiter.end('scenes'); } catch (e) { /* ignore */ }
       try { emotion.bubbleEl && emotion.bubbleEl.remove(); } catch (e) {}
       emotion.bubbleEl = null;
@@ -1781,7 +2866,11 @@ const api = {
       let ok = false;
       try { ok = emotion.engine ? emotion.engine.feed({ text: String(text || ''), kind: kind || 'llm' }) : false; } catch (e) { ok = false; }
       semanticFallback(String(text || ''));   // 规则没命中时由语义服务兜底（异步、不阻塞）
+      // P0：会话统计（导演强度曲线用）—— 用户每说一句算一轮，并刷新「最近主动交互」
+      try { perfSession.turns = (Number(perfSession.turns) || 0) + 1; perfSession.userActionAt = Date.now(); perfSession.lastTextAt = perfSession.userActionAt; } catch (e) { /* ignore */ }
       try { perfLog.noteUserInput(); } catch (e) { /* 日志失败不影响对话 */ }
+      // P3a：用户开口 = 节目单的「下一 relax 点停」信号（不硬切，等这句台词说完）
+      try { if (programRunner) programRunner.notifyUserInput(); } catch (e) { /* 没在演就算了 */ }
       return ok;
     },
     /** 直接喂一个情绪键（不走关键词）：给插件/语义兜底用 */
@@ -1925,8 +3014,28 @@ const api = {
     // P1：SCENES 是显式手动（用户/托盘点名），优先级最高：先拿占用（可顶掉 clip/v2），
     // 拿不到只可能是另一个显式手动正在跑 —— 那也按「后一次调用替换前一次」处理。
     const sceneDuration = steps.reduce((max, step) => Math.max(max, Number(step.at) || 0), 0) + 3000;
+    const sceneKey = 'scene:' + String(name);
+    // P2b：调度器路径 —— kind=atomic（3–4s 短场景不可被自动层打断），preempt=true（显式手动）。
+    // 返回 preempting 时先不排 setTimeout：等收势结束的 'start' 事件再开演。
+    const sched = ensureScheduler();
+    if (sched) {
+      const req = sched.request({
+        owner: 'scenes', key: sceneKey, kind: 'atomic', maxMs: sceneDuration, preempt: true,
+      });
+      if (!req.ok) {
+        perfClaim.recordYield('scenes', { reason: req.reason || 'busy', heldBy: perfClaim.snapshot().owner, key: String(name) });
+        return false;
+      }
+      if (req.status === 'started') return beginScenePlayback(name, steps, sceneDuration, req.token);
+      schedPending.set(req.token, {
+        kind: 'scenes', owner: 'scenes', key: sceneKey,
+        apply: () => beginScenePlayback(name, steps, sceneDuration, req.token),
+      });
+      return steps.length;
+    }
+    // ── 旧路径（scheduler 关）：逐位不变 ──────────────────────────────────
     const admitted = perfArbiter.begin('scenes', {
-      key: 'scene:' + String(name), title: String(name), durationMs: sceneDuration, preempt: true,
+      key: sceneKey, title: String(name), durationMs: sceneDuration, preempt: true,
     });
     if (!admitted.ok) {
       perfClaim.recordYield('scenes', { reason: 'busy', heldBy: admitted.holder, key: String(name) });
@@ -1935,7 +3044,9 @@ const api = {
     if (admitted.preempted === 'clip') {
       try { if (emotion.facsClips && emotion.facsClips.stop) emotion.facsClips.stop(); } catch (e) { /* ignore */ }
     } else if (admitted.preempted && admitted.preempted !== 'micro') {
-      try { performer.stop(); } catch (e) { /* ignore */ }
+      // P0.2：被顶掉的长演出一律记 interrupt（v2 没有收势，硬切也是打断）
+      try { if (performer.key) perfLog.noteEnd({ endedBy: 'interrupt', clipId: performer.key }); } catch (e) { /* ignore */ }
+      try { performer.stop('interrupt'); } catch (e) { /* ignore */ }
     }
     try { if (api._sceneTimers) for (const id of api._sceneTimers) clearTimeout(id); } catch (e) {}
     api._sceneTimers = [];
@@ -1955,7 +3066,7 @@ const api = {
       api._sceneTimers.push(id);
     }
     // 场景演完交还占用；token 确保不会误杀之后新起的另一段场景/手动演出。
-    api._sceneTimers.push(setTimeout(() => { try { perfArbiter.end('scenes', admitted.token); } catch (e) {} }, sceneDuration));
+    api._sceneTimers.push(setTimeout(() => { try { endClaim('scenes', admitted.token, 'natural'); } catch (e) {} }, sceneDuration));
     return steps.length;
   },
   listScenes() { return Object.keys(SCENES); },
@@ -1964,6 +3075,55 @@ const api = {
   // 与 SCENES 的区别：SCENES 是 3–4 秒的「情绪+动作词典+换装」粗编排；
   // 表演库是 19–38 秒的参数级演出（眼球/眉/嘴/角度逐帧轨道 + 原生手势 + 真表情）。
   listPerformances() { return performer.list(); },
+
+  // ── 节目单（P3a，ADR-015 §3.5）─────────────────────────────────────────
+  // 契约：listPrograms() 给 UI 列表；playProgram(id) 返回 {ok,reason,...}；
+  // stopProgram() 立即收势（400ms）。三种拒绝理由必须可区分：disabled / scheduler-off / budget。
+  listPrograms() {
+    const info = loadProgramsDoc();
+    const cfg = programCfg();
+    return {
+      enabled: cfg.enabled === true,
+      scheduler: schedulerEnabled(),
+      maxPerDay: programMaxPerDay(),
+      budgetLeft: programBudgetApi.left(),
+      dir: info.dir,
+      error: info.error,
+      items: info.list.map((p) => ({
+        id: String(p.id),
+        title: String(p.title || p.id),
+        beats: (Array.isArray(p.beats) ? p.beats : []).map((b) => ({
+          seg: String((b && b.seg) || ''),
+          maxMs: Number((b && b.maxMs) || 0),
+          line: String((b && b.line) || ''),
+          sfx: String((b && b.sfx) || ''),
+        })),
+      })),
+    };
+  },
+  playProgram(programId) {
+    const cfg = programCfg();
+    if (cfg.enabled !== true) return { ok: false, reason: 'disabled' };
+    if (!schedulerEnabled()) return { ok: false, reason: 'scheduler-off' };
+    const runner = ensureProgramRunner();
+    if (!runner) return { ok: false, reason: 'scheduler-off' };
+    const res = runner.start(String(programId == null ? '' : programId));
+    if (!res.ok) {
+      try {
+        perfClaim.recordYield('program', {
+          reason: res.reason || 'busy',
+          heldBy: (perfClaim.snapshot() || {}).owner,
+          key: String(programId || ''),
+        });
+      } catch (e) { /* ignore */ }
+    }
+    return res;
+  },
+  stopProgram() {
+    if (!programRunner) return { ok: false, reason: 'idle' };
+    try { return programRunner.stop('user'); } catch (e) { return { ok: false, reason: 'error' }; }
+  },
+
   playPerformance(key, opts) {
     // P1：显式手动，preempt=true（优先级最高，可顶掉片段/自动长表演）。
     const result = requestPerformance(key, performance.now(), { owner: 'manual', preempt: true, performer: opts || {} });
@@ -1975,7 +3135,13 @@ const api = {
     return result.ok === true;
   },
   stopPerformance() {
-    performer.stop();
+    // P0.2：显式停止 = 打断（不是自然结束）
+    try { if (performer.key) perfLog.noteEnd({ endedBy: 'interrupt', clipId: performer.key }); } catch (e) { /* ignore */ }
+    performer.stop('interrupt');
+    // P3a：节目单也一起停（用户点「停」不该只停 v2，留她在演节目单）
+    try { if (programRunner) programRunner.stop('user'); } catch (e) { /* ignore */ }
+    // P2b：队列里/待启动表里属于 v2/manual 的请求一并取消，否则停下 400ms 后又自己演起来
+    try { cancelSchedPending((o) => o === 'v2' || o === 'manual'); } catch (e) { /* ignore */ }
     releasePerformance('v2');
     releasePerformance('manual');
     return true;
@@ -2002,6 +3168,11 @@ const api = {
         externalPinDetected: Number(emotion.externalPinDetected) || 0,
         externalPinReleased: Number(emotion.externalPinReleased) || 0,
         perfOwnershipAudit: emotion.ownershipAudit || null,
+        // P0（2026-11-25）：v2 长表演的写入集断言 + exp3 锁被 pin 跳过的次数。
+        // 以前这两件事完全在断言之外（「所有权黑洞」），doctor 只能看到全绿。
+        v2OwnershipAudit: emotion.v2OwnershipAudit || null,
+        v2FacePinSkips: Number(emotion.v2FacePinSkips) || 0,
+        v2FacePinSkipped: emotion.v2FacePinSeen ? Array.from(emotion.v2FacePinSeen) : [],
       };
     } catch (e) {
       return { error: String((e && e.message) || e) };
@@ -2035,7 +3206,130 @@ const api = {
       applied: Number(emotion.gainApplied) || 0,
       perfApplied: Number(emotion.gainAppliedPerf) || 0,
     };
+    // 2026-11-25 P0「情绪增益滑杆死契约」修复：控制面板旧版本读 status.options.emotionGain，
+    // 而 buildPerformanceStatus 从来不返回 options → 滑杆恒被判「未接线」禁用。
+    // 现在两套都给：新 UI 读 status.gain.value（entry 一直有），旧 UI 读 options（补上）。
+    status.options = Object.assign({}, status.options || {}, { emotionGain: status.gain.value });
     return status;
+  },
+  /** P0.5：performance.* 配置下发（driver 在皮套初始化后调一次；缺键走默认） */
+  setPerformanceConfig(raw) {
+    try { return applyPerfConfig(raw); } catch (e) { return perfDirector.cfg; }
+  },
+  /**
+   * P0.5 只读快照（8004 /eval 与控制中心用）：
+   * presence / director 最近决策 / clip 池统计 / 预算余额 / sync 覆盖（P0 恒 0）。
+   * 只读内存，不做 I/O，可随时调。
+   */
+  performanceDebug() {
+    const at = Date.now();
+    let presence = null;
+    try { presence = readPresence(globalThis, at); } catch (e) { presence = null; }
+    let sum = null;
+    try { sum = perfLog.summary(at); } catch (e) { sum = null; }
+    let poolStats = null;
+    try {
+      poolStats = emotion.facsClips && typeof emotion.facsClips.poolStats === 'function'
+        ? emotion.facsClips.poolStats(at)
+        : null;
+    } catch (e) { poolStats = null; }
+    const cfg = perfDirector.cfg || resolvePerformanceConfig(null);
+    const dirCfg = cfg.director || PERFORMANCE_DEFAULTS.director;
+    return {
+      at,
+      presence,
+      director: {
+        mode: dirCfg.enabled === true ? 'enforce' : (dirCfg.dry_run === true ? 'dryrun' : 'off'),
+        config: dirCfg,
+        lastDecision: perfDirector.lastDecision,
+        lastAt: perfDirector.lastAt,
+      },
+      poolStats,
+      budget: sum ? (() => {
+        // 日预算/长段预算只算自动来源（手点不吃额度，见 directive.budgetsFromSummary）
+        const autoPlays = Number.isFinite(Number(sum.autoPlaysToday)) ? sum.autoPlaysToday : sum.playsToday;
+        const autoLong = Number.isFinite(Number(sum.autoLongToday)) ? sum.autoLongToday : sum.longToday;
+        const auto10 = Number.isFinite(Number(sum.autoPlays10)) ? sum.autoPlays10 : sum.plays10;
+        return {
+          playsToday: sum.playsToday,
+          longToday: sum.longToday,
+          playsLast10Min: sum.plays10,
+          requestsToday: sum.requestsToday,
+          blockedToday: sum.blockedToday,
+          // 分开暴露（24h 校准用）：手点/场景不进导演预算
+          spentAuto: { plays: autoPlays, long: autoLong, last10: auto10 },
+          spentManual: {
+            plays: Number.isFinite(Number(sum.manualPlaysToday)) ? sum.manualPlaysToday : Math.max(0, sum.playsToday - autoPlays),
+            long: Number.isFinite(Number(sum.manualLongToday)) ? sum.manualLongToday : Math.max(0, sum.longToday - autoLong),
+          },
+          left: {
+            plays: Math.max(0, Number(dirCfg.max_plays_per_day) - autoPlays),
+            long: Math.max(0, Number(dirCfg.max_long_per_day) - autoLong),
+            last10: Math.max(0, Number(dirCfg.max_per_10min) - auto10),
+          },
+        };
+      })() : null,
+      // P1 待机层：状态/停留/幅度（只读内存；renderer 与本进程同一份状态）
+      ambient: (() => {
+        try {
+          const snap = ambient.snapshot();
+          // P1.5：证明偏置真的进了参数写入 —— offsets 是渲染器本帧加到各参数上的量
+          // （归一化偏置 × 系数，已含 speaking 减半），不是「配置里说了什么」。
+          const applied = renderer && renderer.ambientApplied;
+          return {
+            enabled: snap.enabled,
+            scale: snap.scale,
+            state: snap.state,
+            dwellMs: snap.dwellMs,
+            amp: state.ambient ? state.ambient.amp : null,
+            action: snap.action,
+            transitions: snap.transitions,
+            intensity: snap.intensity,
+            applied: Boolean(applied),
+            offsets: applied ? applied.offsets : null,
+            applyingWhileSpeaking: applied ? applied.speaking : null,
+          };
+        } catch (e) { return null; }
+      })(),
+      // P2b：sync 覆盖从 perf-sync.json 实读（P0/P1 时期这里诚实写 0；现在有产物了）。
+      // 缺文件/坏 JSON → items=0 + error，调度器按「整段 atomic」退化（不假装有 relax 点）。
+      syncCoverage: (() => {
+        try {
+          loadPerfSyncDoc();
+          return { items: perfSyncInfo.items, loaded: perfSyncInfo.loaded, version: perfSyncInfo.version };
+        } catch (e) {
+          return { items: 0, loaded: 0, version: 0 };
+        }
+      })(),
+      // P2b 调度器现场：开没开 / 当前 owner / 排队几条 / 最近的 yield 原因 / sync 覆盖
+      scheduler: (() => {
+        try {
+          const enabled = schedulerEnabled();
+          const st = perfSched ? perfSched.status() : null;
+          return {
+            enabled,
+            mode: !enabled ? 'off' : (st ? (st.degraded ? 'degraded' : 'on') : 'cold'),
+            current: st ? st.current : null,
+            pending: st ? st.pending : null,
+            queue: st ? st.queue : [],
+            queueLength: st ? (st.queue || []).length : 0,
+            yields: st ? st.yields : {},
+            stats: st ? st.stats : null,
+            lastEvent: schedLastEvent,
+            syncCoverage: {
+              items: perfSyncInfo.items,
+              loaded: perfSyncInfo.loaded,
+              version: perfSyncInfo.version,
+              file: perfSyncInfo.file,
+              error: perfSyncInfo.error,
+            },
+          };
+        } catch (e) { return { enabled: false, mode: 'error', error: String((e && e.message) || e) }; }
+      })(),
+      claim: perfClaim.snapshot(),
+      // P3a：节目单现场（enabled/active/programId/beatIdx/budgetLeft + 遥测计数）
+      program: programDebugSnapshot(),
+    };
   },
   // 调试/验收：强制走一次空闲通道（忽略「安静够不够」，rand 固定走日常段池）
   triggerIdlePerformance() {
@@ -2044,7 +3338,7 @@ const api = {
       perfClaim.recordYield('v2', { reason: 'busy', heldBy: perfClaim.snapshot().owner, key: 'debug:idle' });
       return { play: false, reason: 'busy', heldBy: perfClaim.snapshot().owner };
     }
-    const d = perfAuto.considerIdle({ now, idleMs: 60 * 60 * 1000, rand: 0, rand2: 0.5 });
+    const d = perfAuto.considerIdle({ now, idleMs: 60 * 60 * 1000, rand: 0, rand2: 0.5, intensity: 1 });
     if (d.play) {
       const started = requestPerformance(d.key, now, { owner: 'v2' });
       if (!started.ok) return Object.assign({}, d, { play: false, reason: started.reason || 'busy' });

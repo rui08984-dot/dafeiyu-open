@@ -69,7 +69,22 @@ class MemosPlugin extends Plugin {
         if (!['voice', 'text'].includes(event.source)) return;
 
         try {
-            let memories = await this.client.search(event.text);
+            // 2026-11-25 P1-4：search 现在返回 {ok, memories, reason, status}。
+            // 失败不再伪装成「没有记忆」—— 降级为「本轮不注入」，但日志必须可见。
+            const sr = await this.client.search(event.text);
+            if (!sr || sr.ok === false) {
+                const why = sr ? String(sr.reason || 'unknown') : 'no-result';
+                const extra = sr && (sr.status || sr.message || sr.lastFailReason)
+                    ? '（' + [sr.status ? 'status=' + sr.status : '', sr.message || sr.lastFailReason || ''].filter(Boolean).join(' ') + '）'
+                    : '';
+                this.context.log('warn', `[memos] 本轮不注入记忆：搜索失败 ${why}${extra}`);
+                this.context.removeSystemPromptPatch('memos-recall');
+                return;
+            }
+            // 兼容旧契约（数组）与桩：新 client 返回 {ok,memories}
+            let memories = Array.isArray(sr)
+                ? sr
+                : (Array.isArray(sr.memories) ? sr.memories : []);
             // 遗忘墓碑（2026-11-22）：本地删除 + 墓碑是权威判据，MemOS 检索结果逐条过滤。
             // 内容取 m.content（兼容纯字符串条目）；过滤抛错时放行，不能让记忆注入整体挂掉。
             let tombstoned = 0;

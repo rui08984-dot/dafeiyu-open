@@ -1,0 +1,2727 @@
+{
+  "version": 2,
+  "generatedAt": "2026-11-25T10:36:35.818Z",
+  "hash": "1130b696cd1d4291",
+  "quality": {
+    "authored": 87,
+    "derived": 143,
+    "inserted": 67
+  },
+  "items": {
+    "01-curiosity": {
+      "durationMs": 20200,
+      "prepMs": 0,
+      "strokeMs": 300,
+      "relaxMs": [
+        4000,
+        7500,
+        10500,
+        14870,
+        16120,
+        17900,
+        19500
+      ],
+      "relaxMeta": [
+        {
+          "t": 4000,
+          "q": "authored"
+        },
+        {
+          "t": 7500,
+          "q": "authored"
+        },
+        {
+          "t": 10500,
+          "q": "derived"
+        },
+        {
+          "t": 14870,
+          "q": "authored"
+        },
+        {
+          "t": 16120,
+          "q": "authored"
+        },
+        {
+          "t": 17900,
+          "q": "authored"
+        },
+        {
+          "t": 19500,
+          "q": "authored"
+        }
+      ],
+      "endMs": 20200,
+      "atomic": false
+    },
+    "02-vulnerable": {
+      "durationMs": 20100,
+      "prepMs": 0,
+      "strokeMs": 0,
+      "relaxMs": [
+        3600,
+        5500,
+        10000,
+        14100,
+        15920,
+        18300
+      ],
+      "relaxMeta": [
+        {
+          "t": 3600,
+          "q": "derived"
+        },
+        {
+          "t": 5500,
+          "q": "authored"
+        },
+        {
+          "t": 10000,
+          "q": "authored"
+        },
+        {
+          "t": 14100,
+          "q": "authored"
+        },
+        {
+          "t": 15920,
+          "q": "authored"
+        },
+        {
+          "t": 18300,
+          "q": "authored"
+        }
+      ],
+      "endMs": 20100,
+      "atomic": false
+    },
+    "03-pride": {
+      "durationMs": 19700,
+      "prepMs": 0,
+      "strokeMs": 500,
+      "relaxMs": [
+        2750,
+        5500,
+        6750,
+        11000,
+        15500,
+        17103,
+        18500
+      ],
+      "relaxMeta": [
+        {
+          "t": 2750,
+          "q": "inserted"
+        },
+        {
+          "t": 5500,
+          "q": "authored"
+        },
+        {
+          "t": 6750,
+          "q": "derived"
+        },
+        {
+          "t": 11000,
+          "q": "authored"
+        },
+        {
+          "t": 15500,
+          "q": "derived"
+        },
+        {
+          "t": 17103,
+          "q": "authored"
+        },
+        {
+          "t": 18500,
+          "q": "authored"
+        }
+      ],
+      "endMs": 19700,
+      "atomic": false
+    },
+    "04-playful": {
+      "durationMs": 20000,
+      "prepMs": 0,
+      "strokeMs": 0,
+      "relaxMs": [
+        3500,
+        6200,
+        8500,
+        10100,
+        14500,
+        17000,
+        18500
+      ],
+      "relaxMeta": [
+        {
+          "t": 3500,
+          "q": "authored"
+        },
+        {
+          "t": 6200,
+          "q": "authored"
+        },
+        {
+          "t": 8500,
+          "q": "authored"
+        },
+        {
+          "t": 10100,
+          "q": "authored"
+        },
+        {
+          "t": 14500,
+          "q": "authored"
+        },
+        {
+          "t": 17000,
+          "q": "authored"
+        },
+        {
+          "t": 18500,
+          "q": "authored"
+        }
+      ],
+      "endMs": 20000,
+      "atomic": false
+    },
+    "05-weight-shift": {
+      "durationMs": 26200,
+      "prepMs": 0,
+      "strokeMs": 0,
+      "relaxMs": [
+        3000,
+        6000,
+        9250,
+        12500,
+        15750,
+        19000,
+        22250,
+        25500
+      ],
+      "relaxMeta": [
+        {
+          "t": 3000,
+          "q": "inserted"
+        },
+        {
+          "t": 6000,
+          "q": "authored"
+        },
+        {
+          "t": 9250,
+          "q": "inserted"
+        },
+        {
+          "t": 12500,
+          "q": "authored"
+        },
+        {
+          "t": 15750,
+          "q": "inserted"
+        },
+        {
+          "t": 19000,
+          "q": "authored"
+        },
+        {
+          "t": 22250,
+          "q": "inserted"
+        },
+        {
+          "t": 25500,
+          "q": "authored"
+        }
+      ],
+      "endMs": 26200,
+      "atomic": false
+    },
+    "06-finger-articulation": {
+      "durationMs": 18820,
+      "prepMs": 0,
+      "strokeMs": 0,
+      "relaxMs": [
+        3500,
+        7000,
+        11935,
+        16870,
+        18120
+      ],
+      "relaxMeta": [
+        {
+          "t": 3500,
+          "q": "inserted"
+        },
+        {
+          "t": 7000,
+          "q": "authored"
+        },
+        {
+          "t": 11935,
+          "q": "inserted"
+        },
+        {
+          "t": 16870,
+          "q": "authored"
+        },
+        {
+          "t": 18120,
+          "q": "authored"
+        }
+      ],
+      "endMs": 18820,
+      "atomic": false
+    },
+    "07-left-articulation": {
+      "durationMs": 18820,
+      "prepMs": 0,
+      "strokeMs": 0,
+      "relaxMs": [
+        4000,
+        8000,
+        12000,
+        16000,
+        18120
+      ],
+      "relaxMeta": [
+        {
+          "t": 4000,
+          "q": "inserted"
+        },
+        {
+          "t": 8000,
+          "q": "inserted"
+        },
+        {
+          "t": 12000,
+          "q": "inserted"
+        },
+        {
+          "t": 16000,
+          "q": "authored"
+        },
+        {
+          "t": 18120,
+          "q": "authored"
+        }
+      ],
+      "endMs": 18820,
+      "atomic": false
+    },
+    "08-grass-articulation": {
+      "durationMs": 18820,
+      "prepMs": 0,
+      "strokeMs": 0,
+      "relaxMs": [
+        4000,
+        8000,
+        11500,
+        15000,
+        16987
+      ],
+      "relaxMeta": [
+        {
+          "t": 4000,
+          "q": "inserted"
+        },
+        {
+          "t": 8000,
+          "q": "authored"
+        },
+        {
+          "t": 11500,
+          "q": "inserted"
+        },
+        {
+          "t": 15000,
+          "q": "authored"
+        },
+        {
+          "t": 16987,
+          "q": "authored"
+        }
+      ],
+      "endMs": 18820,
+      "atomic": false
+    },
+    "09-composure": {
+      "durationMs": 31900,
+      "prepMs": 0,
+      "strokeMs": 200,
+      "relaxMs": [
+        2600,
+        5200,
+        8500,
+        11050,
+        13600,
+        17100,
+        19800,
+        24800,
+        26800,
+        28620,
+        31200
+      ],
+      "relaxMeta": [
+        {
+          "t": 2600,
+          "q": "inserted"
+        },
+        {
+          "t": 5200,
+          "q": "authored"
+        },
+        {
+          "t": 8500,
+          "q": "authored"
+        },
+        {
+          "t": 11050,
+          "q": "inserted"
+        },
+        {
+          "t": 13600,
+          "q": "authored"
+        },
+        {
+          "t": 17100,
+          "q": "authored"
+        },
+        {
+          "t": 19800,
+          "q": "authored"
+        },
+        {
+          "t": 24800,
+          "q": "authored"
+        },
+        {
+          "t": 26800,
+          "q": "authored"
+        },
+        {
+          "t": 28620,
+          "q": "authored"
+        },
+        {
+          "t": 31200,
+          "q": "authored"
+        }
+      ],
+      "endMs": 31900,
+      "atomic": false
+    },
+    "10-resolution": {
+      "durationMs": 31700,
+      "prepMs": 0,
+      "strokeMs": 300,
+      "relaxMs": [
+        4900,
+        6150,
+        8200,
+        12700,
+        16000,
+        18850,
+        21700,
+        24000,
+        26370,
+        27620,
+        30500
+      ],
+      "relaxMeta": [
+        {
+          "t": 4900,
+          "q": "authored"
+        },
+        {
+          "t": 6150,
+          "q": "derived"
+        },
+        {
+          "t": 8200,
+          "q": "authored"
+        },
+        {
+          "t": 12700,
+          "q": "authored"
+        },
+        {
+          "t": 16000,
+          "q": "authored"
+        },
+        {
+          "t": 18850,
+          "q": "inserted"
+        },
+        {
+          "t": 21700,
+          "q": "authored"
+        },
+        {
+          "t": 24000,
+          "q": "authored"
+        },
+        {
+          "t": 26370,
+          "q": "authored"
+        },
+        {
+          "t": 27620,
+          "q": "authored"
+        },
+        {
+          "t": 30500,
+          "q": "authored"
+        }
+      ],
+      "endMs": 31700,
+      "atomic": false
+    },
+    "11-mischief": {
+      "durationMs": 30100,
+      "prepMs": 0,
+      "strokeMs": 0,
+      "relaxMs": [
+        4500,
+        7200,
+        8987,
+        13800,
+        16400,
+        19000,
+        23000,
+        24400,
+        26300,
+        28400
+      ],
+      "relaxMeta": [
+        {
+          "t": 4500,
+          "q": "derived"
+        },
+        {
+          "t": 7200,
+          "q": "authored"
+        },
+        {
+          "t": 8987,
+          "q": "authored"
+        },
+        {
+          "t": 13800,
+          "q": "authored"
+        },
+        {
+          "t": 16400,
+          "q": "inserted"
+        },
+        {
+          "t": 19000,
+          "q": "authored"
+        },
+        {
+          "t": 23000,
+          "q": "authored"
+        },
+        {
+          "t": 24400,
+          "q": "authored"
+        },
+        {
+          "t": 26300,
+          "q": "authored"
+        },
+        {
+          "t": 28400,
+          "q": "authored"
+        }
+      ],
+      "endMs": 30100,
+      "atomic": false
+    },
+    "12-bold-performance": {
+      "durationMs": 37700,
+      "prepMs": 0,
+      "strokeMs": 200,
+      "relaxMs": [
+        2750,
+        5500,
+        10500,
+        12200,
+        16000,
+        20500,
+        23350,
+        26200,
+        28100,
+        31200,
+        34000,
+        37000
+      ],
+      "relaxMeta": [
+        {
+          "t": 2750,
+          "q": "inserted"
+        },
+        {
+          "t": 5500,
+          "q": "authored"
+        },
+        {
+          "t": 10500,
+          "q": "authored"
+        },
+        {
+          "t": 12200,
+          "q": "authored"
+        },
+        {
+          "t": 16000,
+          "q": "authored"
+        },
+        {
+          "t": 20500,
+          "q": "authored"
+        },
+        {
+          "t": 23350,
+          "q": "inserted"
+        },
+        {
+          "t": 26200,
+          "q": "authored"
+        },
+        {
+          "t": 28100,
+          "q": "derived"
+        },
+        {
+          "t": 31200,
+          "q": "authored"
+        },
+        {
+          "t": 34000,
+          "q": "authored"
+        },
+        {
+          "t": 37000,
+          "q": "authored"
+        }
+      ],
+      "endMs": 37700,
+      "atomic": false
+    },
+    "13-form-performance": {
+      "durationMs": 35700,
+      "prepMs": 0,
+      "strokeMs": 0,
+      "relaxMs": [
+        4500,
+        9000,
+        10200,
+        12850,
+        15500,
+        20000,
+        24367.6,
+        28735.3,
+        33103,
+        35000
+      ],
+      "relaxMeta": [
+        {
+          "t": 4500,
+          "q": "inserted"
+        },
+        {
+          "t": 9000,
+          "q": "authored"
+        },
+        {
+          "t": 10200,
+          "q": "authored"
+        },
+        {
+          "t": 12850,
+          "q": "inserted"
+        },
+        {
+          "t": 15500,
+          "q": "authored"
+        },
+        {
+          "t": 20000,
+          "q": "authored"
+        },
+        {
+          "t": 24367.6,
+          "q": "inserted"
+        },
+        {
+          "t": 28735.3,
+          "q": "inserted"
+        },
+        {
+          "t": 33103,
+          "q": "authored"
+        },
+        {
+          "t": 35000,
+          "q": "authored"
+        }
+      ],
+      "endMs": 35700,
+      "atomic": false
+    },
+    "14-flirt": {
+      "durationMs": 28900,
+      "prepMs": 0,
+      "strokeMs": 0,
+      "relaxMs": [
+        3616.6,
+        7233.3,
+        10850,
+        13500,
+        17301.5,
+        21103,
+        23000,
+        25800,
+        28200
+      ],
+      "relaxMeta": [
+        {
+          "t": 3616.6,
+          "q": "inserted"
+        },
+        {
+          "t": 7233.3,
+          "q": "inserted"
+        },
+        {
+          "t": 10850,
+          "q": "authored"
+        },
+        {
+          "t": 13500,
+          "q": "authored"
+        },
+        {
+          "t": 17301.5,
+          "q": "inserted"
+        },
+        {
+          "t": 21103,
+          "q": "authored"
+        },
+        {
+          "t": 23000,
+          "q": "authored"
+        },
+        {
+          "t": 25800,
+          "q": "authored"
+        },
+        {
+          "t": 28200,
+          "q": "authored"
+        }
+      ],
+      "endMs": 28900,
+      "atomic": false
+    },
+    "15-flirt-layered": {
+      "durationMs": 28900,
+      "prepMs": 0,
+      "strokeMs": 0,
+      "relaxMs": [
+        3616.6,
+        7233.3,
+        10850,
+        13500,
+        17301.5,
+        21103,
+        23000,
+        25800,
+        28200
+      ],
+      "relaxMeta": [
+        {
+          "t": 3616.6,
+          "q": "inserted"
+        },
+        {
+          "t": 7233.3,
+          "q": "inserted"
+        },
+        {
+          "t": 10850,
+          "q": "authored"
+        },
+        {
+          "t": 13500,
+          "q": "authored"
+        },
+        {
+          "t": 17301.5,
+          "q": "inserted"
+        },
+        {
+          "t": 21103,
+          "q": "authored"
+        },
+        {
+          "t": 23000,
+          "q": "authored"
+        },
+        {
+          "t": 25800,
+          "q": "authored"
+        },
+        {
+          "t": 28200,
+          "q": "authored"
+        }
+      ],
+      "endMs": 28900,
+      "atomic": false
+    },
+    "lumen-0": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 2050,
+      "relaxMs": [
+        1200
+      ],
+      "relaxMeta": [
+        {
+          "t": 1200,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-1": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 2050,
+      "relaxMs": [
+        1200
+      ],
+      "relaxMeta": [
+        {
+          "t": 1200,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-10": {
+      "durationMs": 2850,
+      "prepMs": 0,
+      "strokeMs": 1150,
+      "relaxMs": [
+        1425
+      ],
+      "relaxMeta": [
+        {
+          "t": 1425,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 2850,
+      "atomic": false
+    },
+    "lumen-11": {
+      "durationMs": 2850,
+      "prepMs": 0,
+      "strokeMs": 1150,
+      "relaxMs": [
+        1425
+      ],
+      "relaxMeta": [
+        {
+          "t": 1425,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 2850,
+      "atomic": false
+    },
+    "lumen-12": {
+      "durationMs": 2850,
+      "prepMs": 0,
+      "strokeMs": 1150,
+      "relaxMs": [
+        1425
+      ],
+      "relaxMeta": [
+        {
+          "t": 1425,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 2850,
+      "atomic": false
+    },
+    "lumen-13": {
+      "durationMs": 2300,
+      "prepMs": 0,
+      "strokeMs": 1800,
+      "relaxMs": [
+        1200
+      ],
+      "relaxMeta": [
+        {
+          "t": 1200,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 2300,
+      "atomic": false
+    },
+    "lumen-14": {
+      "durationMs": 2300,
+      "prepMs": 0,
+      "strokeMs": 1800,
+      "relaxMs": [
+        1450
+      ],
+      "relaxMeta": [
+        {
+          "t": 1450,
+          "q": "derived"
+        }
+      ],
+      "endMs": 2300,
+      "atomic": false
+    },
+    "lumen-15": {
+      "durationMs": 2300,
+      "prepMs": 0,
+      "strokeMs": 1800,
+      "relaxMs": [
+        1450
+      ],
+      "relaxMeta": [
+        {
+          "t": 1450,
+          "q": "derived"
+        }
+      ],
+      "endMs": 2300,
+      "atomic": false
+    },
+    "lumen-16": {
+      "durationMs": 2300,
+      "prepMs": 0,
+      "strokeMs": 1800,
+      "relaxMs": [
+        1450
+      ],
+      "relaxMeta": [
+        {
+          "t": 1450,
+          "q": "derived"
+        }
+      ],
+      "endMs": 2300,
+      "atomic": false
+    },
+    "lumen-17": {
+      "durationMs": 2300,
+      "prepMs": 0,
+      "strokeMs": 1800,
+      "relaxMs": [
+        1200
+      ],
+      "relaxMeta": [
+        {
+          "t": 1200,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 2300,
+      "atomic": false
+    },
+    "lumen-18": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 2750,
+      "relaxMs": [
+        1700
+      ],
+      "relaxMeta": [
+        {
+          "t": 1700,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-19": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 2750,
+      "relaxMs": [
+        1525
+      ],
+      "relaxMeta": [
+        {
+          "t": 1525,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-2": {
+      "durationMs": 2750,
+      "prepMs": 0,
+      "strokeMs": 1800,
+      "relaxMs": [
+        1375
+      ],
+      "relaxMeta": [
+        {
+          "t": 1375,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 2750,
+      "atomic": false
+    },
+    "lumen-20": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 2750,
+      "relaxMs": [
+        1525
+      ],
+      "relaxMeta": [
+        {
+          "t": 1525,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-21": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 2750,
+      "relaxMs": [
+        1525
+      ],
+      "relaxMeta": [
+        {
+          "t": 1525,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-22": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 2750,
+      "relaxMs": [
+        1525
+      ],
+      "relaxMeta": [
+        {
+          "t": 1525,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-23": {
+      "durationMs": 4650,
+      "prepMs": 0,
+      "strokeMs": 1750,
+      "relaxMs": [
+        1300
+      ],
+      "relaxMeta": [
+        {
+          "t": 1300,
+          "q": "derived"
+        }
+      ],
+      "endMs": 4650,
+      "atomic": false
+    },
+    "lumen-24": {
+      "durationMs": 4650,
+      "prepMs": 0,
+      "strokeMs": 1750,
+      "relaxMs": [
+        1300
+      ],
+      "relaxMeta": [
+        {
+          "t": 1300,
+          "q": "derived"
+        }
+      ],
+      "endMs": 4650,
+      "atomic": false
+    },
+    "lumen-25": {
+      "durationMs": 4650,
+      "prepMs": 0,
+      "strokeMs": 1750,
+      "relaxMs": [
+        1300
+      ],
+      "relaxMeta": [
+        {
+          "t": 1300,
+          "q": "derived"
+        }
+      ],
+      "endMs": 4650,
+      "atomic": false
+    },
+    "lumen-26": {
+      "durationMs": 5050,
+      "prepMs": 0,
+      "strokeMs": 2650,
+      "relaxMs": [
+        1200,
+        2500
+      ],
+      "relaxMeta": [
+        {
+          "t": 1200,
+          "q": "derived"
+        },
+        {
+          "t": 2500,
+          "q": "derived"
+        }
+      ],
+      "endMs": 5050,
+      "atomic": false
+    },
+    "lumen-27": {
+      "durationMs": 5050,
+      "prepMs": 0,
+      "strokeMs": 2650,
+      "relaxMs": [
+        1200,
+        2500
+      ],
+      "relaxMeta": [
+        {
+          "t": 1200,
+          "q": "derived"
+        },
+        {
+          "t": 2500,
+          "q": "derived"
+        }
+      ],
+      "endMs": 5050,
+      "atomic": false
+    },
+    "lumen-28": {
+      "durationMs": 5050,
+      "prepMs": 0,
+      "strokeMs": 2650,
+      "relaxMs": [
+        1200,
+        2500
+      ],
+      "relaxMeta": [
+        {
+          "t": 1200,
+          "q": "derived"
+        },
+        {
+          "t": 2500,
+          "q": "derived"
+        }
+      ],
+      "endMs": 5050,
+      "atomic": false
+    },
+    "lumen-29": {
+      "durationMs": 4250,
+      "prepMs": 0,
+      "strokeMs": 1100,
+      "relaxMs": [
+        1800
+      ],
+      "relaxMeta": [
+        {
+          "t": 1800,
+          "q": "derived"
+        }
+      ],
+      "endMs": 4250,
+      "atomic": false
+    },
+    "lumen-3": {
+      "durationMs": 2750,
+      "prepMs": 0,
+      "strokeMs": 1800,
+      "relaxMs": [
+        1375
+      ],
+      "relaxMeta": [
+        {
+          "t": 1375,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 2750,
+      "atomic": false
+    },
+    "lumen-30": {
+      "durationMs": 4250,
+      "prepMs": 0,
+      "strokeMs": 1100,
+      "relaxMs": [
+        3400
+      ],
+      "relaxMeta": [
+        {
+          "t": 3400,
+          "q": "derived"
+        }
+      ],
+      "endMs": 4250,
+      "atomic": false
+    },
+    "lumen-31": {
+      "durationMs": 4250,
+      "prepMs": 0,
+      "strokeMs": 1150,
+      "relaxMs": [
+        1750
+      ],
+      "relaxMeta": [
+        {
+          "t": 1750,
+          "q": "derived"
+        }
+      ],
+      "endMs": 4250,
+      "atomic": false
+    },
+    "lumen-32": {
+      "durationMs": 3150,
+      "prepMs": 0,
+      "strokeMs": 1550,
+      "relaxMs": [
+        2400
+      ],
+      "relaxMeta": [
+        {
+          "t": 2400,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3150,
+      "atomic": false
+    },
+    "lumen-33": {
+      "durationMs": 3150,
+      "prepMs": 0,
+      "strokeMs": 1550,
+      "relaxMs": [
+        2400
+      ],
+      "relaxMeta": [
+        {
+          "t": 2400,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3150,
+      "atomic": false
+    },
+    "lumen-34": {
+      "durationMs": 2300,
+      "prepMs": 0,
+      "strokeMs": 500,
+      "relaxMs": [
+        1200
+      ],
+      "relaxMeta": [
+        {
+          "t": 1200,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 2300,
+      "atomic": false
+    },
+    "lumen-35": {
+      "durationMs": 2300,
+      "prepMs": 0,
+      "strokeMs": 500,
+      "relaxMs": [
+        1200
+      ],
+      "relaxMeta": [
+        {
+          "t": 1200,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 2300,
+      "atomic": false
+    },
+    "lumen-36": {
+      "durationMs": 2300,
+      "prepMs": 0,
+      "strokeMs": 500,
+      "relaxMs": [
+        1200
+      ],
+      "relaxMeta": [
+        {
+          "t": 1200,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 2300,
+      "atomic": false
+    },
+    "lumen-37": {
+      "durationMs": 2300,
+      "prepMs": 0,
+      "strokeMs": 500,
+      "relaxMs": [
+        1200
+      ],
+      "relaxMeta": [
+        {
+          "t": 1200,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 2300,
+      "atomic": false
+    },
+    "lumen-38": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 2750,
+      "relaxMs": [
+        1525
+      ],
+      "relaxMeta": [
+        {
+          "t": 1525,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-39": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 2750,
+      "relaxMs": [
+        1525
+      ],
+      "relaxMeta": [
+        {
+          "t": 1525,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-4": {
+      "durationMs": 2750,
+      "prepMs": 0,
+      "strokeMs": 1800,
+      "relaxMs": [
+        1375
+      ],
+      "relaxMeta": [
+        {
+          "t": 1375,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 2750,
+      "atomic": false
+    },
+    "lumen-40": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 2750,
+      "relaxMs": [
+        1800
+      ],
+      "relaxMeta": [
+        {
+          "t": 1800,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-41": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 2750,
+      "relaxMs": [
+        1525
+      ],
+      "relaxMeta": [
+        {
+          "t": 1525,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-42": {
+      "durationMs": 2950,
+      "prepMs": 0,
+      "strokeMs": 2900,
+      "relaxMs": [
+        1500
+      ],
+      "relaxMeta": [
+        {
+          "t": 1500,
+          "q": "derived"
+        }
+      ],
+      "endMs": 2950,
+      "atomic": false
+    },
+    "lumen-43": {
+      "durationMs": 4950,
+      "prepMs": 0,
+      "strokeMs": 2400,
+      "relaxMs": [
+        3300
+      ],
+      "relaxMeta": [
+        {
+          "t": 3300,
+          "q": "derived"
+        }
+      ],
+      "endMs": 4950,
+      "atomic": false
+    },
+    "lumen-44": {
+      "durationMs": 5050,
+      "prepMs": 0,
+      "strokeMs": 2550,
+      "relaxMs": [
+        1800,
+        3300
+      ],
+      "relaxMeta": [
+        {
+          "t": 1800,
+          "q": "derived"
+        },
+        {
+          "t": 3300,
+          "q": "derived"
+        }
+      ],
+      "endMs": 5050,
+      "atomic": false
+    },
+    "lumen-45": {
+      "durationMs": 5300,
+      "prepMs": 0,
+      "strokeMs": 1550,
+      "relaxMs": [
+        1200,
+        4050
+      ],
+      "relaxMeta": [
+        {
+          "t": 1200,
+          "q": "derived"
+        },
+        {
+          "t": 4050,
+          "q": "derived"
+        }
+      ],
+      "endMs": 5300,
+      "atomic": false
+    },
+    "lumen-46": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 850,
+      "relaxMs": [
+        2000
+      ],
+      "relaxMeta": [
+        {
+          "t": 2000,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-47": {
+      "durationMs": 7450,
+      "prepMs": 0,
+      "strokeMs": 6050,
+      "relaxMs": [
+        2200,
+        4450
+      ],
+      "relaxMeta": [
+        {
+          "t": 2200,
+          "q": "derived"
+        },
+        {
+          "t": 4450,
+          "q": "derived"
+        }
+      ],
+      "endMs": 7450,
+      "atomic": false
+    },
+    "lumen-48": {
+      "durationMs": 3200,
+      "prepMs": 0,
+      "strokeMs": 600,
+      "relaxMs": [
+        1200
+      ],
+      "relaxMeta": [
+        {
+          "t": 1200,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3200,
+      "atomic": false
+    },
+    "lumen-49": {
+      "durationMs": 4100,
+      "prepMs": 0,
+      "strokeMs": 3700,
+      "relaxMs": [
+        1950
+      ],
+      "relaxMeta": [
+        {
+          "t": 1950,
+          "q": "derived"
+        }
+      ],
+      "endMs": 4100,
+      "atomic": false
+    },
+    "lumen-5": {
+      "durationMs": 2950,
+      "prepMs": 0,
+      "strokeMs": 1800,
+      "relaxMs": [
+        2250
+      ],
+      "relaxMeta": [
+        {
+          "t": 2250,
+          "q": "derived"
+        }
+      ],
+      "endMs": 2950,
+      "atomic": false
+    },
+    "lumen-50": {
+      "durationMs": 3450,
+      "prepMs": 0,
+      "strokeMs": 400,
+      "relaxMs": [
+        1725
+      ],
+      "relaxMeta": [
+        {
+          "t": 1725,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 3450,
+      "atomic": false
+    },
+    "lumen-51": {
+      "durationMs": 4650,
+      "prepMs": 0,
+      "strokeMs": 4250,
+      "relaxMs": [
+        3600
+      ],
+      "relaxMeta": [
+        {
+          "t": 3600,
+          "q": "derived"
+        }
+      ],
+      "endMs": 4650,
+      "atomic": false
+    },
+    "lumen-52": {
+      "durationMs": 3650,
+      "prepMs": 0,
+      "strokeMs": 850,
+      "relaxMs": [
+        1500
+      ],
+      "relaxMeta": [
+        {
+          "t": 1500,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3650,
+      "atomic": false
+    },
+    "lumen-53": {
+      "durationMs": 3550,
+      "prepMs": 0,
+      "strokeMs": 1250,
+      "relaxMs": [
+        2700
+      ],
+      "relaxMeta": [
+        {
+          "t": 2700,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3550,
+      "atomic": false
+    },
+    "lumen-54": {
+      "durationMs": 5450,
+      "prepMs": 0,
+      "strokeMs": 2400,
+      "relaxMs": [
+        2150,
+        3633.3
+      ],
+      "relaxMeta": [
+        {
+          "t": 2150,
+          "q": "derived"
+        },
+        {
+          "t": 3633.3,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 5450,
+      "atomic": false
+    },
+    "lumen-55": {
+      "durationMs": 4550,
+      "prepMs": 0,
+      "strokeMs": 3750,
+      "relaxMs": [
+        2300
+      ],
+      "relaxMeta": [
+        {
+          "t": 2300,
+          "q": "derived"
+        }
+      ],
+      "endMs": 4550,
+      "atomic": false
+    },
+    "lumen-56": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 1350,
+      "relaxMs": [
+        1525
+      ],
+      "relaxMeta": [
+        {
+          "t": 1525,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-57": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 1450,
+      "relaxMs": [
+        1525
+      ],
+      "relaxMeta": [
+        {
+          "t": 1525,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-58": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 1350,
+      "relaxMs": [
+        1525
+      ],
+      "relaxMeta": [
+        {
+          "t": 1525,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-59": {
+      "durationMs": 3800,
+      "prepMs": 0,
+      "strokeMs": 200,
+      "relaxMs": [
+        1850
+      ],
+      "relaxMeta": [
+        {
+          "t": 1850,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3800,
+      "atomic": false
+    },
+    "lumen-6": {
+      "durationMs": 2950,
+      "prepMs": 0,
+      "strokeMs": 2600,
+      "relaxMs": [
+        2200
+      ],
+      "relaxMeta": [
+        {
+          "t": 2200,
+          "q": "derived"
+        }
+      ],
+      "endMs": 2950,
+      "atomic": false
+    },
+    "lumen-60": {
+      "durationMs": 3800,
+      "prepMs": 0,
+      "strokeMs": 200,
+      "relaxMs": [
+        1850
+      ],
+      "relaxMeta": [
+        {
+          "t": 1850,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3800,
+      "atomic": false
+    },
+    "lumen-61": {
+      "durationMs": 2950,
+      "prepMs": 0,
+      "strokeMs": 2200,
+      "relaxMs": [
+        1475
+      ],
+      "relaxMeta": [
+        {
+          "t": 1475,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 2950,
+      "atomic": false
+    },
+    "lumen-62": {
+      "durationMs": 2950,
+      "prepMs": 0,
+      "strokeMs": 2200,
+      "relaxMs": [
+        1475
+      ],
+      "relaxMeta": [
+        {
+          "t": 1475,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 2950,
+      "atomic": false
+    },
+    "lumen-63": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 500,
+      "relaxMs": [
+        2400
+      ],
+      "relaxMeta": [
+        {
+          "t": 2400,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-64": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 500,
+      "relaxMs": [
+        2400
+      ],
+      "relaxMeta": [
+        {
+          "t": 2400,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-65": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 500,
+      "relaxMs": [
+        2400
+      ],
+      "relaxMeta": [
+        {
+          "t": 2400,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-66": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 1150,
+      "relaxMs": [
+        1525
+      ],
+      "relaxMeta": [
+        {
+          "t": 1525,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-67": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 1150,
+      "relaxMs": [
+        1525
+      ],
+      "relaxMeta": [
+        {
+          "t": 1525,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-68": {
+      "durationMs": 3050,
+      "prepMs": 0,
+      "strokeMs": 1150,
+      "relaxMs": [
+        1525
+      ],
+      "relaxMeta": [
+        {
+          "t": 1525,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 3050,
+      "atomic": false
+    },
+    "lumen-69": {
+      "durationMs": 3750,
+      "prepMs": 0,
+      "strokeMs": 400,
+      "relaxMs": [
+        2450
+      ],
+      "relaxMeta": [
+        {
+          "t": 2450,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3750,
+      "atomic": false
+    },
+    "lumen-7": {
+      "durationMs": 2950,
+      "prepMs": 0,
+      "strokeMs": 1800,
+      "relaxMs": [
+        2250
+      ],
+      "relaxMeta": [
+        {
+          "t": 2250,
+          "q": "derived"
+        }
+      ],
+      "endMs": 2950,
+      "atomic": false
+    },
+    "lumen-70": {
+      "durationMs": 3750,
+      "prepMs": 0,
+      "strokeMs": 400,
+      "relaxMs": [
+        2450
+      ],
+      "relaxMeta": [
+        {
+          "t": 2450,
+          "q": "derived"
+        }
+      ],
+      "endMs": 3750,
+      "atomic": false
+    },
+    "lumen-71": {
+      "durationMs": 4450,
+      "prepMs": 0,
+      "strokeMs": 450,
+      "relaxMs": [
+        2800
+      ],
+      "relaxMeta": [
+        {
+          "t": 2800,
+          "q": "derived"
+        }
+      ],
+      "endMs": 4450,
+      "atomic": false
+    },
+    "lumen-72": {
+      "durationMs": 4450,
+      "prepMs": 0,
+      "strokeMs": 450,
+      "relaxMs": [
+        2800
+      ],
+      "relaxMeta": [
+        {
+          "t": 2800,
+          "q": "derived"
+        }
+      ],
+      "endMs": 4450,
+      "atomic": false
+    },
+    "lumen-73": {
+      "durationMs": 4450,
+      "prepMs": 0,
+      "strokeMs": 450,
+      "relaxMs": [
+        2800
+      ],
+      "relaxMeta": [
+        {
+          "t": 2800,
+          "q": "derived"
+        }
+      ],
+      "endMs": 4450,
+      "atomic": false
+    },
+    "lumen-74": {
+      "durationMs": 5050,
+      "prepMs": 0,
+      "strokeMs": 550,
+      "relaxMs": [
+        1400,
+        3400
+      ],
+      "relaxMeta": [
+        {
+          "t": 1400,
+          "q": "derived"
+        },
+        {
+          "t": 3400,
+          "q": "derived"
+        }
+      ],
+      "endMs": 5050,
+      "atomic": false
+    },
+    "lumen-75": {
+      "durationMs": 5050,
+      "prepMs": 0,
+      "strokeMs": 550,
+      "relaxMs": [
+        1400,
+        3400
+      ],
+      "relaxMeta": [
+        {
+          "t": 1400,
+          "q": "derived"
+        },
+        {
+          "t": 3400,
+          "q": "derived"
+        }
+      ],
+      "endMs": 5050,
+      "atomic": false
+    },
+    "lumen-76": {
+      "durationMs": 5050,
+      "prepMs": 0,
+      "strokeMs": 550,
+      "relaxMs": [
+        1400,
+        2600
+      ],
+      "relaxMeta": [
+        {
+          "t": 1400,
+          "q": "derived"
+        },
+        {
+          "t": 2600,
+          "q": "derived"
+        }
+      ],
+      "endMs": 5050,
+      "atomic": false
+    },
+    "lumen-77": {
+      "durationMs": 51950,
+      "prepMs": 0,
+      "strokeMs": 20000,
+      "relaxMs": [
+        3650,
+        7550,
+        11750,
+        15850,
+        19550,
+        24350,
+        27950,
+        32750,
+        37550,
+        42150,
+        47150
+      ],
+      "relaxMeta": [
+        {
+          "t": 3650,
+          "q": "derived"
+        },
+        {
+          "t": 7550,
+          "q": "derived"
+        },
+        {
+          "t": 11750,
+          "q": "derived"
+        },
+        {
+          "t": 15850,
+          "q": "derived"
+        },
+        {
+          "t": 19550,
+          "q": "derived"
+        },
+        {
+          "t": 24350,
+          "q": "derived"
+        },
+        {
+          "t": 27950,
+          "q": "derived"
+        },
+        {
+          "t": 32750,
+          "q": "derived"
+        },
+        {
+          "t": 37550,
+          "q": "derived"
+        },
+        {
+          "t": 42150,
+          "q": "derived"
+        },
+        {
+          "t": 47150,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 51950,
+      "atomic": false
+    },
+    "lumen-78": {
+      "durationMs": 24750,
+      "prepMs": 0,
+      "strokeMs": 11200,
+      "relaxMs": [
+        4250,
+        7450,
+        12150,
+        16650,
+        20050
+      ],
+      "relaxMeta": [
+        {
+          "t": 4250,
+          "q": "derived"
+        },
+        {
+          "t": 7450,
+          "q": "derived"
+        },
+        {
+          "t": 12150,
+          "q": "derived"
+        },
+        {
+          "t": 16650,
+          "q": "derived"
+        },
+        {
+          "t": 20050,
+          "q": "derived"
+        }
+      ],
+      "endMs": 24750,
+      "atomic": false
+    },
+    "lumen-79": {
+      "durationMs": 45150,
+      "prepMs": 0,
+      "strokeMs": 29450,
+      "relaxMs": [
+        4600,
+        8300,
+        12800,
+        16200,
+        19000,
+        23400,
+        26300,
+        31300,
+        36300,
+        40700
+      ],
+      "relaxMeta": [
+        {
+          "t": 4600,
+          "q": "derived"
+        },
+        {
+          "t": 8300,
+          "q": "derived"
+        },
+        {
+          "t": 12800,
+          "q": "derived"
+        },
+        {
+          "t": 16200,
+          "q": "derived"
+        },
+        {
+          "t": 19000,
+          "q": "derived"
+        },
+        {
+          "t": 23400,
+          "q": "derived"
+        },
+        {
+          "t": 26300,
+          "q": "derived"
+        },
+        {
+          "t": 31300,
+          "q": "inserted"
+        },
+        {
+          "t": 36300,
+          "q": "inserted"
+        },
+        {
+          "t": 40700,
+          "q": "derived"
+        }
+      ],
+      "endMs": 45150,
+      "atomic": false
+    },
+    "lumen-8": {
+      "durationMs": 2950,
+      "prepMs": 0,
+      "strokeMs": 2600,
+      "relaxMs": [
+        2250
+      ],
+      "relaxMeta": [
+        {
+          "t": 2250,
+          "q": "derived"
+        }
+      ],
+      "endMs": 2950,
+      "atomic": false
+    },
+    "lumen-80": {
+      "durationMs": 29500,
+      "prepMs": 0,
+      "strokeMs": 25400,
+      "relaxMs": [
+        4150,
+        7750,
+        10750,
+        14750,
+        19750,
+        24750
+      ],
+      "relaxMeta": [
+        {
+          "t": 4150,
+          "q": "derived"
+        },
+        {
+          "t": 7750,
+          "q": "derived"
+        },
+        {
+          "t": 10750,
+          "q": "derived"
+        },
+        {
+          "t": 14750,
+          "q": "derived"
+        },
+        {
+          "t": 19750,
+          "q": "inserted"
+        },
+        {
+          "t": 24750,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 29500,
+      "atomic": false
+    },
+    "lumen-81": {
+      "durationMs": 44650,
+      "prepMs": 0,
+      "strokeMs": 19950,
+      "relaxMs": [
+        4750,
+        7750,
+        11650,
+        15350,
+        20350,
+        25350,
+        30350,
+        34850,
+        39850
+      ],
+      "relaxMeta": [
+        {
+          "t": 4750,
+          "q": "derived"
+        },
+        {
+          "t": 7750,
+          "q": "derived"
+        },
+        {
+          "t": 11650,
+          "q": "derived"
+        },
+        {
+          "t": 15350,
+          "q": "derived"
+        },
+        {
+          "t": 20350,
+          "q": "derived"
+        },
+        {
+          "t": 25350,
+          "q": "derived"
+        },
+        {
+          "t": 30350,
+          "q": "inserted"
+        },
+        {
+          "t": 34850,
+          "q": "derived"
+        },
+        {
+          "t": 39850,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 44650,
+      "atomic": false
+    },
+    "lumen-82": {
+      "durationMs": 9350,
+      "prepMs": 0,
+      "strokeMs": 3450,
+      "relaxMs": [
+        2400,
+        6850
+      ],
+      "relaxMeta": [
+        {
+          "t": 2400,
+          "q": "derived"
+        },
+        {
+          "t": 6850,
+          "q": "derived"
+        }
+      ],
+      "endMs": 9350,
+      "atomic": false
+    },
+    "lumen-83": {
+      "durationMs": 33650,
+      "prepMs": 0,
+      "strokeMs": 1500,
+      "relaxMs": [
+        4650,
+        8350,
+        11950,
+        15950,
+        18650,
+        23650,
+        28650
+      ],
+      "relaxMeta": [
+        {
+          "t": 4650,
+          "q": "derived"
+        },
+        {
+          "t": 8350,
+          "q": "derived"
+        },
+        {
+          "t": 11950,
+          "q": "derived"
+        },
+        {
+          "t": 15950,
+          "q": "derived"
+        },
+        {
+          "t": 18650,
+          "q": "derived"
+        },
+        {
+          "t": 23650,
+          "q": "inserted"
+        },
+        {
+          "t": 28650,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 33650,
+      "atomic": false
+    },
+    "lumen-84": {
+      "durationMs": 21400,
+      "prepMs": 0,
+      "strokeMs": 10200,
+      "relaxMs": [
+        2950,
+        7700,
+        10950,
+        15100,
+        18350
+      ],
+      "relaxMeta": [
+        {
+          "t": 2950,
+          "q": "derived"
+        },
+        {
+          "t": 7700,
+          "q": "derived"
+        },
+        {
+          "t": 10950,
+          "q": "derived"
+        },
+        {
+          "t": 15100,
+          "q": "derived"
+        },
+        {
+          "t": 18350,
+          "q": "derived"
+        }
+      ],
+      "endMs": 21400,
+      "atomic": false
+    },
+    "lumen-85": {
+      "durationMs": 9000,
+      "prepMs": 0,
+      "strokeMs": 3600,
+      "relaxMs": [
+        2950,
+        5550
+      ],
+      "relaxMeta": [
+        {
+          "t": 2950,
+          "q": "derived"
+        },
+        {
+          "t": 5550,
+          "q": "derived"
+        }
+      ],
+      "endMs": 9000,
+      "atomic": false
+    },
+    "lumen-86": {
+      "durationMs": 27800,
+      "prepMs": 0,
+      "strokeMs": 18600,
+      "relaxMs": [
+        3350,
+        6500,
+        10550,
+        15350,
+        18950,
+        23650
+      ],
+      "relaxMeta": [
+        {
+          "t": 3350,
+          "q": "derived"
+        },
+        {
+          "t": 6500,
+          "q": "derived"
+        },
+        {
+          "t": 10550,
+          "q": "derived"
+        },
+        {
+          "t": 15350,
+          "q": "derived"
+        },
+        {
+          "t": 18950,
+          "q": "derived"
+        },
+        {
+          "t": 23650,
+          "q": "derived"
+        }
+      ],
+      "endMs": 27800,
+      "atomic": false
+    },
+    "lumen-87": {
+      "durationMs": 9700,
+      "prepMs": 0,
+      "strokeMs": 1400,
+      "relaxMs": [
+        2650,
+        5750
+      ],
+      "relaxMeta": [
+        {
+          "t": 2650,
+          "q": "derived"
+        },
+        {
+          "t": 5750,
+          "q": "derived"
+        }
+      ],
+      "endMs": 9700,
+      "atomic": false
+    },
+    "lumen-88": {
+      "durationMs": 12400,
+      "prepMs": 0,
+      "strokeMs": 4500,
+      "relaxMs": [
+        3850,
+        5550,
+        9150
+      ],
+      "relaxMeta": [
+        {
+          "t": 3850,
+          "q": "derived"
+        },
+        {
+          "t": 5550,
+          "q": "derived"
+        },
+        {
+          "t": 9150,
+          "q": "derived"
+        }
+      ],
+      "endMs": 12400,
+      "atomic": false
+    },
+    "lumen-89": {
+      "durationMs": 15250,
+      "prepMs": 0,
+      "strokeMs": 4600,
+      "relaxMs": [
+        2500,
+        6600,
+        9750,
+        11750
+      ],
+      "relaxMeta": [
+        {
+          "t": 2500,
+          "q": "derived"
+        },
+        {
+          "t": 6600,
+          "q": "derived"
+        },
+        {
+          "t": 9750,
+          "q": "derived"
+        },
+        {
+          "t": 11750,
+          "q": "derived"
+        }
+      ],
+      "endMs": 15250,
+      "atomic": false
+    },
+    "lumen-9": {
+      "durationMs": 2850,
+      "prepMs": 0,
+      "strokeMs": 1150,
+      "relaxMs": [
+        1425
+      ],
+      "relaxMeta": [
+        {
+          "t": 1425,
+          "q": "inserted"
+        }
+      ],
+      "endMs": 2850,
+      "atomic": false
+    },
+    "lumen-90": {
+      "durationMs": 8000,
+      "prepMs": 0,
+      "strokeMs": 3000,
+      "relaxMs": [
+        1950,
+        5650
+      ],
+      "relaxMeta": [
+        {
+          "t": 1950,
+          "q": "derived"
+        },
+        {
+          "t": 5650,
+          "q": "derived"
+        }
+      ],
+      "endMs": 8000,
+      "atomic": false
+    },
+    "lumen-91": {
+      "durationMs": 14850,
+      "prepMs": 0,
+      "strokeMs": 3250,
+      "relaxMs": [
+        3500,
+        6500,
+        10800
+      ],
+      "relaxMeta": [
+        {
+          "t": 3500,
+          "q": "derived"
+        },
+        {
+          "t": 6500,
+          "q": "derived"
+        },
+        {
+          "t": 10800,
+          "q": "derived"
+        }
+      ],
+      "endMs": 14850,
+      "atomic": false
+    },
+    "lumen-92": {
+      "durationMs": 14750,
+      "prepMs": 0,
+      "strokeMs": 12300,
+      "relaxMs": [
+        3050,
+        7050,
+        10650
+      ],
+      "relaxMeta": [
+        {
+          "t": 3050,
+          "q": "derived"
+        },
+        {
+          "t": 7050,
+          "q": "derived"
+        },
+        {
+          "t": 10650,
+          "q": "derived"
+        }
+      ],
+      "endMs": 14750,
+      "atomic": false
+    },
+    "lumen-93": {
+      "durationMs": 12850,
+      "prepMs": 0,
+      "strokeMs": 5650,
+      "relaxMs": [
+        2700,
+        6600,
+        9600
+      ],
+      "relaxMeta": [
+        {
+          "t": 2700,
+          "q": "derived"
+        },
+        {
+          "t": 6600,
+          "q": "derived"
+        },
+        {
+          "t": 9600,
+          "q": "derived"
+        }
+      ],
+      "endMs": 12850,
+      "atomic": false
+    },
+    "lumen-94": {
+      "durationMs": 10550,
+      "prepMs": 0,
+      "strokeMs": 1400,
+      "relaxMs": [
+        2650,
+        6250,
+        7550
+      ],
+      "relaxMeta": [
+        {
+          "t": 2650,
+          "q": "derived"
+        },
+        {
+          "t": 6250,
+          "q": "derived"
+        },
+        {
+          "t": 7550,
+          "q": "derived"
+        }
+      ],
+      "endMs": 10550,
+      "atomic": false
+    },
+    "lumen-95": {
+      "durationMs": 9350,
+      "prepMs": 0,
+      "strokeMs": 8600,
+      "relaxMs": [
+        3200,
+        6200
+      ],
+      "relaxMeta": [
+        {
+          "t": 3200,
+          "q": "derived"
+        },
+        {
+          "t": 6200,
+          "q": "derived"
+        }
+      ],
+      "endMs": 9350,
+      "atomic": false
+    },
+    "lumen-96": {
+      "durationMs": 1050,
+      "prepMs": 0,
+      "strokeMs": 0,
+      "relaxMs": [],
+      "relaxMeta": [],
+      "endMs": 1050,
+      "atomic": true
+    }
+  }
+}

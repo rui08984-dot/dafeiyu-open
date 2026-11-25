@@ -2,10 +2,21 @@
 const __silentAudit = require('./silent-audit.js');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { PluginContext } = require('./plugin-context.js');
 const { logToTerminal, logToolAction } = require('../api-utils.js');
 const toolResult = require('./tool-result.js');
 const policy = require('./policy.js');
+
+/** 内容指纹：sha1 前 16 位。只回答「字节变没变」，不参与安全用途。 */
+function hashContent(src) {
+    return crypto.createHash('sha1').update(String(src), 'utf8').digest('hex').slice(0, 16);
+}
+
+/** 热重载的静默调试行：只进日志，不弹通知、不打扰对话。 */
+function dbg(msg) {
+    try { logToTerminal('debug', msg); } catch (e) { /* 日志失败不影响重载判断 */ }
+}
 
 class PluginManager {
     constructor(config) {
@@ -31,6 +42,14 @@ class PluginManager {
         this._syncDebounceTimer = null;
         this._reloadDebounceTimers = new Map();
         this._reloadSyntaxRetries = new Map();
+        /**
+         * 内容指纹表（2026-11-25）：absolutePath -> sha1 前 16 位。
+         * 只在**成功加载/成功重载**后更新；fswatch 的「触碰」事件先比它，
+         * 内容没变就跳过 —— 实测 132 次热重载里 75 次是编辑器保存/元数据变化造成的伪事件。
+         * 只存内存：重启后由首轮 load() 重建基线。
+         * @type {Map<string, string>}
+         */
+        this._fileHashes = new Map();
     }
 
     // ===== enabled_plugins.json 读取 =====
@@ -195,6 +214,8 @@ class PluginManager {
         await plugin.onInit();
 
         this._plugins.set(relPath, { plugin, metadata, pluginDir });
+        // 成功加载后建立指纹基线：fswatch 的首次「触碰」就能按内容判空转。
+        try { this._recordPluginHashes(pluginDir); } catch (e) { /* 指纹失败不影响加载 */ }
         const displayName = metadata.displayName || name;
         logToolAction('info', `✅ 插件已加载: ${displayName} v${metadata.version || '?'}${isPython ? ' [Python]' : ''}`);
     }
@@ -233,65 +254,98 @@ class PluginManager {
         if (!entry) throw new Error(`插件不存在: ${name}`);
 
         const { pluginDir, metadata } = entry;
+        // 失败回滚用：指纹与动态工具都是「旧实例还活着」的证据，失败后原样放回。
+        // 只快照**本插件目录**：并发重载另一个插件成功时，它的新指纹不能被这次的失败回滚掉。
+        const dirPrefix = pluginDir + path.sep;
+        const hashSnapshot = new Map(
+            [...this._fileHashes.entries()].filter(([k]) => k.startsWith(dirPrefix))
+        );
+        const dynamicToolsSnapshot = this._dynamicTools.get(name);
+        let newEntryForCleanup = null;
 
         // #24：先让出一拍，保证 /eval 探针能应答（否则 watchdog 可能把「忙」当「死」）
         await this._yieldToEventLoop();
         await this.unload(name);
         await this._yieldToEventLoop();
 
-        if (metadata.lang !== 'python') {
-            // ⚠ 2026-11-09 三十五轮修（踩过）：只删主文件的缓存不够 ——
-            //   插件常常拆成多个模块（dispatch/index.js require ./game-control.js、
-            //   ./verify-contract.js、./knowledge-base.js…）。删了 index.js 的缓存，
-            //   重新 load 时 require('./game-control') 拿到的**还是旧模块**。
-            //   表现为：改了代码、reload 返回「已热重载」、跑起来还是旧逻辑。
-            //   修法：把插件目录下所有 .js 的缓存都删掉（用 realpath 归一化，防 Windows 大小写/软链差异）。
-            const mainPath = path.join(pluginDir, metadata.main || 'index.js');
-            try { delete require.cache[require.resolve(mainPath)]; } catch (e) { /* 未加载过，无需删 */ }
-            let purged = 0;
-            try {
-                const realDir = fs.realpathSync(pluginDir);
-                for (const key of Object.keys(require.cache)) {
-                    try {
-                        const kf = fs.realpathSync(key);
-                        if (kf.startsWith(realDir + path.sep) && /\.(c?js|mjs)$/i.test(kf)) {
-                            delete require.cache[key];
-                            purged += 1;
-                        }
-                    } catch (e) { /* 单条失败不影响其它 */ }
-                }
-            } catch (e) {
-                logToTerminal('warn', `[reload] 清子模块缓存部分失败（${name}）：${e && e.message || e}`);
-            }
-            if (purged > 1) logToTerminal('info', `[reload] ${name} 清了 ${purged} 个模块缓存`);
-        }
-
-        await this.load(pluginDir);
-        await this._yieldToEventLoop();
-
-        // ⚠ 2026-11-09 三十五轮修「假成功」：原实现不检查 load 是否成功就
-        //   `newEntry.plugin.onStart()` 并打「已热重载」日志。
-        //   实际 load 内部是 try/catch 吞掉异常的，失败时 _plugins 里根本没有这个条目 →
-        //   newEntry 为 undefined，onStart 静默跳过，日志照样说「已热重载」。
-        //   表现：插件有语法错误 → 用户看到「热重载成功」但插件实际没在工作。
-        //   现在：拿不到新条目就明确报错，并说清「插件没加载成功」。
-        const newEntry = this._plugins.get(name);
-        if (!newEntry) {
-            const msg = `插件「${name}」卸载成功但**没能重新加载**（语法错误 / 依赖缺失 / 主文件读不到），现在是停用状态`;
-            logToTerminal('error', `❌ ${msg}`);
-            throw new Error(msg);
-        }
-        // onStart 也可能失败 —— 同样不能吞
         try {
-            await newEntry.plugin.onStart();
+            if (metadata.lang !== 'python') {
+                // ⚠ 2026-11-09 三十五轮修（踩过）：只删主文件的缓存不够 ——
+                //   插件常常拆成多个模块（dispatch/index.js require ./game-control.js、
+                //   ./verify-contract.js、./knowledge-base.js…）。删了 index.js 的缓存，
+                //   重新 load 时 require('./game-control') 拿到的**还是旧模块**。
+                //   表现为：改了代码、reload 返回「已热重载」、跑起来还是旧逻辑。
+                //   修法：把插件目录下所有 .js 的缓存都删掉（用 realpath 归一化，防 Windows 大小写/软链差异）。
+                const mainPath = path.join(pluginDir, metadata.main || 'index.js');
+                try { delete require.cache[require.resolve(mainPath)]; } catch (e) { /* 未加载过，无需删 */ }
+                let purged = 0;
+                try {
+                    const realDir = fs.realpathSync(pluginDir);
+                    for (const key of Object.keys(require.cache)) {
+                        try {
+                            const kf = fs.realpathSync(key);
+                            if (kf.startsWith(realDir + path.sep) && /\.(c?js|mjs)$/i.test(kf)) {
+                                delete require.cache[key];
+                                purged += 1;
+                            }
+                        } catch (e) { /* 单条失败不影响其它 */ }
+                    }
+                } catch (e) {
+                    logToTerminal('warn', `[reload] 清子模块缓存部分失败（${name}）：${e && e.message || e}`);
+                }
+                if (purged > 1) logToTerminal('info', `[reload] ${name} 清了 ${purged} 个模块缓存`);
+            }
+
+            await this.load(pluginDir);
+            await this._yieldToEventLoop();
+
+            // ⚠ 2026-11-09 三十五轮修「假成功」：原实现不检查 load 是否成功就
+            //   `newEntry.plugin.onStart()` 并打「已热重载」日志。
+            //   实际 load 内部是 try/catch 吞掉异常的，失败时 _plugins 里根本没有这个条目 →
+            //   newEntry 为 undefined，onStart 静默跳过，日志照样说「已热重载」。
+            //   表现：插件有语法错误 → 用户看到「热重载成功」但插件实际没在工作。
+            //   现在：拿不到新条目就明确报错，并说清「插件没加载成功」。
+            const newEntry = this._plugins.get(name);
+            if (!newEntry) {
+                const msg = `插件「${name}」卸载成功但**没能重新加载**（语法错误 / 依赖缺失 / 主文件读不到），现在是停用状态`;
+                logToTerminal('error', `❌ ${msg}`);
+                throw new Error(msg);
+            }
+            newEntryForCleanup = newEntry;
+            // onStart 也可能失败 —— 同样不能吞
+            try {
+                await newEntry.plugin.onStart();
+            } catch (e) {
+                const msg = `插件「${name}」加载成功但 onStart() 抛错：${e && e.message || e}。它可能只有部分功能可用`;
+                logToTerminal('error', `❌ ${msg}`);
+                throw new Error(msg);
+            }
+            // 到这里才算真的重载成功：以磁盘现状刷新指纹基线
+            try { this._recordPluginHashes(pluginDir); } catch (e) { /* 指纹失败不影响重载 */ }
+            logToTerminal('info', `🔄 插件已热重载: ${name}`);
+            return { ok: true, name };
         } catch (e) {
-            const msg = `插件「${name}」加载成功但 onStart() 抛错：${e && e.message || e}。它可能只有部分功能可用`;
-            logToTerminal('error', `❌ ${msg}`);
-            throw new Error(msg);
+            // 失败保留旧实例（best-effort）：unload 已经停过它，但对象还在内存里。
+            // 重新挂回 _plugins 并重启 onStart，至少插件仍在列表、工具面不会突然消失；
+            // 指纹只回滚**本插件目录**，避免把并发重载成功的别的插件指纹一起抹掉。
+            if (newEntryForCleanup && newEntryForCleanup.plugin !== entry.plugin) {
+                try { await newEntryForCleanup.plugin.onStop(); } catch (e3) { /* 半初始化实例，尽力收尾 */ }
+                try { await newEntryForCleanup.plugin.onDestroy(); } catch (e3) { /* 同上 */ }
+            }
+            for (const key of [...this._fileHashes.keys()]) {
+                if (key.startsWith(dirPrefix)) this._fileHashes.delete(key);
+            }
+            for (const [k, v] of hashSnapshot) this._fileHashes.set(k, v);
+            if (dynamicToolsSnapshot) this._dynamicTools.set(name, dynamicToolsSnapshot);
+            this._plugins.set(name, entry);
+            try {
+                await entry.plugin.onStart();
+            } catch (e2) {
+                logToTerminal('warn', `[reload] 旧实例 onStart 重启失败（${name}）：${e2 && e2.message || e2}`);
+            }
+            logToTerminal('error', `❌ [reload] 失败，保留旧实例 ${name}: ${e && e.message || e}`);
+            throw e;
         }
-        // 到这里才算真的重载成功
-        logToTerminal('info', `🔄 插件已热重载: ${name}`);
-        return { ok: true, name };
     }
 
     /**
@@ -424,12 +478,16 @@ class PluginManager {
      * 监听插件源码文件变更，自动重载对应插件
      */
     /** js 语法预检：vm.Script 只解析不执行，捕捉「写了一半」的中间态与真语法错误 */
-    _jsSyntaxBad(fullPath) {
+    _jsSyntaxBad(fullPath, srcOverride) {
         try {
-            if (!fs.existsSync(fullPath)) return true;   // 还没写出来 = 未完成
+            if (srcOverride === undefined) {
+                if (!fs.existsSync(fullPath)) return true;   // 还没写出来 = 未完成
+                srcOverride = fs.readFileSync(fullPath, 'utf8');
+            }
+            if (typeof srcOverride !== 'string') return true;
             // eslint 全局 vm 未引入，这里局部 require
             const vm = require('vm');
-            const src = fs.readFileSync(fullPath, 'utf8');
+            const src = srcOverride;
             // #24 卡死防护（2026-11-09）：reload 会同步跑在渲染层主线程，
             // 超大文件解析可能占住主线程几百 ms（甚至因半截文件触发异常）→ 表现为「热重载卡死」。
             // 超过 2MB 的插件源码基本不可能（真出现就是误放的构建产物），直接判「未就绪」不重载。
@@ -439,6 +497,62 @@ class PluginManager {
         } catch (e) {
             return true;   // 解析失败（SyntaxError）或读不到（写一半）都当「未就绪」
         }
+    }
+
+    /**
+     * 记一个文件的成功加载指纹（2026-11-25）。
+     * 只在 load()/reload() 真正成功之后调用；失败时**不写**，保证下次变更还能重试。
+     */
+    _rememberFileHash(fullPath, hash) {
+        if (!fullPath || !hash) return false;
+        this._fileHashes.set(fullPath, hash);
+        return true;
+    }
+
+    /**
+     * 建立/刷新插件目录的指纹基线：递归收录 .js/.mjs/.cjs/.py。
+     * 顺带清掉已被删除的文件，避免同名文件重建时被误判成「内容未变」。
+     */
+    _recordPluginHashes(pluginDir) {
+        const seen = new Set();
+        const walk = (dir) => {
+            let entries;
+            try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+            for (const ent of entries) {
+                const full = path.join(dir, ent.name);
+                if (ent.isDirectory()) {
+                    if (ent.name === 'node_modules' || ent.name === '.git') continue;
+                    walk(full);
+                    continue;
+                }
+                if (!/\.(c?js|mjs|py)$/i.test(ent.name)) continue;
+                try {
+                    this._fileHashes.set(full, hashContent(fs.readFileSync(full, 'utf8')));
+                    seen.add(full);
+                } catch (e) { /* 单个文件读不到不影响其它 */ }
+            }
+        };
+        walk(pluginDir);
+        const prefix = pluginDir + path.sep;
+        for (const key of [...this._fileHashes.keys()]) {
+            if (key.startsWith(prefix) && !seen.has(key)) this._fileHashes.delete(key);
+        }
+        return seen.size;
+    }
+
+    /**
+     * fswatch 事件的内容闸：内容与上次成功加载一致 → 跳过（返回 true）。
+     * 文件被 touch / 元数据变化 / 编辑器保存无改动都走这里，不重载、不重建工具面。
+     */
+    _isContentUnchanged(fullPath, src, displayName) {
+        if (typeof src !== 'string') return false;      // 读不到 → 当作可能变更，交给语法预检/重载处理
+        const hash = hashContent(src);
+        const prev = this._fileHashes.get(fullPath);
+        if (prev && prev === hash) {
+            dbg(`[reload] 内容未变，跳过 ${displayName || fullPath}`);
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -473,7 +587,10 @@ class PluginManager {
                         // 语法预检：大文件分多块落盘时，500ms 防抖可能仍读到中间态——
                         // 语法没过就再等 2s 重排（最多 3 次），别把半截文件 reload 进去报一片错。
                         const full = path.join(baseDir, filename);
-                        if (ext === '.js' && this._jsSyntaxBad(full)) {
+                        // 读一次，语法预检与内容 hash 复用同一份内容（不再各读一遍）
+                        let src = null;
+                        try { if (fs.existsSync(full)) src = fs.readFileSync(full, 'utf8'); } catch (e) { src = null; }
+                        if (ext === '.js' && this._jsSyntaxBad(full, src === null ? undefined : src)) {
                             const tries = (this._reloadSyntaxRetries.get(targetName) || 0) + 1;
                             this._reloadSyntaxRetries.set(targetName, tries);
                             if (tries <= 3) {
@@ -481,10 +598,17 @@ class PluginManager {
                                 clearTimeout(this._reloadDebounceTimers.get(targetName));
                                 this._reloadDebounceTimers.set(targetName, setTimeout(() => {
                                     this._reloadDebounceTimers.delete(targetName);
-                                    if (this._jsSyntaxBad(full)) logToTerminal('error', `❌ ${filename} 语法错误，跳过热重载（保留旧版）`);
+                                    let src2 = null;
+                                    try { if (fs.existsSync(full)) src2 = fs.readFileSync(full, 'utf8'); } catch (e) { src2 = null; }
+                                    if (this._jsSyntaxBad(full, src2 === null ? undefined : src2)) logToTerminal('error', `❌ ${filename} 语法错误，跳过热重载（保留旧版）`);
                                     else {
                                         this._reloadSyntaxRetries.delete(targetName);
-                                        this.reload(targetName).catch(e => logToTerminal('error', `❌ 源码变更热重载失败 (${targetName}): ${e.message}`));
+                                        // 语法过关后仍要比内容：半截写入→补全回原内容、或编辑器只改了 mtime，都别重载
+                                        if (this._isContentUnchanged(full, src2, targetName)) return;
+                                        const hash2 = src2 === null ? null : hashContent(src2);
+                                        this.reload(targetName)
+                                            .then(() => { this._rememberFileHash(full, hash2); })
+                                            .catch(e => logToTerminal('error', `❌ [reload] 失败，保留旧实例 ${targetName}: ${e.message}`));
                                     }
                                 }, 2000));
                                 return;
@@ -494,10 +618,17 @@ class PluginManager {
                             return;
                         }
                         this._reloadSyntaxRetries.delete(targetName);
+                        // 内容闸：fswatch 的「触碰」不停重载。内容与上次成功加载一致 →
+                        // 只留一行 dbg，不重载、不重建工具面（编辑器保存无改动也走这里）。
+                        if (this._isContentUnchanged(full, src, targetName)) return;
+                        const contentHash = src === null ? null : hashContent(src);
                         logToTerminal('info', `👁️ 检测到源码变更: ${filename}，重载插件 ${targetName}`);
-                        this.reload(targetName).catch(e => {
-                            logToTerminal('error', `❌ 源码变更热重载失败 (${targetName}): ${e.message}`);
-                        });
+                        this.reload(targetName)
+                            .then(() => { this._rememberFileHash(full, contentHash); })
+                            .catch(e => {
+                                // reload 内部已回滚指纹并尽力保留旧实例；这里只负责把失败摆到台面
+                                logToTerminal('error', `❌ [reload] 失败，保留旧实例 ${targetName}: ${e.message}`);
+                            });
                     }, 500));
                 });
                 this._sourceWatchers.push(watcher);
@@ -944,4 +1075,4 @@ class PluginManager {
     }
 }
 
-module.exports = { PluginManager };
+module.exports = { PluginManager, hashContent };

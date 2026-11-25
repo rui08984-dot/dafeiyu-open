@@ -1,0 +1,20 @@
+{
+  "id": "curious-then-proud",
+  "title": "疑惑→得意",
+  "license": "original",
+  "note": "P3a 示例节目单：先疑惑（01-curiosity），再得意（03-pride）。台词为原创，无外部素材。",
+  "beats": [
+    {
+      "seg": "01-curiosity",
+      "maxMs": 14000,
+      "line": "诶……这是什么东西？",
+      "transitionMs": 400
+    },
+    {
+      "seg": "03-pride",
+      "maxMs": 14000,
+      "line": "哼哼，我早就知道了。",
+      "sfx": "07"
+    }
+  ]
+}

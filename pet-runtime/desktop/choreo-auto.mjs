@@ -71,6 +71,10 @@ export const DEFAULT_OPTIONS = Object.freeze({
   idleCooldownMs: 8 * 60 * 1000,
   idleChance: 0.30,            // 每次评估触发的概率（避免「一到点就必演」）
   rareChance: 0.04,            // 稀有段（13）每次评估的额外概率
+  // P1（2026-11-25，ADR-015 §3.2）：空闲长段只在导演 intensity≥0.8 时允许；
+  // 其余时间交给 ambient 待机层（否则「没事就来一段 20–38 秒」正是把演出变成壁纸的根因）。
+  // 不传 intensity（老调用方/单测）时保持旧行为 = 不设门。
+  idleMinIntensity: 0.8,
 });
 
 function normalizeEmotion(emotion) {
@@ -165,8 +169,9 @@ export function decidePerformance(s) {
  * @param {object} [s.lastByKey]
  * @param {number} [s.sessionCount]
  * @param {number} [s.rand]         0..1（测试注入；默认 Math.random）
+ * @param {number} [s.intensity]    导演 intensity（0..1）；给了且 < idleMinIntensity → 只走 ambient
  * @returns {{ play: boolean, key: string|null, reason: string }}
- *   reason: ok / not-idle / idle-cooldown / global-cooldown / session-cap / key-cooldown / idle-roll
+ *   reason: ok / not-idle / director-low-intensity / idle-cooldown / global-cooldown / session-cap / key-cooldown / idle-roll
  */
 export function decideIdle(s) {
   const o = { ...DEFAULT_OPTIONS, ...(s && s.options ? s.options : {}) };
@@ -175,6 +180,13 @@ export function decideIdle(s) {
   const tuning = (s && s.tuning) || null;
 
   if (idleMs < o.idleAfterMs) return { play: false, key: null, reason: 'not-idle' };
+
+  // P1：低强度时不允许空闲长段（只在 ambient 待机里活着）。
+  // 只有显式传了 intensity 才生效 —— 老调用方（单测/手动触发）行为不变。
+  const intensity = Number(s && s.intensity);
+  if (Number.isFinite(intensity) && intensity < Number(o.idleMinIntensity)) {
+    return { play: false, key: null, reason: 'director-low-intensity' };
+  }
 
   const lastAt = Number(s && s.lastAt) || 0;
   if (lastAt > 0 && now - lastAt < o.globalCooldownMs) {
@@ -240,9 +252,9 @@ export function createAutoTrigger(options = {}) {
       return d;
     },
     /** 空闲通道：调用一次做决策；返回 play 时内部已记账。 */
-    considerIdle({ now, idleMs, rand, rand2 }) {
+    considerIdle({ now, idleMs, rand, rand2, intensity }) {
       const d = decideIdle({
-        now, idleMs, lastAt, lastIdleAt, lastByKey, sessionCount, rand, rand2, options: opts,
+        now, idleMs, lastAt, lastIdleAt, lastByKey, sessionCount, rand, rand2, intensity, options: opts,
         tuning: resolveTuning(),
       });
       if (d.play) { record(d.key, now); lastIdleAt = now; }

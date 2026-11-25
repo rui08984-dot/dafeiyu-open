@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  createClipDirector, normalizeEmotion, EMOTION_TO_LABELS, DIRECTOR_DEFAULTS,
+  createClipDirector, normalizeEmotion, EMOTION_TO_LABELS, DIRECTOR_DEFAULTS, maxMsForIntensity,
 } from '../desktop/perf/facs-clip-director.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -151,6 +151,90 @@ function eq(name, got, want) {
   const cands = d.candidates('shy');
   ok('candidates 返回该情绪的 label 组', Array.isArray(cands) && cands.length > 0 && cands[0].label === '害羞', JSON.stringify(cands));
   ok('candidates 带每段的 energy', cands[0].clips[0].energy === 400);
+}
+
+// ── ⑦ P0 内容快胜：稀缺池 / 时长门 / 每段日上限（2026-11-25）──────────
+// 断言只加不改：以上旧断言（六条理由、选择顺序、可复现性）保持原样。
+{
+  // 时长门：低强度只允许 ≤8s；高强度才放长段
+  const mkLong = () => createClipDirector({ clips: [
+    { id: 'long', label: '自然放松', energy: 300, durationMs: 30000 },
+    { id: 'short', label: '自然放松', energy: 120, durationMs: 3000 },
+  ] }, { seed: 11 });
+  const low = mkLong().decide({ emotion: 'neutral', intensity: 0.4, nowMs: 1_000_000 });
+  ok('低强度不放 30 秒长段', low.clipId !== 'long', JSON.stringify(low));
+  eq('低强度时长预算 8000', low.detail && low.detail.maxMs, 8000);
+  const high = mkLong().decide({ emotion: 'neutral', intensity: 0.95, nowMs: 1_000_000 });
+  eq('高强度允许长段', high.clipId, 'long');
+  eq('高强度时长预算 45000', high.detail && high.detail.maxMs, 45000);
+  eq('maxMsForIntensity 导出且分段', [maxMsForIntensity(0.3), maxMsForIntensity(0.5), maxMsForIntensity(0.7), maxMsForIntensity(0.9)], [8000, 12000, 20000, 45000]);
+}
+
+{
+  // 稀缺情绪放宽能量门：playful 只有弱段（energy 76，<150）时仍有候选
+  const d = createClipDirector({ clips: [
+    { id: 'star1', label: '星星眼', energy: 76, durationMs: 2300 },
+    { id: 'star2', label: '星星眼', energy: 77, durationMs: 2300 },
+    { id: 'star3', label: '星星眼', energy: 75, durationMs: 3050 },
+  ] }, { seed: 2 });
+  const r = d.decide({ emotion: 'playful', intensity: 0.9, nowMs: 5_000_000 });
+  eq('playful 用放宽档选到弱段（旧实现会 no-candidate）', r.reason, 'ok');
+  eq('选中段的档位标记为 1（放宽档）', r.detail && r.detail.tier, 1);
+  eq('强段仍优先于放宽段（tier 0 先排）', (() => {
+    const d2 = createClipDirector({ clips: [
+      { id: 'weak', label: '星星眼', energy: 76, durationMs: 2300 },
+      { id: 'strong', label: '挑眉逗趣', energy: 574, durationMs: 15000 },
+    ] }, { seed: 2, sameClipMs: 1000 });
+    return d2.decide({ emotion: 'playful', intensity: 0.9, nowMs: 1 }).clipId;
+  })(), 'strong');
+}
+
+{
+  // 每段日上限（默认 8）：同一段一天只能播 8 次
+  const clips = [{ id: 'only', label: '微笑', energy: 300, durationMs: 1000 }];
+  const d = createClipDirector({ clips }, {
+    seed: 1, gapMs: 1, sameClipMs: 1, maxPer10Min: 50, windowMs: 24 * 3600 * 1000,
+  });
+  let now = 10_000_000;
+  let played = 0;
+  for (let i = 0; i < 9; i += 1) {
+    const r = d.decide({ emotion: 'happy', intensity: 0.9, nowMs: now });
+    if (r.clipId) { d.notePlayed(r.clipId, now); played += 1; }
+    now += 10_000;
+  }
+  eq('每段每日最多播 8 次', played, 8);
+  const capped = d.decide({ emotion: 'happy', intensity: 0.9, nowMs: now });
+  eq('日上限用尽 → no-candidate', capped.reason, 'no-candidate');
+  // 跨天重置（内存计数，按本地日期）
+  const tomorrow = now + 26 * 3600 * 1000;
+  const reset = d.decide({ emotion: 'happy', intensity: 0.9, nowMs: tomorrow });
+  eq('跨天后日上限重置', reset.clipId, 'only');
+}
+
+{
+  // 真索引：每个情绪都有 ≥5 段可用（playful 从 1 提到 ≥5），总量 ≥60
+  const indexPath = path.join(CLIPS, 'index.json');
+  if (!fs.existsSync(indexPath)) {
+    console.log('  ⚠ 缺 ' + indexPath + '，跳过 P0 池统计断言');
+  } else {
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    const d = createClipDirector(index, { seed: 1 });
+    const stats = d.poolStats(1_700_000_000_000, 45000);
+    ok('poolStats 返回每情绪统计', stats && stats.emotions && typeof stats.emotions.playful === 'object');
+    ok('playful 可用段 ≥5（旧：1）', stats.emotions.playful.total >= 5, 'total=' + stats.emotions.playful.total);
+    const scarce = Object.entries(stats.emotions).filter(([, v]) => v.total < 5).map(([k, v]) => k + '=' + v.total);
+    eq('每个情绪都 ≥5 段可用', scarce, []);
+    const unique = new Set(index.clips.filter((c) => (c.energy || 0) >= 75 && (c.durationMs || 0) <= 45000).map((c) => c.id));
+    ok('全库可用段 ≥60', unique.size >= 60, 'unique=' + unique.size);
+    eq('poolStats 报出每段日上限', stats.maxPlaysPerClipPerDay, 8);
+    ok('poolStats 带当日播放 top（初始为空）', Array.isArray(stats.dailyTop));
+
+    // 低强度真索引：选中的段必须 ≤8s（top4 长中性段被挡）
+    const lowPick = d.decide({ emotion: 'neutral', intensity: 0.4, nowMs: 1_700_000_000_000 });
+    const pickedClip = index.clips.find((c) => c.id === lowPick.clipId);
+    ok('真索引低强度只选 ≤8s 的段', Boolean(pickedClip) && (pickedClip.durationMs || 0) <= 8000,
+      pickedClip ? pickedClip.id + '/' + pickedClip.durationMs : lowPick.reason);
+  }
 }
 
 console.log('  ' + (fail === 0 ? '✅' : '❌') + ' 片段导演：PASS ' + pass + ' / FAIL ' + fail);

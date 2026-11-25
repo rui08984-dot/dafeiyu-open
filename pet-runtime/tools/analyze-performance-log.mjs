@@ -84,11 +84,18 @@ export function analyzeRecords(records, opts = {}) {
     clips: {},               // clipId → {plays, label, lastAt}
     latency: { medianMs: null, p90Ms: null, samples: 0 },
     distinct: { labels: 0, clips: 0 },
+    // 2026-11-25 P0：打断 vs 被吸引分账（totals 保持旧形状，旧消费方不受影响）
+    phases: { during: 0, afterEnd: 0, unphased: 0 },
+    rates: { interruptRate: null, engagedRate: null, plays: 0 },
+    durations: { avgActualMs: null, medianActualMs: null, samples: 0 },
+    endedBy: {},
+    byPerfKind: {},
   };
 
   const latencies = [];
   const labelUserAfter = {};
   const seenTs = [];
+  const actualDurations = [];
 
   for (const r of rows) {
     const ts = Number(r.ts);
@@ -109,6 +116,8 @@ export function analyzeRecords(records, opts = {}) {
       }
       if (!out.labelStats[label]) out.labelStats[label] = { plays: 0, userAfter: 0, rate: null };
       out.labelStats[label].plays += 1;
+      const pk = r.perfKind || 'clip';
+      out.byPerfKind[pk] = (out.byPerfKind[pk] || 0) + 1;
     } else if (r.kind === 'skip') {
       out.totals.skips += 1;
       const reason = r.reason || '(空)';
@@ -119,6 +128,14 @@ export function analyzeRecords(records, opts = {}) {
       if (Number.isFinite(ms)) latencies.push(ms);
       const label = r.label || '(未知)';
       labelUserAfter[label] = (labelUserAfter[label] || 0) + 1;
+      if (r.phase === 'during') out.phases.during += 1;
+      else if (r.phase === 'afterEnd') out.phases.afterEnd += 1;
+      else out.phases.unphased += 1;
+    } else if (r.kind === 'perf.end') {
+      const endedBy = r.endedBy || '(未标)';
+      out.endedBy[endedBy] = (out.endedBy[endedBy] || 0) + 1;
+      const actual = Number(r.actualMs);
+      if (Number.isFinite(actual)) actualDurations.push(actual);
     }
   }
 
@@ -136,6 +153,21 @@ export function analyzeRecords(records, opts = {}) {
   }
   out.distinct.labels = Object.keys(out.playsByLabel).length;
   out.distinct.clips = Object.keys(out.clips).length;
+
+  // 打断率 vs 被吸引率：分母都是「播放次数」，分子只算**分过档**的记录。
+  // 旧日志（phase 缺失）进 unphased，不混进两个比率 —— 否则新窗口会被历史数据污染。
+  out.rates.plays = out.totals.plays;
+  if (out.totals.plays > 0) {
+    out.rates.interruptRate = +(out.phases.during / out.totals.plays * 100).toFixed(1);
+    out.rates.engagedRate = +(out.phases.afterEnd / out.totals.plays * 100).toFixed(1);
+  }
+  if (actualDurations.length) {
+    const sum = actualDurations.reduce((a, b) => a + b, 0);
+    out.durations.avgActualMs = Math.round(sum / actualDurations.length);
+    out.durations.medianActualMs = median(actualDurations);
+    out.durations.samples = actualDurations.length;
+  }
+
   if (seenTs.length) {
     out.window.from = Math.min(...seenTs);
     out.window.to = Math.max(...seenTs);
@@ -155,6 +187,17 @@ export function formatReport(a) {
     lines.push(`接话延迟：中位 ${a.latency.medianMs}ms · p90 ${a.latency.p90Ms}ms（样本 ${a.latency.samples}）`);
   }
   lines.push(`多样性：${a.distinct.labels} 个 label / ${a.distinct.clips} 段`);
+  if (a.rates && a.rates.plays > 0) {
+    lines.push(`打断率 ${a.rates.interruptRate}% · 被吸引率 ${a.rates.engagedRate}%`
+      + `（分母 ${a.rates.plays} 次播放；旧日志未分档 ${(a.phases && a.phases.unphased) || 0} 条）`);
+  }
+  if (a.durations && a.durations.samples) {
+    lines.push(`实际时长：平均 ${a.durations.avgActualMs}ms · 中位 ${a.durations.medianActualMs}ms（样本 ${a.durations.samples}）`);
+  }
+  if (a.endedBy && Object.keys(a.endedBy).length) {
+    lines.push('结束方式：' + Object.entries(a.endedBy).sort((x, y) => y[1] - x[1])
+      .map(([k, v]) => `${k}=${v}`).join('  '));
+  }
 
   const fmtMap = (obj, n = 8) => Object.entries(obj).sort((x, y) => y[1] - x[1]).slice(0, n)
     .map(([k, v]) => `${k}=${v}`).join('  ') || '（无）';
@@ -192,6 +235,17 @@ export function formatReport(a) {
     lines.push('· 播了 ≥5 次但一次都没接话：要么时机不对，要么表演太轻 → 这是最该看的一格');
   } else if (t.plays > 0) {
     lines.push('· 接话率 ' + (t.userAfter / t.plays * 100).toFixed(1) + '%（注意：接话≠满意，只是「被注意到」的代理）');
+  }
+  // P0：把「打断」与「被吸引」分开说 —— 合成一个数字会让人把「用户嫌吵」当成「用户喜欢」。
+  // 旧日志没有 phase（unphased），不能拿它算 0% 然后给建议；至少要有 1 条分档样本。
+  const phased = a.phases ? (a.phases.during + a.phases.afterEnd) : 0;
+  if (a.rates && a.rates.plays >= 5 && phased > 0) {
+    if (a.rates.engagedRate < 15) {
+      lines.push('· 被吸引率 ' + a.rates.engagedRate + '% < 15%：演完基本没人接 → 先压密度/改时机（导演 min_reply_rate 立刻会降强度）');
+    }
+    if (a.rates.interruptRate >= 30) {
+      lines.push('· 打断率 ' + a.rates.interruptRate + '% 偏高：播放中途用户频繁输入 → 长段太多或时机太密');
+    }
   }
   if (!lines[lines.length - 1].startsWith('·')) lines.push('· 样本还太少，先攒日志再下结论');
   return lines.join('\n');

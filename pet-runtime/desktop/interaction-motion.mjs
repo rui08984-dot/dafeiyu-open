@@ -10,7 +10,7 @@ export class InteractionMotion {
   constructor(){this.values={yaw:0,pitch:0,roll:0,body:0,gazeX:0,gazeY:0,blink:0};this.attentionAt=null;}
   start(now){this.attentionAt=now;}
   release(){this.attentionAt=null;}
-  sample({now,delta,elapsed,state,head,body,blink,work=false,reducedMotion=false,speechRate=0,workState='idle'}){
+  sample({now,delta,elapsed,state,head,body,blink,work=false,reducedMotion=false,speechRate=0,workState='idle',amp=1}){
     const age=this.attentionAt===null?Infinity:Math.max(0,(now-this.attentionAt)/1000);
     if(age>.9)this.attentionAt=null;
     const tap=age<=.9?curve(age,[[0,0],[.12,-1],[.32,.42],[.7,0],[.9,0]]):0;
@@ -62,6 +62,13 @@ export class InteractionMotion {
       target.gazeX=0; target.gazeY=.06;
       target.pitch+=1.5;
       target.roll+=Math.sin(elapsed*3.2)*.8;
+    }
+    // ── 待机层幅度（2026-11-25 P1）：只在真待机时压摆幅，派活/接话动作不动 ──
+    // amp 默认 1 = 旧行为逐字节一致；ambient 给的是 0..0.3 的「表演幅度 30%」预算。
+    const ambientAmp=ws==='idle'&&!work&&Number.isFinite(Number(amp))?Math.min(1,Math.max(0,Number(amp))):1;
+    if(ambientAmp!==1){
+      target.yaw*=ambientAmp; target.pitch*=ambientAmp; target.roll*=ambientAmp;
+      target.body*=ambientAmp; target.gazeX*=ambientAmp; target.gazeY*=ambientAmp;
     }
     for(const key of Object.keys(target)){
       const allowed=key==='body'?body:key==='blink'?blink:head;

@@ -2264,9 +2264,12 @@ function setUpTray(win) {
   // ── 表演库 v2（2026-11-15）：15 段 19–38 秒长表演 ────────────────────────
   // 与下面「编舞（实验）」的区别：那是说话时按情绪播的微动作（2–4 秒，自动）；
   // 这是参数级长表演（眼球/眉/嘴逐帧轨道 + 原生手势 + 真表情），按名字手动触发。
-  // 列表和 pet-runtime/desktop/choreo-performances.mjs 的 key 一一对应；
-  // 重新编译后若段名有变，playPerformance 会返回 false（控制台会打印）。
-  const PERFORMANCE_MENU = [
+  //
+  // 段名单一真源（2026-11-25 P3b）：下面这张表只是**离线兜底**。
+  // 真正的标题在 pet-runtime/desktop/choreo-performances.mjs 的编译产物里；
+  // 启动后从渲染层取一次 window.petBody.listPerformances() 覆盖它 ——
+  // 仓库数据改名后托盘菜单跟着变，不再出现「点了一直没反应」的静默失配。
+  const PERFORMANCE_MENU_FALLBACK = [
     ['01-curiosity', '01 疑惑→思考→恍然大悟'],
     ['02-vulnerable', '02 委屈→犹豫→鼓起勇气'],
     ['03-pride', '03 得意→被戳穿→害羞否认'],
@@ -2283,8 +2286,44 @@ function setUpTray(win) {
     ['14-flirt', '14 侧目试探→靠近→带笑回望'],
     ['15-flirt-layered', '15 侧目试探→靠近→回望（分层）'],
   ];
+  let PERFORMANCE_MENU = PERFORMANCE_MENU_FALLBACK.slice();
+
+  // 启动时取一次段名：渲染层没就绪就每 15 秒重试（Cubism 加载 15–60s），
+  // 重试用尽仍拿不到 → 沿用硬编码并留一行可 grep 的日志。
+  const loadPerformanceMenuFromRenderer = async (attempt = 0) => {
+    try {
+      if (!petWinRef || petWinRef.isDestroyed()) throw new Error('窗口未就绪');
+      const raw = await petWinRef.webContents.executeJavaScript(
+        'JSON.stringify((function(){try{return (global.petBody && typeof global.petBody.listPerformances === "function") ? (global.petBody.listPerformances() || []) : null;}catch(e){return null;}})())'
+      );
+      const list = raw ? JSON.parse(raw) : null;
+      const rows = (Array.isArray(list) ? list : [])
+        .filter((p) => p && p.key)
+        .map((p) => {
+          const key = String(p.key);
+          const secs = Number(p.duration);
+          const num = key.split('-')[0];
+          const title = String(p.title || key);
+          return [key, (num ? num + ' ' : '') + title + (Number.isFinite(secs) ? ' · ' + Math.round(secs) + 's' : '')];
+        });
+      if (!rows.length) throw new Error('渲染层未返回段名');
+      PERFORMANCE_MENU = rows;
+      console.log('[tray] 段名来源 = 渲染层（' + rows.length + ' 段）');
+      try { rebuild(); } catch (e) { /* 托盘已销毁时忽略 */ }
+      return true;
+    } catch (error) {
+      if (attempt < 12) {
+        const timer = setTimeout(() => { loadPerformanceMenuFromRenderer(attempt + 1); }, 15000);
+        if (timer && typeof timer.unref === 'function') timer.unref();
+        return false;
+      }
+      console.log('[tray] 段名回退硬编码');
+      return false;
+    }
+  };
+
   const runPerformance = (key) => {
-    // key 用 JSON.stringify 包：菜单是静态的，但别给「拼字符串进 executeJavaScript」留口子
+    // key 用 JSON.stringify 包：菜单可能来自渲染层数据，别给「拼字符串进 executeJavaScript」留口子
     const js = key
       ? `try{global.petBody&&global.petBody.playPerformance(${JSON.stringify(String(key))});}catch(e){}`
       : 'try{global.petBody&&global.petBody.stopPerformance();}catch(e){}';
@@ -2423,7 +2462,8 @@ function setUpTray(win) {
       } },
       // 长表演自动触发（2026-11-16）：聊天时情绪到位就自动演一段 19–38 秒的戏。
       // 默认开（用户拍板「不能靠托盘按键才演」）；这个是「允许自动演」的总闸，
-      // 节流（4 分钟冷却 / 同段 15 分钟 / 单会话 6 段）在渲染层 choreo-auto.mjs 里。
+      // 节流（强度门槛 / 全局冷却 / 同段冷却 / 单会话上限）由渲染层 choreo-auto.mjs 的
+      // 默认值决定 —— 这里不再写死数字，避免托盘文案与代码漂移（2026-11-25 P0）。
       { type: 'checkbox', label: '自动演（情绪触发）', checked: !(config.ui && config.ui.petbody_perf_auto === false), click: (item) => {
         const wrote = patchConfigVerified('tray:自动演', (cfg) => {
           cfg.ui = cfg.ui || {};
@@ -2491,6 +2531,9 @@ function setUpTray(win) {
     if (petWinRef.isVisible()) petWinRef.hide(); else { petWinRef.show(); petWinRef.setAlwaysOnTop(true, 'screen-saver'); }
     rebuild();
   });
+  // 段名单一真源（2026-11-25 P3b）：异步取一次渲染层的 listPerformances，
+  // 不阻塞建托盘；取到后自动 rebuild，取不到就用上面的硬编码兜底并打日志。
+  loadPerformanceMenuFromRenderer();
   // 托盘自检（2026-11-15 六十三轮）：PET_TRAY_SELFTEST=1 时把「能安全回滚」的菜单项真跑一遍并写日志。
   // 打开设置/配置目录/退出 会开窗或退出 → 只记 SKIP，不代跑。
   if (process.env.PET_TRAY_SELFTEST === '1') {

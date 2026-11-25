@@ -417,60 +417,168 @@ function pickConfig(config) {
 }
 
 let _cache = null;
+// 异步刷新的在途标记：同一时刻只跑一份，避免 rAF 里排队几十个相同的读。
+let _refreshing = false;
+let _lastRefresh = { at: 0, reason: 'idle', ms: 0 };
+// 48KB/块：723KB 日志约 15 块，每块解析 ≈1ms（audit 实测全量 5–20ms → 拆散后单块 <2ms）
+const READ_CHUNK_BYTES = 48 * 1024;
+// 让出事件循环：Node/Electron 有 setImmediate；纯浏览器退回 setTimeout(0)
+const yieldToLoop = (typeof setImmediate === 'function')
+  ? () => new Promise((r) => setImmediate(r))
+  : () => new Promise((r) => setTimeout(r, 0));
 
 /**
- * 读日志 + 开关，返回可交给决策层的倍率表。永不抛错（读不到就返回空表 = 1.0）。
- * @param {{file?:string, configFile?:string, now?:number, noCache?:boolean}} [opts]
+ * 准备一次加载所需的路径/配置/缓存 key。读配置（几字节）与 stat 都很便宜，
+ * 昂贵的是 723KB 日志的 readFileSync + JSON.parse（2026-11-25 审计 §4.2 实测 5–20ms）。
  */
-function loadTuning(opts = {}) {
+function prepareLoad(opts) {
   const now = num(opts.now, Date.now());
-  if (!fs || !path) {
-    return emptyTuning(now, { reason: 'no-fs', logFile: null, configFile: null });
-  }
   const logFile = opts.file || findLogFile();
   const configFile = opts.configFile || findConfigFile();
   const { config, error: configError } = readConfig(configFile);
-
   if (config.enabled === false) {
-    return emptyTuning(now, {
-      enabled: false, reason: 'disabled', logFile, configFile, configError: configError || null,
-    });
+    return { early: emptyTuning(now, { enabled: false, reason: 'disabled', logFile, configFile, configError: configError || null }) };
   }
-
   const cfg = Object.assign({}, DEFAULT_OPTIONS, pickConfig(config), opts);
   let stat = null;
   try { stat = fs.statSync(logFile); } catch (e) { stat = null; }
   if (!stat) {
-    return emptyTuning(now, {
-      reason: 'no-log', logFile, configFile, configError: configError || null,
-    });
+    return { early: emptyTuning(now, { reason: 'no-log', logFile, configFile, configError: configError || null }) };
   }
-
   const cacheMs = Math.max(1000, num(cfg.cacheMs, DEFAULT_OPTIONS.cacheMs));
   const bucket = Math.floor(now / cacheMs);
   const key = [
     logFile, stat.mtimeMs, stat.size, configFile, configError || '',
     bucket, cfg.sampleMin, cfg.revertDropPct, cfg.windowDays, cfg.autoOnly !== false,
   ].join('|');
-  if (opts.noCache !== true && _cache && _cache.key === key) return _cache.value;
+  return { now, logFile, configFile, configError, cfg, stat, key };
+}
 
+/** 同步全量读（只给测试/CLI 的 noCache 路径用；生产路径绝不走这里） */
+function computeFromFileSync(ctx) {
   try {
-    const { records, bad } = parseLines(fs.readFileSync(logFile, 'utf8'));
-    const tuning = computeTuning(records, Object.assign({}, cfg, { now, logFile }));
+    const { records, bad } = parseLines(fs.readFileSync(ctx.logFile, 'utf8'));
+    const tuning = computeTuning(records, Object.assign({}, ctx.cfg, { now: ctx.now, logFile: ctx.logFile }));
     tuning.meta.badLines = bad;
-    tuning.meta.configFile = configFile;
-    tuning.meta.configError = configError || null;
-    _cache = { key, value: tuning };
+    tuning.meta.configFile = ctx.configFile;
+    tuning.meta.configError = ctx.configError || null;
+    _cache = { key: ctx.key, value: tuning };
     return tuning;
   } catch (e) {
-    return emptyTuning(now, {
-      reason: 'read-error',
-      error: String((e && e.message) || e),
-      logFile,
-      configFile,
-      configError: configError || null,
+    return emptyTuning(ctx.now, {
+      reason: 'read-error', error: String((e && e.message) || e),
+      logFile: ctx.logFile, configFile: ctx.configFile, configError: ctx.configError || null,
     });
   }
+}
+
+/**
+ * 增量读日志：每 48KB 读一次、只解析**完整行**（按最后一个 \n 切，UTF-8 多字节
+ * 不会被切坏），块与块之间用 setImmediate 让出事件循环。单块约 1–2ms，不再出现
+ * 「一帧卡 5–20ms」。
+ */
+function readRecordsIncremental(file) {
+  return new Promise((resolve, reject) => {
+    fs.promises.open(file, 'r').then(async (handle) => {
+      const records = [];
+      let bad = 0;
+      try {
+        const stat = await handle.stat();
+        let offset = 0;
+        let pending = Buffer.alloc(0);
+        while (offset < stat.size) {
+          const len = Math.min(READ_CHUNK_BYTES, stat.size - offset);
+          const buf = Buffer.allocUnsafe(len);
+          const out = await handle.read(buf, 0, len, offset);
+          if (!out.bytesRead) break;
+          offset += out.bytesRead;
+          const chunk = buf.subarray(0, out.bytesRead);
+          pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
+          const nl = pending.lastIndexOf(0x0A);
+          if (nl >= 0) {
+            const parsed = parseLines(pending.subarray(0, nl + 1).toString('utf8'));
+            for (const rec of parsed.records) records.push(rec);
+            bad += parsed.bad;
+            pending = pending.subarray(nl + 1);
+          }
+          // 让出事件循环：下一次 rAF 还有机会跑
+          await yieldToLoop();
+        }
+        if (pending.length) {
+          const parsed = parseLines(pending.toString('utf8'));
+          for (const rec of parsed.records) records.push(rec);
+          bad += parsed.bad;
+        }
+        resolve({ records, bad });
+      } finally {
+        try { await handle.close(); } catch (e) { /* ignore */ }
+      }
+    }).catch(reject);
+  });
+}
+
+/** 异步重算并写缓存；失败保留上次值（never throw） */
+function refreshAsync(ctx) {
+  if (_refreshing) return false;
+  _refreshing = true;
+  const started = Date.now();
+  const run = () => {
+    readRecordsIncremental(ctx.logFile).then(({ records, bad }) => {
+      const tuning = computeTuning(records, Object.assign({}, ctx.cfg, { now: num(ctx.now, Date.now()), logFile: ctx.logFile }));
+      tuning.meta.badLines = bad;
+      tuning.meta.configFile = ctx.configFile;
+      tuning.meta.configError = ctx.configError || null;
+      _cache = { key: ctx.key, value: tuning };
+      _lastRefresh = { at: Date.now(), reason: 'ok', ms: Date.now() - started };
+    }).catch((e) => {
+      // 读失败 = 不调参（保留上次值），绝不把倍率清成空表
+      _lastRefresh = { at: Date.now(), reason: String((e && e.message) || e), ms: Date.now() - started };
+    }).then(() => { _refreshing = false; }, () => { _refreshing = false; });
+  };
+  if (typeof setImmediate === 'function') setImmediate(run);
+  else Promise.resolve().then(run);
+  return true;
+}
+
+/**
+ * 读日志 + 开关，返回可交给决策层的倍率表。永不抛错（读不到就返回空表 = 1.0）。
+ *
+ * 2026-11-25 P1（审计 §4.2）：这个函数在 rAF 帧循环里被调（choreoTuning），
+ * 旧实现缓存过期时同步 readFileSync 723KB + JSON.parse，每 10 分钟卡 5–20ms。
+ * 现在：
+ *   · 缓存命中 → 直接返回（和以前一样）；
+ *   · 缓存过期 → **先返回上次值**，setImmediate 里分块异步重算（绝不阻塞帧）；
+ *   · 首次还没有任何值 → 返回空表（reason='warming'），下一次调用就有值了；
+ *   · 测试/CLI 传 noCache:true 仍走同步全量（行为与旧版逐值一致）。
+ * @param {{file?:string, configFile?:string, now?:number, noCache?:boolean}} [opts]
+ */
+function loadTuning(opts = {}) {
+  if (!fs || !path) return emptyTuning(num(opts.now, Date.now()), { reason: 'no-fs', logFile: null, configFile: null });
+  const ctx = prepareLoad(opts);
+  if (ctx.early) return ctx.early;
+  // noCache 是「强制重算」（测试/CLI）；生产路径永远先吃缓存
+  if (opts.noCache === true) return computeFromFileSync(ctx);
+  if (_cache && _cache.key === ctx.key) return _cache.value;
+  refreshAsync(ctx);
+  if (_cache && _cache.value) return _cache.value;
+  return emptyTuning(ctx.now, {
+    reason: 'warming', logFile: ctx.logFile, configFile: ctx.configFile, configError: ctx.configError || null,
+  });
+}
+
+/** 异步版本（测试/诊断用）：一定等到本次重算完成再返回 */
+async function loadTuningAsync(opts = {}) {
+  if (!fs || !path) return emptyTuning(num(opts.now, Date.now()), { reason: 'no-fs', logFile: null, configFile: null });
+  const ctx = prepareLoad(opts);
+  if (ctx.early) return ctx.early;
+  if (_cache && _cache.key === ctx.key) return _cache.value;
+  const { records, bad } = await readRecordsIncremental(ctx.logFile);
+  const tuning = computeTuning(records, Object.assign({}, ctx.cfg, { now: num(ctx.now, Date.now()), logFile: ctx.logFile }));
+  tuning.meta.badLines = bad;
+  tuning.meta.configFile = ctx.configFile;
+  tuning.meta.configError = ctx.configError || null;
+  _cache = { key: ctx.key, value: tuning };
+  return tuning;
 }
 
 module.exports = {
@@ -485,11 +593,14 @@ module.exports = {
   multiplierFor,
   computeTuning,
   loadTuning,
+  loadTuningAsync,
   findLogFile,
   findConfigFile,
   lookupMultiplier,
   // 测试用：清掉进程内缓存
   _clearCache: () => { _cache = null; },
+  // 诊断：异步刷新是否在途 / 上次刷新的结果（性能排查用）
+  _asyncState: () => ({ refreshing: _refreshing, last: Object.assign({}, _lastRefresh) }),
 };
 
 // 人读入口：node js/core/choreo-tune.js → 打印当前日志算出的倍率与保护闸结论。

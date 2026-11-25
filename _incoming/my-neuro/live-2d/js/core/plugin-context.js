@@ -663,6 +663,25 @@ class PluginContext {
                 }
             } catch (e) { /* 账本失败不影响返回 */ }
             return data.choices[0].message.content;
+        } catch (error) {
+            // P0-2（2026-11-25 审计）：网络层失败（fetch reject / ECONNRESET / 超时）没有
+            // HTTP 状态码，旧实现只 throw、不进 llm-health —— 后台 ensureCanRun 永远放行，
+            // 每个周期继续撞。HTTP 非 2xx 的错误对象（status/body/quotaResetAt）形状**不变**；
+            // 429/5xx 同样在这里记一次（旧实现整条路径没有 producer，只有调用方各自记得的
+            // memory-evolve 例外）。记过会打 `__llmHealthNoted`，调用方 catch 再记会被跳过。
+            try {
+                const apiUtils = require('../api-utils.js');
+                if (apiUtils.isNetworkError(error)) {
+                    apiUtils.noteLlmNetworkFailure(error);
+                } else {
+                    const status = Number(error && error.status) || 0;
+                    if ((status === 429 || status >= 500) && !error.__llmHealthNoted) {
+                        require('./llm-health.js').llmHealth.noteFailure(error);
+                        try { error.__llmHealthNoted = true; } catch (e) { /* 冻结对象也无所谓 */ }
+                    }
+                }
+            } catch (e) { /* 记账失败不影响抛错 */ }
+            throw error;
         } finally {
             if (deadline) deadline.cleanup();
         }

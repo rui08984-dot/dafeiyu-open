@@ -24,6 +24,10 @@ const fs = require('fs');
 // 统一结果契约（2026-11-09 三十五轮）：所有动作都往同一个形状里填，
 // 根因是「把工具调用的成功当成任务的完成」，契约强制每个动作带上可观测后果。
 const VC = require('./verify-contract.js');
+// P0-3（2026-11-25）：点击/聚焦的验证通道收口。纯判定 + 注入依赖，便于纯 Node 单测。
+// 审计根因：「动作通道」和「验证通道」不是同一块屏幕（UIA Invoke 不需要前台，
+// 但旧实现拿屏幕像素采整窗矩形 → 遮挡/副屏/屏外时假成功或假 noop）。
+const CV = require('./control-verify.js');
 // D2 经验路由（2026-11-22）：只回答「同样这几条候选通道先试哪条」，
 // 不执行 UIA/OCR/坐标、不改任何动作的成败判定与校验逻辑。
 const routeExperience = require('../../../js/core/route-experience.js');
@@ -468,10 +472,102 @@ const BUILTIN_APPS = {
     'Minecraft': '',   // 需用户在配置里填
     // ── 2026-11-10 三十七轮：系统自带软件（拟真「打开记事本」场景的缺口）——
     //    Windows 自带、零安全风险。⚠ 必须全路径：existsSync 按进程 cwd 解析，
-    //    裸 'calc.exe' 会误报「文件不存在」（实测踩到）。本机 mspaint 是 Store 应用无 exe，不收。
+    //   裸 'calc.exe' 会误报「文件不存在」（实测踩到）。本机 mspaint 是 Store 应用无 exe，不收。
     '记事本': 'C:/Windows/System32/notepad.exe',
     '计算器': 'C:/Windows/System32/calc.exe',
 };
+
+// ── 游戏窗口识别（2026-11-25 P1-1）─────────────────────────────────────────
+// 病根：`act key` 先发 SendInput，但 GLFW 游戏（MC）实测**丢弃 SendInput**，只认 PostMessage
+// （js/core/game-loop.js:648-662）。这里复用三份既有判据，不再新造检测框架：
+//   ① 内置游戏名/别名（SEMANTIC_PROFILES_BUILTIN + 本文件原有的正则别名表）
+//   ② pet-runtime/data/game-profiles/*.json 的 window 字段（game-loop.listProfiles）
+//   ③ 前台进程名（pet-core fg 已带 app）
+// 浏览器/编辑器标题里的游戏名（「Chrome - Minecraft 攻略」）不算游戏，否则按键会被错误
+// 路由到 PostMessage（对浏览器窗口通常无效）。
+const GAME_TITLE_EXCLUDE_RE = /(Google Chrome|Microsoft Edge|Mozilla Firefox|Firefox|Opera|Brave|Vivaldi|哔哩哔哩|bilibili|YouTube|Visual Studio Code|Cursor|PyCharm|IntelliJ|WebStorm|Sublime Text|Notepad\+\+|微信|WeChat|Telegram|Discord|钉钉|飞书|Slack|Microsoft Teams|Windows Terminal|PowerShell|命令提示符|Git Bash|文件资源管理器|File Explorer|任务管理器|Task Manager)/i;
+const GAME_TITLE_ALIASES = [
+    { re: /Minecraft|我的世界/i, name: '我的世界' },
+    { re: /Genshin|原神/i, name: '原神' },
+    { re: /植物大战僵尸|PlantsVsZombies|PvZ/i, name: '植物大战僵尸' },
+    { re: /League of Legends|英雄联盟/i, name: '英雄联盟' },
+    { re: /Valorant|无畏契约/i, name: '无畏契约' },
+    { re: /Counter-Strike|CS2|CSGO/i, name: '反恐精英' },
+];
+// 进程名（小写、去 .exe）里的游戏特征。只作第三路补充：窗口标题/profile 已经能覆盖大多数。
+const GAME_PROCESS_HINTS = [
+    'javaw', 'java', 'minecraft', 'genshinimpact', 'yuanshen', 'plantsvszombies', 'pvz',
+    'leagueclient', 'league of legends', 'valorant', 'cs2', 'csgo', 'terraria', 'stardewvalley',
+];
+let _gameProfilesCache = { at: 0, list: [] };
+
+/** 读 game-profiles（30s 缓存）。失败返回 []，不阻塞按键。 */
+function _gameProfiles() {
+    if (Date.now() - _gameProfilesCache.at < 30000) return _gameProfilesCache.list;
+    let list = [];
+    try {
+        const GL = require('../../../js/core/game-loop.js');
+        if (GL && typeof GL.listProfiles === 'function') list = GL.listProfiles() || [];
+    } catch (e) { list = []; }
+    _gameProfilesCache = { at: Date.now(), list };
+    return list;
+}
+
+/**
+ * 判断一个窗口是不是游戏（纯函数，测试直接打）。
+ * @param {{title?:string, app?:string, proc?:string, hwnd?:number}} win
+ * @param {Array<{game?:string, window?:string}>} [profiles]
+ * @returns {{isGame:boolean, game?:string, via?:string}}
+ */
+function detectGameWindow(win, profiles) {
+    const title = String((win && win.title) || '');
+    const app = String((win && (win.app || win.proc)) || '');
+    if (!title && !app) return { isGame: false };
+    // 浏览器/编辑器/IM 里的游戏名不算（防「搜攻略」被误判成打游戏）
+    if (title && GAME_TITLE_EXCLUDE_RE.test(title)) return { isGame: false, reason: 'non-game-app' };
+    // ① 进程名（最可靠：窗口标题看不见 javaw）
+    const proc = app.toLowerCase().replace(/\.exe$/i, '').trim();
+    if (proc && GAME_PROCESS_HINTS.some((h) => proc === h || proc.includes(h))) {
+        return { isGame: true, game: proc, via: 'process' };
+    }
+    // ② 既有 profile 文件（换游戏只改 JSON 的那份数据）
+    for (const p of (Array.isArray(profiles) ? profiles : [])) {
+        const w = String((p && p.window) || '').trim();
+        if (!w) continue;
+        if (title && titleMatchKind(title, w)) return { isGame: true, game: String(p.game || w), via: 'profile' };
+    }
+    // ③ 内置游戏名/别名
+    if (title) {
+        for (const a of GAME_TITLE_ALIASES) {
+            if (a.re.test(title)) return { isGame: true, game: a.name, via: 'title-alias' };
+        }
+        for (const name of Object.keys(SEMANTIC_PROFILES_BUILTIN)) {
+            if (name.startsWith('_')) continue;
+            // 只认具体游戏名；'FPS通用'/'通用2D' 是键位模板，不是游戏身份
+            if (name === 'FPS通用' || name === '通用2D') continue;
+            if (title.toLowerCase().includes(name.toLowerCase())) return { isGame: true, game: name, via: 'title' };
+        }
+    }
+    return { isGame: false };
+}
+
+/**
+ * 按键路由决策（纯函数）：游戏 → postmessage；其它 → sendinput。
+ * 游戏窗口缺 hwnd 时返回 error（PostMessage 没有 hwnd 无处可投），调用方必须报错而不是回退。
+ */
+function decideKeyRoute(win, profiles) {
+    const g = detectGameWindow(win, profiles);
+    if (!g.isGame) return { method: 'sendinput', isGame: false };
+    const hwnd = Number(win && win.hwnd) || 0;
+    if (!hwnd) {
+        return {
+            method: 'postmessage', isGame: true, game: g.game, hwnd: 0,
+            error: '目标「' + (g.game || '游戏') + '」是游戏，但拿不到 hwnd，无法 PostMessage（请带 window 重试）',
+        };
+    }
+    return { method: 'postmessage', isGame: true, game: g.game, hwnd, via: g.via };
+}
+
 
 const PS_SIG = `$sig = @'
 using System;
@@ -848,38 +944,136 @@ function pickBestWindow(wins, needle) {
 }
 
 
+/** 歧义候选的可读清单（最多 8 个，带 hwnd/pid/title，方便模型改传 hwnd）。 */
+function _candidateList(cands) {
+    return (Array.isArray(cands) ? cands : []).slice(0, 8)
+        .map((w) => 'hwnd=' + w.hwnd + '「' + String((w && w.title) || '').slice(0, 60) + '」(pid=' + w.pid + ')')
+        .join('，');
+}
+
+/** UWP 的 CoreWindow 壳不是可操作目标（UIA 树空、聚焦后 GetForegroundWindow=0）。 */
+function _isUwpShell(w) {
+    return /^Windows\.UI\.Core\.CoreWindow$/i.test(String((w && w.class) || ''));
+}
 /**
- * 候选窗口 → 唯一目标（2026-11-21 审计 P2：六套找窗口分叉收口）。
+ * 从候选里剔除「不可能是目标」的窗口：UWP 空壳 → 优先非最小化。
+ * 这不是「猜」：空壳没有可操作界面，最小化副本是同一窗口的影子；
+ * 剔除后仍有多个真实窗口，就在匹配层报歧义。
+ */
+function _operableCandidates(list) {
+    const noShell = list.filter((w) => !_isUwpShell(w));
+    const pool = noShell.length ? noShell : list;
+    const live = pool.filter((w) => !w.iconic);
+    return live.length ? live : pool;
+}
+
+/**
+ * 候选窗口 → 唯一目标（2026-11-25 P1-2：与绑定层共用同一个标题 matcher）。
  *
- * 打分复用 pickBestWindow（非 UWP 空壳 > 非最小化 > 面积大 > 标题精确）。
- * 多命中时取最高分，并把「多命中 N 个，选 hwnd=X（title）」写进 detail ——
- * 不允许再「取枚举第一个」（那正是同名窗口各选各的根因）。
+ * 匹配层级（自上而下，第一个有候选的层级决定结果）：
+ *   ① 完全相同
+ *   ② 前缀 + 分隔符（短的一侧 ≥4 字）
+ *   ③ 唯一子串（短针 ≥2 字）
+ * 一层里有多个候选 = **歧义**：返回 ok:false + candidates，绝不「挑一个最高分」。
+ * 只有 pid 分支（needle 为空）才继续用打分选（同一 pid 的兄弟窗口本来就要挑真窗口）。
  *
- * @returns {{ok:true,win:object,candidateCount:number,sameTitleCount:number,multiHit:boolean,detail:string}
- *          |{ok:false,error:string,candidateCount:number,multiHit:boolean}}
+ * @returns {{ok:true,win:object,matchedBy:string,candidateCount:number,sameTitleCount:number,multiHit:boolean,detail:string}
+ *          |{ok:false,code:string,error:string,candidates:object[],candidateCount:number,multiHit:boolean}}
  */
 function pickWindowForTarget(wins, needle) {
     CONTROL_STATS.resolveCalls += 1;
     const list = (Array.isArray(wins) ? wins : []).filter(Boolean);
     if (!list.length) {
         CONTROL_STATS.resolveFailed += 1;
-        return { ok: false, candidateCount: 0, multiHit: false, error: '窗口解析失败：没有候选窗口（标题/hwnd/pid 都没匹配到）' };
+        return {
+            ok: false, code: 'NOT_FOUND', candidates: [], candidateCount: 0, multiHit: false,
+            error: '窗口解析失败：没有候选窗口（标题/hwnd/pid 都没匹配到）',
+        };
     }
-    const best = pickBestWindow(list, needle);
-    if (!best) {
-        CONTROL_STATS.resolveFailed += 1;
-        return { ok: false, candidateCount: list.length, multiHit: false, error: '窗口解析失败：候选里没有可用窗口' };
+    const want = String(needle == null ? '' : needle).trim();
+    // pid 分支：同一进程的多个窗口（UWP 空壳 + 真窗）仍按打分挑，不算标题歧义
+    if (!want) {
+        const best = pickBestWindow(list, '');
+        if (!best) {
+            CONTROL_STATS.resolveFailed += 1;
+            return { ok: false, code: 'NOT_FOUND', candidates: [], candidateCount: list.length, multiHit: false, error: '窗口解析失败：候选里没有可用窗口' };
+        }
+        const multiHit = list.length > 1;
+        if (multiHit) CONTROL_STATS.resolveMultiHit += 1;
+        const detail = multiHit
+            ? ('pid 下 ' + list.length + ' 个窗口，选 hwnd=' + best.hwnd + '（' + best.title + '）')
+            : ('唯一命中 hwnd=' + best.hwnd + '（' + best.title + '）');
+        CONTROL_STATS.lastResolveDetail = detail;
+        return { ok: true, win: best, matchedBy: 'pid-pick', candidateCount: list.length, sameTitleCount: list.length, multiHit, detail };
     }
-    const want = String(needle == null ? '' : needle).toLowerCase();
-    const same = want ? list.filter((w) => String((w && w.title) || '').toLowerCase().includes(want)) : list;
-    const sameTitleCount = same.length || list.length;
-    const multiHit = sameTitleCount > 1;
-    if (multiHit) CONTROL_STATS.resolveMultiHit += 1;
-    const detail = multiHit
-        ? ('多命中 ' + sameTitleCount + ' 个，选 hwnd=' + best.hwnd + '（' + best.title + '）')
-        : ('唯一命中 hwnd=' + best.hwnd + '（' + best.title + '）');
-    CONTROL_STATS.lastResolveDetail = detail;
-    return { ok: true, win: best, candidateCount: list.length, sameTitleCount, multiHit, detail };
+    // 2026-11-25：**不能**先按 iconic 过滤再匹配 —— 那会把「唯一命中但最小化」变成
+    // 「没找到窗口」。这里在全部非空壳窗口上匹配，命中后再按 iconic 决定：
+    //   唯一命中且最小化 → MINIMIZED（明确告诉模型先还原）；
+    //   多命中 → 优先非最小化那个（同窗口的影子），全最小化 → MINIMIZED。
+    const noShell = list.filter((w) => !_isUwpShell(w));
+    const usable = noShell.length ? noShell : list;
+    const tiers = { exact: [], prefix: [], substring: [] };
+    for (const w of usable) {
+        const kind = titleMatchKind(w && w.title, want);
+        if (kind) tiers[kind].push(w);
+    }
+    const rawSame = list.filter((w) => _normWinText(w && w.title) === _normWinText(want)).length;
+    for (const name of ['exact', 'prefix', 'substring']) {
+        const hit = tiers[name];
+        if (hit.length === 1) {
+            const win = hit[0];
+            // 2026-11-25：唯一命中但窗口最小化 → 明确说「最小化」，不要伪装成「没找到」
+            if (win && win.iconic) {
+                CONTROL_STATS.resolveFailed += 1;
+                return {
+                    ok: false, code: 'MINIMIZED', candidates: [win], candidateCount: 1, multiHit: false,
+                    error: '窗口解析失败：目标窗口已最小化（' + (win.title || '') + '）—— 先 focus_window 或 window_op restore 还原窗口，再试',
+                };
+            }
+            const multiHit = rawSame > 1;
+            if (multiHit) CONTROL_STATS.resolveMultiHit += 1;
+            const sameTitleCount = rawSame || 1;
+            const detail = multiHit
+                ? ('多命中 ' + rawSame + ' 个，选 hwnd=' + win.hwnd + '（' + win.title + '）')
+                : ('唯一命中（' + name + '）hwnd=' + win.hwnd + '（' + win.title + '）');
+            CONTROL_STATS.lastResolveDetail = detail;
+            return {
+                ok: true, win, matchedBy: name, candidateCount: list.length,
+                sameTitleCount, multiHit, detail,
+            };
+        }
+        if (hit.length > 1) {
+            const liveHit = hit.filter((w) => !w.iconic);
+            if (liveHit.length === 1) {
+                const win = liveHit[0];
+                // 候选里还有最小化影子：仍算「多命中」（可观测），但选非最小化的那个。
+                CONTROL_STATS.resolveMultiHit += 1;
+                const detail = '多命中 ' + list.length + ' 个，选 hwnd=' + win.hwnd + '（' + win.title + '；其余是最小化影子）';
+                CONTROL_STATS.lastResolveDetail = detail;
+                return { ok: true, win, matchedBy: name, candidateCount: list.length, sameTitleCount: hit.length, multiHit: true, detail };
+            }
+            if (liveHit.length === 0 && hit.every((w) => w.iconic)) {
+                CONTROL_STATS.resolveFailed += 1;
+                return {
+                    ok: false, code: 'MINIMIZED', candidates: hit, candidateCount: hit.length, multiHit: true,
+                    error: '窗口解析失败：匹配到的窗口都已最小化（' + hit.length + ' 个）—— 先还原窗口再试',
+                };
+            }
+            CONTROL_STATS.resolveFailed += 1;
+            CONTROL_STATS.resolveMultiHit += 1;
+            const detail = '「' + want + '」在「' + name + '」层命中 ' + hit.length + ' 个：' + _candidateList(hit);
+            CONTROL_STATS.lastResolveDetail = detail;
+            return {
+                ok: false, code: 'AMBIGUOUS', candidates: hit, candidateCount: hit.length, multiHit: true,
+                error: '窗口解析失败：' + detail + ' —— 有歧义，不猜。请改传完整标题或 hwnd',
+            };
+        }
+    }
+    CONTROL_STATS.resolveFailed += 1;
+    return {
+        ok: false, code: 'NOT_FOUND', candidates: [], candidateCount: 0, multiHit: false,
+        error: '窗口解析失败：没找到窗口（没有标题匹配「' + want + '」的可见窗口；先 list_windows / see windows 确认）',
+    };
 }
 
 /**
@@ -928,18 +1122,21 @@ async function resolveTargetHwnd(titleOrHwnd) {
         const info = _normWin(pk.win, 'pid');
         return Object.assign({ ok: true, via: 'pid', multiHit: pk.multiHit, candidateCount: pk.candidateCount, sameTitleCount: pk.sameTitleCount, detail: pk.detail }, info);
     }
-    const wins = await coreWindows(arg, 60);
-    if (!wins || !wins.length) {
+    // 2026-11-25 P1-2：先取全量窗口，再在 JS 侧走唯一 matcher。
+    // 旧实现交给 pet-core 按子串过滤（title.includes(needle)），过滤完再打分挑最高分 ——
+    // 于是 see 能和「QQ音乐」对上、绑定层却对不上。现在过滤与判定都在 matcher 里。
+    const wins = await coreWindows('', 400);
+    if (!wins) {
         CONTROL_STATS.resolveFailed += 1;
         return {
-            ok: false, multiHit: false, candidateCount: 0,
-            error: '窗口解析失败：没找到窗口：标题含「' + arg + '」的可见窗口（先 list_windows 确认）',
+            ok: false, code: 'CORE_UNAVAILABLE', multiHit: false, candidateCount: 0, candidates: [],
+            error: '窗口解析失败：pet-core 不可用，无法枚举窗口（确认 pet-core 已构建/在跑）',
         };
     }
     const pk = pickWindowForTarget(wins, arg);
     if (!pk.ok) return pk;
     const info = _normWin(pk.win, 'title');
-    return Object.assign({ ok: true, via: 'title', multiHit: pk.multiHit, candidateCount: pk.candidateCount, sameTitleCount: pk.sameTitleCount, detail: pk.detail }, info);
+    return Object.assign({ ok: true, via: 'title', multiHit: pk.multiHit, candidateCount: pk.candidateCount, sameTitleCount: pk.sameTitleCount, detail: pk.detail, matchedBy: pk.matchedBy }, info);
 }
 
 /**
@@ -1028,6 +1225,7 @@ async function autoFocusTarget(opts) {
     const matched = !!(fg && Number(fg.hwnd) === Number(target.hwnd));
     return {
         ok: matched,
+        verified: matched,
         pid,
         hwnd: target.hwnd,
         title: target.title,
@@ -1994,26 +2192,40 @@ const PVZ_STATE = { hwnd: 0, client: null, grid: null };   // 植物大战僵尸
 const _normWinText = (s) => String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim();
 // 标题匹配的边界字符：空白 / 常见分隔符 / 左括号。只有「短标题后面紧跟这些」才算同一个窗口。
 const TITLE_BOUNDARY = /[\s\-–—_|/\\:：·.,，()（）\[\]【】]/;
+// 子串匹配的最短长度：1 个字（"Q"）几乎能命中一切窗口，等于没校验。
+const TITLE_SUBSTR_MIN = 2;
 /**
- * 窗口标题匹配（2026-11-25 P2-7 收紧）。
- * 旧实现是双向 includes：req="QQ" 能匹配 "QQ音乐"、req="计" 能匹配一切 —— 等于没校验。
- * 新规则：
- *   · 归一化后完全相等 → 匹配；
- *   · 短的一侧 < 4 个字符 → **必须精确相等**（"QQ"/"计算器" 这类短名不做前缀放宽）；
- *   · 否则只认「前缀 + 边界」：长标题以短标题开头，且紧跟分隔符/空白（"记事本 - 未命名" 可匹配 "记事本 -"），
- *     不再接受任意子串/后缀。后缀匹配（"file.txt - Notepad" vs "Notepad"）一律不认 ——
- *     调用方应传完整标题或 hwnd（see windows 回执里有）。
+ * **唯一标题 matcher**（2026-11-25 P1-2）：解析层与绑定层必须用同一套，否则
+ * `see window=QQ` 解析到「QQ音乐」而 `act click window=QQ` 绑定失败（STALE 死循环）。
+ *
+ * 层级：exact → prefix+boundary → substring（是否唯一由调用方在候选集上判）。
+ *   · 完全相同 → 'exact'
+ *   · 一侧是另一侧的前缀，且短侧 ≥4 字、长侧紧跟着分隔符（"记事本 - 未命名"）→ 'prefix'
+ *   · 任意子串，但短针 ≥2 字（"QQ" → "QQ音乐"）→ 'substring'
+ * 返回 null = 不匹配。
+ */
+function titleMatchKind(candidate, needle) {
+    const c = _normWinText(candidate);
+    const n = _normWinText(needle);
+    if (!c || !n) return null;
+    if (c === n) return 'exact';
+    const shortSide = c.length <= n.length ? c : n;
+    const longSide = c.length <= n.length ? n : c;
+    if (shortSide.length >= 4 && longSide.startsWith(shortSide) && TITLE_BOUNDARY.test(longSide.charAt(shortSide.length))) {
+        return 'prefix';
+    }
+    if (n.length >= TITLE_SUBSTR_MIN && c.includes(n)) return 'substring';
+    return null;
+}
+/**
+ * 窗口标题匹配（2026-11-25 P1-2：改为委托 titleMatchKind）。
+ * 旧实现是双向 includes：req="QQ" 能匹配 "QQ音乐"、req="计" 能匹配一切 —— 等于没校验；
+ * 但收紧成「短标题必须精确」后，`see` 的解析层（子串）和 `act` 的绑定层（精确）不一致，
+ * 于是 see 成功、click 永远 STALE。现在两层共用 titleMatchKind：
+ * 短标题仍不做前缀放宽（<4 字只认精确/唯一子串），但解析与绑定给出同一个答案。
  */
 function _winTitleMatches(a, b) {
-    const x = _normWinText(a);
-    const y = _normWinText(b);
-    if (!x || !y) return false;
-    if (x === y) return true;
-    const shortSide = x.length <= y.length ? x : y;
-    const longSide = x.length <= y.length ? y : x;
-    if (shortSide.length < 4) return false;      // 短标题必须精确相等
-    if (!longSide.startsWith(shortSide)) return false;
-    return TITLE_BOUNDARY.test(longSide.charAt(shortSide.length));
+    return titleMatchKind(a, b) !== null;
 }
 
 /**
@@ -2922,7 +3134,7 @@ async function uiaTreeSignature(title) {
 // ── 局部区域灰度（2026-11-10 三十七轮）：actAndVerify 的游戏内验证通道 ──────
 // pet-core 的 region_gray：GDI BitBlt 局部 + 12×10 灰度 + mean/std。
 // 实测：10.9ms（比 wgc_shot 快 44 倍）、出界自动 clamp、3 次连测零抖动。
-async function regionGray(x, y, w, h) {
+async function regionGray(x, y, w, h, displayRect) {
     const bin = _coreBin();
     if (!bin) return null;
     return await new Promise((resolve) => {
@@ -2934,12 +3146,131 @@ async function regionGray(x, y, w, h) {
         child.stdout.on('data', (c) => { out += c; });
         child.on('error', () => fin(null));
         child.on('close', () => { try { const d = JSON.parse(out); fin(d && d.ok ? d : null); } catch (e) { fin(null); } });
-        child.stdin.write(JSON.stringify({ cmd: 'region_gray', x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) }));
+        const req = { cmd: 'region_gray', x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+        // P0-3（2026-11-25）：把**目标显示器**的 origin/size 一起传下去。
+        // 为什么不靠 Rust 自己算主屏：region_gray 原来用 SM_CXSCREEN/SM_CYSCREEN 并把坐标
+        // `max(0)` 钳到主屏 —— 副屏（负坐标）/移出屏幕的窗口全部采到主屏左上，
+        // 验证采的根本不是目标窗口。Rust 侧已改为「有这块屏就钳到这块屏，否则钳虚拟屏」。
+        if (displayRect && Number.isFinite(Number(displayRect.x)) && Number.isFinite(Number(displayRect.w))) {
+            req.dx = Math.round(Number(displayRect.x));
+            req.dy = Math.round(Number(displayRect.y));
+            req.dw = Math.round(Number(displayRect.w));
+            req.dh = Math.round(Number(displayRect.h));
+        }
+        child.stdin.write(JSON.stringify(req));
         child.stdin.end();
         timer = setTimeout(() => { try { child.kill(); } catch (e) { /* 已退出 */ } fin(null); }, 4000);
         if (timer.unref) timer.unref();
     });
 }
+
+/**
+ * 按**目标元素矩形**采局部灰度（P0-3：像素通道只采元素，不再采整个窗口）。
+ * 规则：
+ *   · 矩形归一化；宽高不足 16（region_gray 的下限）时向外扩到 16 —— 小图标也能采；
+ *   · 显示器矩形来自所有显示器并集（pointOnAnyScreen），传给 Rust 做精确钳位；
+ *   · 完全不在任何显示器上（屏外）→ 返回 null（调用方按「不能采样」处理，不猜）。
+ */
+async function regionGrayForRect(rect) {
+    const r = geometry.normalizeRect({
+        x: Number(rect && rect.x), y: Number(rect && rect.y),
+        w: Number(rect && (rect.w !== undefined ? rect.w : rect.width)),
+        h: Number(rect && (rect.h !== undefined ? rect.h : rect.height)),
+    });
+    if (!Number.isFinite(r.x) || !Number.isFinite(r.y) || !Number.isFinite(r.w) || !Number.isFinite(r.h)) return null;
+    if (r.w <= 0 || r.h <= 0) return null;
+    const w = Math.max(16, Math.min(4096, Math.round(r.w)));
+    const h = Math.max(16, Math.min(4096, Math.round(r.h)));
+    // 小控件扩到 16 时向四周均摊（不是只往右下扩），采样中心仍在元素上
+    const x0 = Math.round(r.x - (w - r.w) / 2);
+    const y0 = Math.round(r.y - (h - r.h) / 2);
+    const cx = r.x + r.w / 2;
+    const cy = r.y + r.h / 2;
+    const { rects } = screenRects();
+    const display = pointOnAnyScreen(cx, cy, rects) || null;
+    if (!display) return null;   // 元素中心不在任何屏幕上：采样一定是旧帧，不猜
+    return await regionGray(x0, y0, w, h, display);
+}
+
+/**
+ * 回读单个 UIA 元素的可观察状态（P0-3 的首选验证通道）。
+ * @param {number|string} hwnd 目标窗口（唯一无歧义的身份）
+ * @param {string} rid RuntimeId（click_element 有；som_click 没有）
+ * @param {string} title 标题（没有 hwnd 时的兜底解析）
+ * @param {string} name 元素名（没有 rid 时按名找，som_click 用）
+ * @param {string} ctype 控件类型（配合 name 降低误配）
+ * @returns {Promise<object>} {ok, found, name, ctype, enabled, offscreen, focused,
+ *                             toggleState, value, selected, expandState, iconic, x,y,w,h, pid}
+ */
+async function uiaElementState(hwnd, rid, title, name, ctype) {
+    if (!(await ensureUiaService())) return { ok: false, found: false, error: 'uia-service 不可用（无 UIA 回读通道）' };
+    const body = {
+        hwnd: Number(hwnd) || 0,
+        rid: String(rid || ''),
+        name: String(name || ''),
+        ctype: String(ctype || ''),
+    };
+    if (!body.hwnd) body.title = String(title || '');
+    if (!body.rid && !body.name) return { ok: false, found: false, error: '没有元素身份（rid/name 都缺）' };
+    const r = await _uiaPost('/element_state', body, 3000);
+    if (!r || typeof r !== 'object') return { ok: false, found: false, error: 'element_state 没有响应' };
+    return r;
+}
+
+/**
+ * 目标窗口/元素的可验证性信号（P0-3）：最小化 / 屏外 / 遮挡。
+ * 判定口径与 control-verify.classifyVisibility 一致：只要有一条成立，**像素通道就不作数**。
+ * 失败一律返回 null 字段（= 不知道），绝不默认「可见」。
+ *
+ * @param {number} hwnd 目标 hwnd（0 = 只能用标题兜底）
+ * @param {string} title 目标标题
+ * @param {object} point 元素中心 {x,y}（给 WindowFromPoint 遮挡探针）
+ * @param {object} state 已经回读到元素状态时直接复用 iconic/offscreen
+ */
+async function clickTargetVisibility(hwnd, title, point, state) {
+    const out = { minimized: false, offscreen: false, occluded: false, detail: '' };
+    const st = state || null;
+    if (st && (st.iconic === true || st.minimized === true)) out.minimized = true;
+    if (st && st.offscreen === true) out.offscreen = true;
+
+    // 窗口矩形 / 最小化态（uia-service /rect 实测 <10ms；失败不阻止动作，只让像素通道失效）
+    let wr = null;
+    try { wr = await windowRealRect(title || ''); } catch (e) { wr = null; }
+    if (wr) {
+        if (wr.iconic === true) out.minimized = true;
+        const { rects } = screenRects();
+        if (wr.w > 0 && wr.h > 0 && !CV.windowOnScreens(wr, rects)) {
+            out.offscreen = true;
+            out.detail = '窗口 ' + wr.w + '×' + wr.h + '@' + wr.x + ',' + wr.y + ' 不在任何显示器上';
+        }
+    }
+
+    // 落点遮挡：WindowFromPoint 的根窗口不是目标窗口 → 像素采到的是遮挡者
+    const px = Number(point && point.x);
+    const py = Number(point && point.y);
+    if (Number.isFinite(px) && Number.isFinite(py)) {
+        try {
+            const bin = _coreBin();
+            if (bin) {
+                const rr = await getCoreClient(bin).call({ cmd: 'window_from_point', x: Math.round(px), y: Math.round(py) }, 3000);
+                if (rr && rr.ok) {
+                    const rootHwnd = Number(rr.rootHwnd) || 0;
+                    if (Number(hwnd) > 0 && rootHwnd > 0 && rootHwnd !== Number(hwnd)) {
+                        out.occluded = true;
+                        out.detail = '落点属于「' + String(rr.rootTitle || ('hwnd ' + rootHwnd)) + '」，不是目标窗口';
+                    } else if (!Number(hwnd) && rr.rootTitle && title
+                        && !String(rr.rootTitle).toLowerCase().includes(String(title).toLowerCase())) {
+                        out.occluded = true;
+                        out.detail = '落点属于「' + String(rr.rootTitle) + '」，不是「' + title + '」';
+                    }
+                }
+            }
+        } catch (e) { /* 探针失败 = 不知道，不据此判遮挡 */ }
+    }
+    return out;
+}
+
+
 
 /** 两次局部灰度特征的差：最大格差 + mean/std 差。不可比返回 null。 */
 function regionDelta(a, b) {
@@ -3163,12 +3494,26 @@ async function actAndVerifySmart(actionFn, opts) {
                     break;
                 }
             }
+            // ── P0-3（2026-11-25）：region 变化只能当**辅助信号**，不能单独判成功 ──
+            // 旧实现是「region 一变化就先判成功，连 UIA 树都不看」：窗口被遮挡时，
+            // 采样到的根本不是目标窗口的像素（视频/遮挡者的动画），一次没生效的点击
+            // 会被报成 confirmed。现在采样后必须再确认「这块像素确实属于前台目标窗口」；
+            // 确认不了就把 region 证据作废，继续走 UIA 树 / 诚实失败。
+            // 说明：本函数的调用方只剩已强制前台的坐标动作（click_at / mouse / scroll / drag /
+            // pvz / click_text）；后台 UIA 动作（click_element / som_click）已改走
+            // control-verify.js 的元素矩形通道，不再经过这里。
+            let regionVeto = null;
             if (regionOk) {
-                return {
-                    ok: true, actionResult, verified: true, changed: true,
-                    dist: lastDelta.maxCell, elapsed: Date.now() - t0, tier: 'L1',
-                    via: 'region-dynamic', regionDetail: lastDelta,
-                };
+                const fgChk = o.uiaTitle ? await assertTargetFocused(o.uiaTitle, { strict: false }) : null;
+                if (!fgChk || fgChk.ok === true) {
+                    return {
+                        ok: true, actionResult, verified: true, changed: true,
+                        dist: lastDelta.maxCell, elapsed: Date.now() - t0, tier: 'L1',
+                        via: 'region-dynamic', regionDetail: lastDelta,
+                        ...(fgChk ? { regionFgConfirmed: true } : {}),
+                    };
+                }
+                regionVeto = fgChk;
             }
             // 局部没验出：如果连 UIA 都没有，别假装 —— 诚实返回（但带上 region 证据）
             if (!beforeSig) {
@@ -3177,8 +3522,13 @@ async function actAndVerifySmart(actionFn, opts) {
                     actionResult, verified: false, jitter: base.jitter,
                     dist: lastDelta ? lastDelta.maxCell : null, elapsed: Date.now() - t0,
                     via: 'region-dynamic',
-                    note: '画面在动（抖动 ' + base.jitter + '）；局部区域（±' + Math.round(o.region.w / 2) + 'px）前后也没变化，UIA 树又拿不到 —— 两条通道都验不出',
-                    hint: '局部区域没变 = 点击大概率没生效（被遮挡/点空/冷却）。用 som_snapshot 看现场，或确认目标窗口在最上层',
+                    note: regionVeto
+                        // region 变了但前台不是目标 → 那块像素不是目标的像素，证据作废
+                        ? ('局部区域有变化，但采样时前台不是「' + o.uiaTitle + '」（' + (regionVeto.error || '') + '）——变化可能是遮挡者的动画，不能算成功')
+                        : ('画面在动（抖动 ' + base.jitter + '）；局部区域（±' + Math.round(o.region.w / 2) + 'px）前后也没变化，UIA 树又拿不到 —— 两条通道都验不出'),
+                    hint: regionVeto
+                        ? '先把目标窗口调到前台（focus_window）再看画面；遮挡时屏幕像素不能当证据'
+                        : '局部区域没变 = 点击大概率没生效（被遮挡/点空/冷却）。用 som_snapshot 看现场，或确认目标窗口在最上层',
                 };
             }
         }
@@ -3406,7 +3756,7 @@ async function focusWindow(titleOrPid, opts) {
     const force = !!(opts && opts.force);
     try {
         const arg = String(titleOrPid || '');
-        if (!arg) return { ok: false, error: 'no target' };
+        if (!arg) return { ok: false, verified: false, error: 'no target' };
         // 唯一解析入口（2026-11-21 P2）：标题/pid/hwnd → hwnd，多命中按 pickWindowForTarget 打分。
         // 同名双窗口（UWP 的 Windows.UI.Core.CoreWindow 壳 + ApplicationFrameWindow 真窗）
         // 时，后端按标题都会挑第一个非最小化窗口 —— 实测挑中空壳，聚焦后前台=0、UIA 树空。
@@ -3414,9 +3764,10 @@ async function focusWindow(titleOrPid, opts) {
         const rz = await resolveTargetHwnd(arg);
         if (!rz || rz.ok === false) {
             return {
-                ok: false, unresolved: true, via: 'resolve',
+                ok: false, verified: false, unresolved: true, via: 'resolve',
                 error: (rz && rz.error) || ('没找到窗口：' + arg),
                 resolveDetail: (rz && rz.detail) || '',
+                candidates: (rz && rz.candidates) || [],
             };
         }
         const targetArg = String(rz.hwnd);
@@ -3443,11 +3794,11 @@ async function focusWindow(titleOrPid, opts) {
                     try { child.stdin.end(JSON.stringify({ cmd: 'focus', target: targetArg, force }), 'utf8'); } catch (e) { resolve(null); }
                 } catch (e) { resolve(null); }
             });
-            if (rr && rr.error) return Object.assign({ ok: false, error: rr.error, via: 'rust' }, resolved);
-            if (rr && rr.ok) return Object.assign({ ok: true, via: 'rust', fg: { title: rr.title, hwnd: rr.hwnd }, wasIconic: rr.wasIconic === true, forced: rr.forced === true }, resolved);
+            if (rr && rr.error) return Object.assign({ ok: false, verified: false, error: rr.error, via: 'rust' }, resolved);
+            if (rr && rr.ok) return Object.assign({ ok: true, verified: true, via: 'rust', fg: { title: rr.title, hwnd: rr.hwnd }, wasIconic: rr.wasIconic === true, forced: rr.forced === true }, resolved);
             if (rr && rr.ok === false) {
                 return Object.assign({
-                    ok: false, via: 'rust',
+                    ok: false, verified: false, via: 'rust',
                     error: '聚焦「' + arg + '」没成功，当前前台是「' + (rr.fgTitle || '未知') + '」（可能被 alwaysOnTop 窗口盖住）',
                     fg: { title: rr.fgTitle, hwnd: rr.fgHwnd },
                 }, resolved);
@@ -3457,12 +3808,12 @@ async function focusWindow(titleOrPid, opts) {
         // ① 常驻服务（毫秒级 + 带复核）：hwnd 是唯一身份，title 只作展示/兜底。
         if (await ensureUiaService()) {
             const r = await _uiaPost('/focus', { title: rz.title, hwnd: rz.hwnd }, 4000);
-            if (r && r.ok) return Object.assign({ ok: true, via: 'uia-service', fg: { title: r.title, hwnd: r.hwnd } }, resolved);
-            if (r && r.error) return Object.assign({ ok: false, error: r.error, via: 'uia-service' }, resolved);
+            if (r && r.ok) return Object.assign({ ok: true, verified: true, via: 'uia-service', fg: { title: r.title, hwnd: r.hwnd } }, resolved);
+            if (r && r.error) return Object.assign({ ok: false, verified: false, error: r.error, via: 'uia-service' }, resolved);
             if (r && r.ok === false) {
                 // 服务连上了但没聚焦成功：把复核到的真实前台报出去，比「focus failed」有用
                 return Object.assign({
-                    ok: false, via: 'uia-service',
+                    ok: false, verified: false, via: 'uia-service',
                     error: '聚焦「' + arg + '」没成功，当前前台是「' + (r.fgTitle || '未知') + '」（可能被 alwaysOnTop 窗口盖住）',
                     fg: { title: r.fgTitle, hwnd: r.fgHwnd },
                 }, resolved);
@@ -3470,15 +3821,39 @@ async function focusWindow(titleOrPid, opts) {
         }
 
         // ② 兜底：spawn pwsh（只按 hwnd 激活，不再按标题枚举第二次）
+        // P0-3（2026-11-25）：**回读** GetForegroundWindow 再判 ok —— 原来只看
+        //   SetForegroundWindow 的返回值（Windows 前台锁下返回 true 但前台没变是已知行为），
+        //   于是 focus_window 拿到 ok:true 就报「已调到前台」（假成功）。
         const ps = `$sig2 = @'
-using System;using System.Runtime.InteropServices;
-public class FWX { [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c); }
-'@; Add-Type -TypeDefinition $sig2; $h = [IntPtr]${targetArg}; [void][FWX]::ShowWindow($h, 9); if ([FWX]::SetForegroundWindow($h)) { 'focused' } else { 'notfound' }`;
+using System;using System.Text;using System.Runtime.InteropServices;
+public class FWX {
+ [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
+ [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
+}
+'@; Add-Type -TypeDefinition $sig2; $h = [IntPtr]${targetArg}; [void][FWX]::ShowWindow($h, 9); $null = [FWX]::SetForegroundWindow($h); Start-Sleep -Milliseconds 120; $fg = [FWX]::GetForegroundWindow(); $sb = New-Object System.Text.StringBuilder 512; [void][FWX]::GetWindowTextW($fg, $sb, 512); ([string]$fg.ToInt64()) + '|' + $sb.ToString()`;
         const r = await runPs(ps, 5000);
         const out = String(r.out || '').trim();
-        if (out === 'focused') return Object.assign({ ok: true, via: 'pwsh-fallback', unverified: true }, resolved);
-        return Object.assign({ ok: false, error: out || 'focus failed', via: 'pwsh-fallback' }, resolved);
-    } catch (e) { return { ok: false, error: e.message }; }
+        const mf = out.match(/^(-?\d+)\|([\s\S]*)$/);
+        const fgHwnd = mf ? Number(mf[1]) : 0;
+        const fgTitle = mf ? mf[2] : '';
+        const wantHwnd = Number(targetArg) || 0;
+        if (wantHwnd > 0 && fgHwnd === wantHwnd) {
+            return Object.assign({
+                ok: true, verified: true, via: 'pwsh-fallback', readback: true,
+                fg: { title: fgTitle, hwnd: fgHwnd },
+            }, resolved);
+        }
+        return Object.assign({
+            ok: false, verified: false, via: 'pwsh-fallback',
+            error: wantHwnd > 0
+                ? '聚焦「' + arg + '」没成功，回读前台是「' + (fgTitle || '未知') + '」'
+                : ('无法回读前台（输出=' + out.slice(0, 40) + '）'),
+            fg: { title: fgTitle, hwnd: fgHwnd },
+            readback: true,
+        }, resolved);
+    } catch (e) { return { ok: false, verified: false, error: e.message }; }
 }
 
 /** 「没找到窗口」类错误——只有这一类值得重试（窗口可能还在创建）。 */
@@ -3922,7 +4297,19 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                     };
                 }
             } else if (snapTarget) {
-                try { snapWin = await resolveWindowInfo(snapTarget); } catch (e) { snapWin = null; }
+                // 2026-11-25 P1-2：see 与 act 必须用同一个 matcher。
+                // 解析歧义（多个候选）时直接拒绝 —— 旧实现会带着标题继续让 UIA 服务自己挑一个，
+                // 结果 see 拍的是 A、act click 绑定的是 B（STALE 死循环）。
+                let rz0 = null;
+                try { rz0 = await resolveTargetHwnd(snapTarget); } catch (e) { rz0 = null; }
+                if (rz0 && rz0.ok === false && (rz0.code === 'AMBIGUOUS' || rz0.code === 'NOT_FOUND')) {
+                    return VC.notSent('没拍：' + rz0.error, {
+                        error: 'window-unresolved', reason: rz0.code,
+                        candidates: rz0.candidates || [],
+                        nextIfFailed: '改传完整标题或 hwnd（see windows 回执里有）；有歧义时不要猜',
+                    });
+                }
+                if (rz0 && rz0.ok) snapWin = Object.assign({}, rz0, { by: rz0.via });
             }
             if (snapPicked && snapPicked.fromForeground) {
                 // 可观测：这次扫描的目标是「解析出来的前台」，不是「枚举第一个窗口」
@@ -4100,11 +4487,13 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                 }
                 if (!UIA_SNAPSHOT_STATE.hwnd && snapTarget) {
                     const wl = JSON.parse(require('child_process').execFileSync(_coreBin(), [], {
-                        input: JSON.stringify({ cmd: 'windows', filter: snapTarget, max: 20 }), timeout: 8000,
+                        input: JSON.stringify({ cmd: 'windows', filter: snapTarget, max: 40 }), timeout: 8000,
                         maxBuffer: 8 * 1024 * 1024, windowsHide: true,
                     }).toString());
-                    const hit2 = (wl.windows || []).find((w) => !w.iconic && String(w.title || '').includes(snapTarget));
-                    if (hit2) { UIA_SNAPSHOT_STATE.hwnd = hit2.hwnd; UIA_SNAPSHOT_STATE.pid = hit2.pid || 0; }
+                    // 2026-11-25 P1-2：兜底也走唯一 matcher；多命中/找不到就不写 hwnd，
+                    // 宁可身份未知让绑定层 fail-closed，也不要按 includes 猜一个。
+                    const pk2 = pickWindowForTarget((wl.windows || []).filter((w) => !w.iconic), snapTarget);
+                    if (pk2.ok) { UIA_SNAPSHOT_STATE.hwnd = pk2.win.hwnd; UIA_SNAPSHOT_STATE.pid = pk2.win.pid || 0; }
                 }
             } catch (e) { try { __silentAudit.audit('game-control:snapshot-identity', e); } catch (e2) { /* ignore */ } }
             // 快照目标窗口（2026-11-24 根因修）：这次快照**实际**拍的是哪个窗口。
@@ -4393,20 +4782,33 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                     });
                 }
             }
-            const verified = await actAndVerify(async () => clickAt(tx, ty, 8000, '', '', Object.assign({}, somGuard, { x: tx, y: ty })), {
-                expectChange: true, timeoutMs: 1500,
-                guard: Object.assign({}, somGuard, { x: tx, y: ty }),
-                // 局部验证（同 click_element）：小窗口/小变化区域靠整屏哈希看不出来
-                // 用整个目标窗口（同 click_element）：变化区常在远离点击点的位置
-                region: (SOM_STATE.rect && Number.isFinite(SOM_STATE.rect.x))
-                    ? { x: SOM_STATE.rect.x, y: SOM_STATE.rect.y, w: SOM_STATE.rect.w, h: SOM_STATE.rect.h }
-                    : { x: tx - 160, y: ty - 160, w: 320, h: 320 },
+            // ── P0-3（2026-11-25）：SoM 点击的验证 ────────────────────────────
+            // SoM 的 marks 只有 name/type（没有 RuntimeId），所以 UIA 通道按 Name+ControlType
+            // 回读目标元素状态；没有可回读元素时退到**编号附近**的局部像素；
+            // 遮挡/屏外/最小化不猜（ok:false + verified:false + reason）。
+            // 旧实现是「整窗 region 一变就 success」——视频/遮挡者的运动会把它变成假成功。
+            const somName = String(m.name || '');
+            const somType = String(m.type || '');
+            const somPoint = { x: tx, y: ty };
+            const somRect = { x: tx - 110, y: ty - 110, w: 220, h: 220 };
+            const beforeSomState = await uiaElementState(SOM_STATE.hwnd, null, SOM_STATE.title, somName, somType);
+            const cv = await CV.verifyClick({
+                action: () => clickAt(tx, ty, 8000, '', '', Object.assign({}, somGuard, { x: tx, y: ty })),
+                before: beforeSomState,
+                rect: somRect,
+                readState: () => uiaElementState(SOM_STATE.hwnd, null, SOM_STATE.title, somName, somType),
+                sampleRect: (r) => regionGrayForRect(r),
+                visibility: () => clickTargetVisibility(SOM_STATE.hwnd, SOM_STATE.title, somPoint, beforeSomState),
+                waits: [350, 450],
             });
-            const vr = VC.fromActAndVerify(verified, {
-                detail: `已点击 #${idx}「${String(m.name).slice(0, 20)}」(@${tx},${ty})` +
-                    (homed ? `（窗口移动 ${homed.dx},${homed.dy}，已自动补偿）` : ''),
+            const vr = CV.buildClickVerdict(cv, {
+                name: '#' + idx + '「' + String(m.name).slice(0, 20) + '」',
+                howLabel: 'SoM 坐标点击 @' + tx + ',' + ty,
             });
-            if (homed) vr.homed = homed;
+            if (homed) {
+                vr.homed = homed;
+                vr.detail = String(vr.detail || '') + `（窗口移动 ${homed.dx},${homed.dy}，已自动补偿）`;
+            }
             if (vr.effect === 'suspected_noop') {
                 vr.nextIfFailed = '点了画面没变：元素可能已失效（窗口变过），重新 som_snapshot 拿新编号再点';
             }
@@ -4527,7 +4929,43 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
             // （旧实现回落到 `a` —— 那是编号 '5'，拿它当窗口标题是错的方向）
             const targetTitle = String(UIA_SNAPSHOT_STATE.targetTitle || UIA_SNAPSHOT_STATE.title || snapBind.window.title || focus || '');
             const targetHwnd = Number(snapBind.window.hwnd || UIA_SNAPSHOT_STATE.hwnd) || 0;
-            const verified = await actAndVerifySmart(async () => {
+            // ── P0-3（2026-11-25）：验证改「UIA 回读为准，元素矩形像素为辅」──────
+            // 旧实现用 actAndVerifySmart + 整窗 region：region 一变化就先判成功，
+            //   连 UIA 树都不看 —— 窗口被遮挡时把遮挡者的运动当证据（假成功），
+            //   窗口在屏外时把静止桌面当「没反应」（假 noop）。
+            // 新顺序（见 control-verify.js 的 verifyClick）：
+            //   ① 回读目标元素状态（ToggleState/Value/IsEnabled/焦点/选中/名称/是否还在），
+            //      任一变化 → verified:true, method:'uia'；
+            //   ② 元素没有状态（普通按钮）→ 只采**目标元素矩形**的局部像素差 → method:'pixels'；
+            //   ③ 遮挡 / 屏外 / 最小化 → 不猜，ok:false + verified:false + reason。
+            const rectFromState = (s) => {
+                if (!s || s.ok === false || s.found === false) return null;
+                const x = Number(s.x); const y = Number(s.y);
+                const w = Number(s.w); const h = Number(s.h);
+                if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) return null;
+                return { x, y, w, h };
+            };
+            const rectFromItem = (() => {
+                const w = Number(item.w); const h = Number(item.h);
+                if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+                    return { x: Number(item.x), y: Number(item.y), w, h };
+                }
+                const cx0 = Number(item.x); const cy0 = Number(item.y);
+                if (!Number.isFinite(cx0) || !Number.isFinite(cy0)) return null;
+                return { x: cx0 - 110, y: cy0 - 110, w: 220, h: 220 };
+            })();
+            const beforeState = await uiaElementState(targetHwnd, item.rid, targetTitle);
+            const verifyRect = rectFromState(beforeState) || rectFromItem;
+            const verifyPoint = verifyRect
+                ? { x: verifyRect.x + verifyRect.w / 2, y: verifyRect.y + verifyRect.h / 2 }
+                : ((Number.isFinite(Number(item.x)) && Number.isFinite(Number(item.y)))
+                    ? { x: Number(item.x), y: Number(item.y) } : null);
+            const doClick = async () => {
+                // 守卫必须抢在任何后端调用之前（与旧 actAndVerifySmart 的语义一致）
+                if (clickGuard && clickGuard.name) {
+                    const g = await guardClickTarget(clickGuard);
+                    if (g) throwClickGuard(g);
+                }
                 let el = null;
                 try { el = await uiaElementAction(targetTitle, item.rid, 12000, targetHwnd, clickGuard); }
                 catch (e) {
@@ -4588,23 +5026,18 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                     ok: rr && rr.ok !== false, how: 'coord', plan, noPattern: plan.length === 1, hasRect: true,
                     x: cx, y: cy, name: el.name || item.name, pid: el.pid || UIA_SNAPSHOT_STATE.pid,
                 });
-            }, {
-                expectChange: true, timeoutMs: 1500, uiaTitle: targetTitle,
-                guard: clickGuard,
-                // 局部验证（2026-11-10 三十九轮实测两连修）：
-                //   ① 只有全屏 dHash 时，计算器点「清除条目」把 555→0 报 noop（整屏看不出来）
-                //   ② 改成「元素周围 320px」还是 noop —— 因为**变化的地方不在按钮旁边**：
-                //      计算器的显示区在窗口顶部，数字键在下方，点完变化区离按钮几百像素。
-                //   最终用**整个目标窗口矩形**作为验证区域：UI 动作的反馈几乎总在同一窗口内，
-                //   region_gray 是 12×10 灰度采样 + GDI 局部 BitBlt（10ms 级），窗口大小不影响成本。
-                region: (UIA_SNAPSHOT_STATE.rect && Number.isFinite(UIA_SNAPSHOT_STATE.rect.x))
-                    ? { x: UIA_SNAPSHOT_STATE.rect.x, y: UIA_SNAPSHOT_STATE.rect.y,
-                        w: UIA_SNAPSHOT_STATE.rect.w, h: UIA_SNAPSHOT_STATE.rect.h }
-                    : ((Number.isFinite(item.x) && Number.isFinite(item.y))
-                        ? { x: item.x - 160, y: item.y - 160, w: 320, h: 320 } : undefined),
+            };
+            const cv = await CV.verifyClick({
+                action: doClick,
+                before: beforeState,
+                rect: verifyRect,
+                readState: () => uiaElementState(targetHwnd, item.rid, targetTitle),
+                sampleRect: (r) => regionGrayForRect(r),
+                visibility: () => clickTargetVisibility(targetHwnd, targetTitle, verifyPoint, beforeState),
+                waits: [350, 450],
             });
 
-            const ar = (verified && verified.actionResult) || {};
+            const ar = (cv && cv.actionResult) || {};
 
             // P1-7：可见性闸拒绝（没发盲点）
             if (ar.code === 'element_unavailable') {
@@ -4649,8 +5082,10 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                 : ar.how === 'toggle' ? 'Toggle 直调'
                     : ar.how === 'select' ? 'SelectionItem.Select 直调'
                         : 'Invoke 直调，没动你的鼠标';
-            const vr = VC.fromActAndVerify(verified, {
-                detail: `已点元素「${String(ar.name || item.name || '').slice(0, 24)}」（${howText}）`,
+            // P0-3：契约按「验证通道」落 —— uia / pixels / none，且 verified:false 绝不当成功
+            const vr = CV.buildClickVerdict(cv, {
+                name: String(ar.name || item.name || '元素'),
+                howLabel: howText,
             });
             if (vr.effect === 'suspected_noop') {
                 vr.nextIfFailed = 'UIA 调用成功了但界面没反应：控件可能不是真按钮，或操作被弹窗挡住了。先 snapshot 看现场';
@@ -4842,31 +5277,13 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                 // 中文应用名 → exe：标题匹配不上时按进程名找（记事本/PCL 实测必需）
                 apps: Object.assign({}, BUILTIN_APPS, (extraCfg && extraCfg.apps) || {}),
             });
-            if (fw.ok) {
-                return VC.confirmed(`已把「${focusTarget}」调到前台` + (fw.forced ? '（强制切换）' : ''), {
-                    evidence: '复核 GetForegroundWindow = 「' + ((fw.fg && fw.fg.title) || focusTarget) + '」' +
-                        (fw.hwnd ? '（hwnd=' + fw.hwnd + '）' : ''),
-                    tier: 'L2', via: fw.via || 'rust', forced: fw.forced === true,
-                    hwnd: fw.hwnd || 0, multiHit: fw.multiHit === true, resolution: fw.resolveDetail || '',
-                });
-            }
-            // 解析不到 → 明确失败，不再用标题去 UIA/pwsh 各找一次（那样同名窗口会各选各的）
-            if (fw.unresolved) {
-                return VC.notSent('没找到这个窗口：' + focusTarget, {
-                    error: fw.error,
-                    resolution: fw.resolveDetail || '',
-                    nextIfFailed: '标题写一部分，或用 list_windows 看到的 hwnd/pid 数字',
-                });
-            }
-            // 已解析到 hwnd 但激活/复核失败：如实报真实前台与 hwnd，不掩盖
-            return VC.failed(`激活了「${fw.title || focusTarget}」但复核发现前台还是「${(fw.fg && fw.fg.title) || '读不到'}」`, {
-                tier: 'L2', via: fw.via || 'rust', hwnd: fw.hwnd || 0, multiHit: fw.multiHit === true,
-                resolution: fw.resolveDetail || '',
-                evidence: '已解析 hwnd=' + (fw.hwnd || 0) + ' 并尝试激活（含 AttachThreadInput），但 GetForegroundWindow 不匹配',
-                nextIfFailed: '常见原因：① 被 alwaysOnTop 窗口盖住 ② 前台是全屏游戏（实测 VALORANT 连 SwitchToThisWindow 都切不动，而且最小化也不改变前台状态）。' +
-                    '对全屏游戏：先最小化它（或让它自己退出全屏），或者干脆用 snapshot + click_element 直接操作（UIA Invoke 不需要前台）',
-                error: fw.error || '',
-            });
+            // ── P0-3（2026-11-25）：ok 不算数，**回读前台**才算 ────────────────
+            // 旧实现只看 fw.ok 就 VC.confirmed —— pwsh 兜底返回的 ok 只是
+            // 「SetForegroundWindow 请求被接受」，Windows 前台锁下这经常不等于前台变了。
+            // 现在统一回读 GetForegroundWindow，confirmed 只在 verified===true 时置位
+            // （见 control-verify.buildFocusVerdict）；不然 ok:false + verified:false + actual。
+            const fgNow = await getForegroundInfo();
+            return CV.buildFocusVerdict(fw, fgNow, focusTarget);
         }
         case 'press_key': {
             notifyKeyTag('按键 ' + String(a || '').slice(0, 20));
@@ -4888,7 +5305,42 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                     nextIfFailed: '先 focus_window "' + focus + '" 再重试；或者不带 focus 直接按给当前前台',
                 });
             }
-            // 执行链：① SendInput 常驻 ② PostMessage ③ SendKeys
+            // ── 2026-11-25 P1-1：游戏判据（复用 profile/进程/内置游戏名，三路任一命中）──
+            // GLFW 游戏（MC）实测丢弃 SendInput，只认 PostMessage（js/core/game-loop.js:648-662）。
+            // 通用入口原来把 SendInput 当第一档，于是 act key 对 MC 永远「已按但角色不动」。
+            // 现在：游戏 → 直接 postKeysTo（同款 WM_KEYDOWN/WM_KEYUP + 字符键映射）；
+            //       非游戏 → 保持原 SendInput 链。PostMessage 失败**不回退**，直接报错。
+            const fgRoute = focusChk.fg || (await getForegroundInfo());
+            const route = decideKeyRoute({
+                title: String((fgRoute && fgRoute.title) || ''),
+                app: String((fgRoute && fgRoute.proc) || ''),
+                hwnd: Number(fgRoute && fgRoute.hwnd) || 0,
+            }, _gameProfiles());
+            if (route.method === 'postmessage') {
+                if (route.error) {
+                    return VC.notSent(route.error, { method: 'postmessage', game: route.game, action_sent: false });
+                }
+                // 投递目标是**实际判成游戏的前台 hwnd**（不是调用方传的标题/兄弟窗口）：
+                // assertTargetFocused 允许同 pid 的模态/兄弟窗口，只有回读到的 hwnd 才是游戏画面。
+                const postTarget = String(route.hwnd);
+                let post = null;
+                try { post = await postKeysTo(postTarget, a); }
+                catch (e) { post = { ok: false, reason: 'post-threw', error: String((e && e.message) || e) }; }
+                if (!post || post.ok !== true) {
+                    return VC.notSent('游戏按键 PostMessage 投递失败：' + String((post && (post.error || post.reason)) || '未知'), {
+                        method: 'postmessage', game: route.game, hwnd: route.hwnd,
+                        reason: (post && post.reason) || 'post-failed',
+                        nextIfFailed: '确认窗口还活着、按键名受支持（a-z/0-9/F1-F12/方向键/space/enter/esc）；' +
+                            '游戏只认 PostMessage，不会静默回退 SendInput',
+                    });
+                }
+                return VC.unverified(`已后台投递 ${a} → ${route.game || focus || ('hwnd ' + route.hwnd)}（PostMessage，游戏只认这个）`, {
+                    method: 'postmessage', game: route.game, hwnd: post.hwnd,
+                    evidence: 'PostMessage WM_KEYDOWN/WM_KEYUP 已投递（GLFW 游戏丢弃 SendInput）',
+                    nextIfFailed: 'PostMessage 投递成功 ≠ 对方处理了；没反应先 see image 看画面，别连按',
+                });
+            }
+            // 执行链：① SendInput（非游戏默认） ② PostMessage ③ SendKeys
             // target 带上 → pet-core 在注入前再断言一次前台（双保险：这里断言过一次，
             // 但这两次之间用户可能切走窗口；SendInput 只认前台，切走就是打进别人的应用）
             const si = await sendInputKey(a, 0, focus || '');
@@ -4896,21 +5348,24 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                 // 按键是「瞬时动作」，画面不一定马上变（比如按了下方向键但光标还没动）。
                 // 所以这一档标 unverified（动作确实发出去了、焦点也确认对了，但效果得靠调用方自己看）。
                 return VC.unverified(`已按：${a}${focus ? '（→' + focus + '）' : ''}（SendInput，焦点已确认）`, {
+                    method: 'sendinput',
                     evidence: 'SendInput 已发送，焦点确认在「' + (focusChk.fg ? focusChk.fg.title : '当前前台') + '」',
                     nextIfFailed: '按键发出去了但没法自动确认效果——如果没反应，先用 snapshot 看看界面状态，别重复按（可能已经生效了）',
                 });
             }
-            // 执行链第二档：focus 给了先 PostMessage 后台投递（不抢焦点）；失败/不认再硬发
+            // 非游戏路径的旧兜底：focus 给了先 PostMessage 后台投递（不抢焦点）；失败/不认再硬发
             if (focus) {
                 const post = await postKeysTo(focus, a);
                 if (post.ok) return VC.unverified(`已后台投递 ${a} → ${focus}（PostMessage，没动你的焦点）`, {
+                    method: 'postmessage',
                     evidence: 'PostMessage 投递成功，但投递成功 ≠ 对方处理了',
                     nextIfFailed: 'PostMessage 对游戏/Chromium 自绘窗口常常无效。没生效就改用 focus_window 后不带 focus 重试（走 SendInput 硬发）',
                 });
             }
             const r = await runPs(wsScript(`$ws.SendKeys('${seq.replace(/'/g, "''")}'); 'sent'`));
-            if (!r.ok) return VC.notSent('按键失败：' + r.error, { nextIfFailed: 'SendInput 和 SendKeys 都失败了，检查 send-input 服务（8104）是否在跑' });
+            if (!r.ok) return VC.notSent('按键失败：' + r.error, { method: 'sendinput', nextIfFailed: 'SendInput 和 SendKeys 都失败了，检查 send-input 服务（8104）是否在跑' });
             return VC.unverified(`已按：${a}${focus ? '（→' + focus + '）' : ''}（SendKeys 兜底）`, {
+                method: 'sendkeys',
                 evidence: 'SendKeys 已发送（最不可靠的一档，依赖焦点和键盘布局）',
                 nextIfFailed: 'SendKeys 兜底路径，可靠性最低。没生效就先启动 send-input 常驻服务（8104）',
             });
@@ -5916,7 +6371,8 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                 let fwInfo = null;
                 try { fwInfo = await focusWindowRetry(hit, { tries: 3, gapMs: 350, apps }); }
                 catch (e) { fwInfo = { ok: false, error: String((e && e.message) || e) }; }
-                const focused = !!(fwInfo && fwInfo.ok);
+                // 2026-11-25 P1-3：ok 只代表「请求被接受」，必须 verified===true（回读前台一致）才算切到前台
+                const focused = !!(fwInfo && fwInfo.verified === true);
                 return VC.confirmed('「' + hit + '」已启动，窗口出来了（耗时 ' + secElapsed + ' 秒）'
                     + (focused ? '，已切到前台' : '，但没抢到前台（' + ((fwInfo && fwInfo.error) || '未知') + '）')
                     + '。下一步可以 som_snapshot 看画面', {
@@ -7313,7 +7769,9 @@ module.exports = {
     elementFallbackPlan, waitUiStable, applyUiVerify, withAutoFocusRetry, autoFocusTarget, resolveWindowInfo,
     pickBestWindow, windowPickScore,
     // 操控层一致性（2026-11-21 P1/P2）：唯一窗口解析 / 多屏并集 / 唯一按键策略 / 可观测计数
-    resolveTargetHwnd, pickWindowForTarget, postKeysTo,
+    resolveTargetHwnd, pickWindowForTarget, postKeysTo, titleMatchKind,
+    // 2026-11-25 P1-1：游戏按键路由（纯函数，单测直接打）
+    detectGameWindow, decideKeyRoute, vkFor,
     screenRectsFromDisplays, pointOnAnyScreen, assertScreenPoint, screenRects,
     KEY_POLICY_RULES, KEY_POLICY_DENY_MSG, KEY_POLICY_SOURCE, keyPolicyViolation, normalizeKeyName, controlStats, bumpControlStat,
     uiaScan, uiaElementAction, uiaScanScript, assertTargetFocused, pickSnapshotTarget, guardClickTarget, checkSnapshotBinding,

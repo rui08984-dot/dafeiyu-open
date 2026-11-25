@@ -115,6 +115,9 @@ function emitTelemetry(event) {
         // D9（2026-11-22）：turn.end 的结局（ok/tool-batch/error/…）要能被机器读。
         // 原来只有 title 里那句人话，结构化查询不到 —— 无法统计「多少轮以失败收尾」。
         if (event.outcome) line.outcome = String(event.outcome).slice(0, 24);
+        // 失败归因（2026-11-25）：outcome=error 只回答「失败了」，
+        // errorKind 回答「失败在哪」（network/quota/tool/parse/empty/interrupted）。
+        if (event.errorKind) line.errorKind = String(event.errorKind).slice(0, 24);
         // A4 轮次归因（2026-11-21）：turn_id 是跨阶段 join 的唯一键；
         // span 说明这条事件属于哪一段（turn/llm/tool/tts），不参与 join 但方便读。
         if (event.turn_id) line.turn_id = String(event.turn_id).slice(0, 40);

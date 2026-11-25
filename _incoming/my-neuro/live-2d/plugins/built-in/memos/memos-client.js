@@ -21,10 +21,11 @@ class MemosClient {
         this._saving = false;
 
         // ⚡ 挂起感知：MemOS 挂过两次都是人工发现的（doctor 卡 9 分钟=在等它超时）。
-        // 失败连击计数：连续 3 次失联大声告警；doctor 经 healthInfo() 读数字。自愈重启需拍板，这里只感知。
+        // 失败连击计数：第 1 次静默（本地抖动不刷屏），第 2 次起每次 warn 一行；doctor 经 healthInfo() 读数字。
         this._failStreak = 0;
         this._lastFailAt = 0;
         this._lastOkAt = 0;
+        this._lastFailReason = '';
     }
 
     _markOk() {
@@ -35,15 +36,20 @@ class MemosClient {
         }
         this._failStreak = 0;
         this._lastOkAt = Date.now();
+        this._lastFailReason = '';
     }
 
     _markFail(where, error) {
         this._failStreak += 1;
         this._lastFailAt = Date.now();
-        // 第 3 次起大声告警，之后每 10 次提醒一次（别每轮刷屏，也不能哑——挂起必须有人知道）
-        if (this._failStreak === 3 || (this._failStreak > 3 && (this._failStreak - 3) % 10 === 0)) {
-            const msg = `[MemOS] ⚠️ 连续 ${this._failStreak} 次失联（${where}: ${(error && error.message) || error}）——记忆后端疑似挂起。doctor 卡很久=在等它超时；先 curl 127.0.0.1:8003/health 再决定重启`;
-            console.error(msg);
+        const status = Number(error && error.response && error.response.status) || 0;
+        const reason = String((error && error.message) || error || 'unknown');
+        this._lastFailReason = where + (status ? (' HTTP ' + status) : '') + ': ' + reason;
+        // 2026-11-25 P1-4：旧实现第 3 次才吭声 —— 前两次失败在 runtime.log 完全不可见，
+        // 注入侧只表现为「没有可注入记忆」。现在第 1 次静默（避免抖动刷屏），第 2 次起 warn。
+        if (this._failStreak >= 2) {
+            const msg = `[MemOS] ⚠️ 连续 ${this._failStreak} 次失联（${this._lastFailReason}）——记忆后端疑似挂起。本轮不注入；先 curl 127.0.0.1:8003/health 再决定重启`;
+            console.warn(msg);
             try { logToTerminal('warn', msg); } catch (e) { try { __silentAudit.audit('memos-client.js:41', e); } catch (e2) {} }
         }
     }
@@ -55,16 +61,29 @@ class MemosClient {
             failStreak: this._failStreak,
             lastOkAt: this._lastOkAt,
             lastFailAt: this._lastFailAt,
+            lastFailReason: this._lastFailReason,
             apiUrl: this.apiUrl,
         };
     }
 
+    /**
+     * 搜索相关记忆。
+     *
+     * 2026-11-25 P1-4：**不再把失败伪装成「没有记忆」**。
+     * 旧实现 catch 里 return []，调用方看到空数组就以为「后端说没有相关记忆」，
+     * 于是 MemOS 挂了也无人知道。现在返回结构化结果：
+     *   · 成功 → {ok:true, memories:[...]}
+     *   · 关闭/熔断/失败 → {ok:false, reason, status?, message?, memories:[]}
+     * 调用方降级为「本轮不注入」，但必须把 reason 写进日志。
+     */
     async search(query, topK = null) {
-        if (!this.enabled) return [];
+        if (!this.enabled) return { ok: false, reason: 'disabled', memories: [] };
         // 熔断（2026-11-15 五十八轮）：连续 3 次失联后，60s 内不再尝试。
         // 原来每轮输入都先等最多 6 秒（MemOS 挂起时这是常态），用户只会觉得「她反应慢」。
         // 熔断不是放弃：窗口一过自动再探一次，探通了 _markOk 会把连击清零。
-        if (this._failStreak >= 3 && Date.now() - (this._lastFailAt || 0) < 60000) return [];
+        if (this._failStreak >= 3 && Date.now() - (this._lastFailAt || 0) < 60000) {
+            return { ok: false, reason: 'circuit-open', failStreak: this._failStreak, lastFailReason: this._lastFailReason, memories: [] };
+        }
 
         try {
             const response = await axios.post(`${this.apiUrl}/search`, {
@@ -75,11 +94,17 @@ class MemosClient {
             }, { timeout: 6000 });
 
             this._markOk();
-            return response.data.memories || [];
+            return { ok: true, memories: response.data.memories || [] };
         } catch (error) {
-            console.error('MemOS 搜索失败:', error.message);
             this._markFail('search', error);
-            return [];
+            return {
+                ok: false,
+                reason: 'search-failed',
+                status: Number(error && error.response && error.response.status) || 0,
+                message: String((error && error.message) || error),
+                failStreak: this._failStreak,
+                memories: [],
+            };
         }
     }
 

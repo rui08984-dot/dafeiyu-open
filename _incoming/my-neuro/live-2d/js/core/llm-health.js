@@ -317,6 +317,13 @@ class LlmHealth {
      */
     noteFailure(err, now) {
         this._ensureLoaded();
+        // P0-2（2026-11-25）：同一条错误只记一次。
+        // 插件层（plugin-context / api-utils.noteLlmNetworkFailure）已经记过就会打
+        // `__llmHealthNoted`；调用方 catch 里再 noteFailure(e) 若重复计数，一次网络失败
+        // 会算两次，5→10→20 的退避阶梯和「连败 5 次停当天」都会提前打满。
+        if (err && typeof err === 'object' && err.__llmHealthNoted) {
+            return { state: this.getStatus(), retryAt: this._state.pausedUntil || this._state.nextAttemptAt || 0 };
+        }
         const ts = Number.isFinite(Number(now)) ? Number(now) : Date.now();
         const status = Number(err && err.status) || 0;
 

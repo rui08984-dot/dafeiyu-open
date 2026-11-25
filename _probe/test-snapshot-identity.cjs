@@ -319,22 +319,30 @@ const deltaText = (before) => '本次调用 spawn=' + (calls.spawn - before.spaw
         ok('正常长度标题仍放行（不误伤）', b4.ok === true, b4.ok ? 'ok' : b4.reason);
     }
 
-    // ── 8b. 标题匹配收紧（2026-11-25 P2-7）：短标题必须精确、不认任意子串/后缀 ──
+    // ── 8b. 标题匹配（2026-11-25 P1-2 契约变化）────────────────────────────
+    // 旧契约（P2-7）：绑定层只认「精确 / ≥4 字前缀+分隔符」，任意子串一律拒绝。
+    // 新契约：解析层与绑定层共用 titleMatchKind：
+    //   exact → prefix+boundary（短侧 ≥4）→ substring（短针 ≥2）。
+    // 为什么放宽：旧契约下 `see window=QQ` 用子串解析到「QQ音乐」，`act click window=QQ`
+    // 绑定却拒绝 → see 成功、click 永远 STALE。现在两层给出同一个答案；
+    // 「多命中」由解析层在真实窗口表上判歧义（不猜），绑定层只核对同一窗口。
     {
-        ok('标题匹配：QQ vs QQ音乐 → 拒绝', H.winTitleMatches('QQ音乐', 'QQ') === false,
+        ok('标题匹配：QQ vs QQ音乐 → 通过（唯一子串层级，与 see 的解析一致）', H.winTitleMatches('QQ音乐', 'QQ') === true,
             String(H.winTitleMatches('QQ音乐', 'QQ')));
-        ok('标题匹配：计算器 vs 计算器 - 标准模式 → 拒绝（<4 字必须精确）',
-            H.winTitleMatches('计算器 - 标准模式', '计算器') === false,
+        ok('标题匹配：计算器 vs 计算器 - 标准模式 → 通过（子串层级）',
+            H.winTitleMatches('计算器 - 标准模式', '计算器') === true,
             String(H.winTitleMatches('计算器 - 标准模式', '计算器')));
         ok('标题匹配：完全相等 → 通过（「计算器」vs「计算器」）',
             H.winTitleMatches('计算器', '计算器') === true);
         ok('标题匹配：≥4 字 + 前缀 + 分隔符 → 通过',
             H.winTitleMatches('记事本 - 未命名.txt', '记事本 -') === true
             && H.winTitleMatches('Windows 设置', 'windows') === true);
-        ok('标题匹配：任意后缀不算匹配（file.txt - Notepad vs Notepad）',
-            H.winTitleMatches('file.txt - Notepad', 'Notepad') === false);
-        ok('标题匹配：前缀但无分隔符 → 拒绝（Setup vs SetupHelper）',
-            H.winTitleMatches('SetupHelper', 'Setup') === false);
+        ok('标题匹配：后缀 → 通过（唯一子串层级；多命中由解析层判歧义）',
+            H.winTitleMatches('file.txt - Notepad', 'Notepad') === true);
+        ok('标题匹配：前缀无分隔符 → 通过（substring 层级，不再要求 boundary）',
+            H.winTitleMatches('SetupHelper', 'Setup') === true);
+        ok('标题匹配：1 字针仍拒绝（防「Q」命中一切窗口）',
+            H.winTitleMatches('QQ音乐', 'Q') === false);
         // 纯函数：标题匹配成功时回执带 matched（hwnd/title/请求值）
         const bm = H.checkSnapshotBinding({
             title: '记事本 - 未命名.txt', hwnd: 4242, targetHwnd: 4242, targetTitle: '记事本 - 未命名.txt',

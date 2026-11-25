@@ -107,6 +107,13 @@ struct Req {
     y: Option<i32>,
     w: Option<i32>,
     h: Option<i32>,
+    /// region_gray 命令专用（2026-11-25 P0-3）：目标显示器矩形（物理像素，虚拟屏坐标）。
+    /// 给了就钳到这块屏；没给则钳到整个虚拟屏（`SM_XVIRTUALSCREEN` 等）。
+    /// 原来只认主屏并把 x/y `max(0)` —— 副屏（负坐标）和屏外窗口的局部验证全采到主屏左上。
+    dx: Option<i32>,
+    dy: Option<i32>,
+    dw: Option<i32>,
+    dh: Option<i32>,
     // ── mouse 命令专用（2026-11-10 四十轮：把 click/drag 从 pwsh 搬进 Rust）──
     /// click / double_click / right_click / drag / scroll
     kind: Option<String>,
@@ -437,10 +444,17 @@ fn handle_input(input: &str) {
                     return;
                 }
             };
-            match pet_core::native::region_gray(x, y, w, h) {
+            // P0-3（2026-11-25）：可选的「目标显示器矩形」（物理像素，虚拟屏坐标）。
+            // 给了就只钳到这块屏；没给则钳到整个虚拟屏（原来是主屏 —— 副屏/负坐标全取错）。
+            let clip = match (req.dx, req.dy, req.dw, req.dh) {
+                (Some(dx), Some(dy), Some(dw), Some(dh)) if dw >= 16 && dh >= 16 => Some((dx, dy, dw, dh)),
+                _ => None,
+            };
+            match pet_core::native::region_gray_in(x, y, w, h, clip) {
                 Ok(r) => emit!("{}", json!({
                     "ok": true, "gray": r.gray, "mean": r.mean, "std": r.std,
                     "width": r.width, "height": r.height, "us": r.us,
+                    "x": r.x0, "y": r.y0, "w": r.w0, "h": r.h0,
                 })),
                 Err(e) => emit!("{}", json!({"ok": false, "error": e})),
             }

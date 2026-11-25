@@ -46,6 +46,15 @@ const os = require('os');
 
 const MEMOS_PORT = 8003;
 const USER_ID = 'feiniu_default';
+// 待写队列（2026-11-25 审计 P0-1）：确定性拒收（added=0）的条目原来每 30s 重投一次，
+// 一天 5760 次本地推理 + 反复往图谱写实体。给每条 attempts，满 3 次进死信，不再重试。
+const QUEUE_MAX_ATTEMPTS = 3;
+// 死信文件只留最近 200 行（超出丢最旧），避免换一个文件继续膨胀。
+const DEAD_LETTER_MAX_LINES = 200;
+// /add 超时（2026-11-25 审计 §7 末段）：本地 4B 后端 11435 正常 3~5s，150s 只会长时间
+// 占住 _consolidating（配合队列重试就是「一直像在干活」）。云端保持历史值。
+const POST_TIMEOUT_LOCAL_MS = 40000;
+const POST_TIMEOUT_CLOUD_MS = 150000;
 
 // 门控规则：每条给一个权重，命中就加分。
 // 核心思路：必须是关于他的长期信息，不是「此刻在干嘛」。
@@ -276,6 +285,7 @@ class MemoryEvolvePlugin extends Plugin {
         } catch (e) { this._queuePath = null; }
         this._queueCheckedAt = 0;
         this._memosAlive = null;
+        this._draining = false;     // P1-4：单飞守卫（防定时器与 _consolidate 的 drain 重叠）
         // 启动时若队列有货，后台补写一次（不阻塞启动）
         // 2026-11-21 审计（P2）：句柄原来直接丢掉 → 热重载后旧实例的 8s 回调照样跑，
         // 新旧实例可能同时 _drainQueue（同一批写两遍）。现在留句柄、unref、onStop 清掉，
@@ -452,7 +462,9 @@ class MemoryEvolvePlugin extends Plugin {
                 if (t.length < 6 || t.length > 60) continue;
                 if (/[?？]$/.test(t)) continue;
                 // source='episode' 是稳定性判定的唯一依据（memory-recall._isStableDoc）
-                const r = uf.addFact({ text: t, source: 'episode', confidence: 0.6 });
+                // 2026-11-25 P0-3：抽取侧显式要求「一次性事件带有效期」——kind=event 的
+                // 事实按事件日期 +1 天失效，不再永久占着「现在成立的事实」。
+                const r = uf.addFact({ text: t, source: 'episode', confidence: 0.6, expireEvents: true });
                 if (r && r.ok && !r.duplicate) added += 1;
             }
             if (added) this.context.log('info', '[片段] 顺手把 ' + added + ' 条事实升进事实层（episode → 非 STABLE，按时间衰减）');
@@ -1111,10 +1123,24 @@ class MemoryEvolvePlugin extends Plugin {
     }
 
     // ── 待写队列：JSONL 追加安全；重写用 tmp+rename 原子替换 ──────────────
-    _queueLoad() {
-        if (!this._queuePath) return [];
+    /**
+     * 三态读（2026-11-25 审计 P0-2）：
+     *   {ok:true, items:[]}  —— 文件不存在（ENOENT）或确实是空
+     *   {ok:true, items:[…]} —— 读到了
+     *   {ok:false, error}    —— 读失败（Windows 上 rename 正被另一实例/hot-reload 读时
+     *                           会 EPERM/EBUSY）。**调用方不得据此覆盖文件**，否则积压被抹掉。
+     */
+    _queueLoadState() {
+        if (!this._queuePath) return { ok: false, items: [], error: 'queue path unavailable' };
         try {
-            const raw = fs.readFileSync(this._queuePath, 'utf8');
+            let raw = '';
+            try {
+                raw = fs.readFileSync(this._queuePath, 'utf8');
+            } catch (e) {
+                // ENOENT = 队列文件还没建过，等价于空队列；其它错误都是「不知道里面有什么」。
+                if (e && e.code === 'ENOENT') return { ok: true, items: [], error: null };
+                return { ok: false, items: [], error: String((e && (e.code || e.message)) || e) };
+            }
             const out = [];
             for (const line of raw.split(/\r?\n/)) {
                 if (!line.trim()) continue;
@@ -1123,41 +1149,108 @@ class MemoryEvolvePlugin extends Plugin {
                     if (o && typeof o.text === 'string' && o.text.trim()) out.push(o);
                 } catch (e) { /* 坏行跳过：别让一条脏数据毁掉整个队列 */ }
             }
-            return out;
-        } catch (e) { return []; }
+            return { ok: true, items: out, error: null };
+        } catch (e) {
+            return { ok: false, items: [], error: String((e && (e.code || e.message)) || e) };
+        }
     }
 
-    _queueWrite(items) {
-        if (!this._queuePath) return false;
+    /**
+     * 兼容包装：老调用方（含 _probe 里的回归用例）拿数组，`.length/.filter` 语义不变；
+     * 读失败时数组上带不可枚举的 `ok:false` 标记，新代码请直接用 _queueLoadState()。
+     */
+    _queueLoad() {
+        const st = this._queueLoadState();
+        const arr = st.items || [];
         try {
-            const tmp = this._queuePath + '.tmp';
+            Object.defineProperty(arr, 'ok', { value: st.ok, enumerable: false, configurable: true });
+            Object.defineProperty(arr, 'error', { value: st.error || null, enumerable: false, configurable: true });
+        } catch (e) { /* 极端情况（冻结对象）退化成纯数组 */ }
+        return arr;
+    }
+
+    /**
+     * tmp + rename 原子替换。tmp 名带 pid + 随机后缀 —— 两个实例（宿主 + hot-reload 残留）
+     * 同时写时不会踩同一个 .tmp（审计 P0-2 的「并发写不互相踩」）。
+     */
+    _queueAtomicWrite(items) {
+        if (!this._queuePath) return false;
+        const tmp = this._queuePath + '.' + process.pid + '.' + Math.random().toString(36).slice(2, 8) + '.tmp';
+        try {
             const body = (items || []).map((x) => JSON.stringify(x)).join('\n');
             fs.writeFileSync(tmp, body ? body + '\n' : '', 'utf8');
             fs.renameSync(tmp, this._queuePath);
             return true;
         } catch (e) {
+            try { fs.unlinkSync(tmp); } catch (e2) { /* tmp 可能根本没建出来 */ }
             this.context.log('warn', '[记忆演化] 队列落盘失败（这批可能丢）: ' + (e && e.message || e));
             return false;
         }
     }
 
+    /** 历史名保留（其它调用点/测试都在用）。 */
+    _queueWrite(items) {
+        return this._queueAtomicWrite(items);
+    }
+
     _queueAppend(items) {
-        if (!this._queuePath || !items || !items.length) return this._queueLoad();
-        const cur = this._queueLoad();
+        if (!this._queuePath) return [];
+        const state = this._queueLoadState();
+        if (!state.ok) {
+            // P0-2：读不出来就**不写**。此刻写盘 = 用「本次新条目」覆盖整条积压。
+            this.context.log('warn', '[记忆演化] 队列读失败（' + state.error + '），本轮不写盘（防覆盖积压）');
+            return [];
+        }
+        const cur = state.items;
+        if (!items || !items.length) return cur;
         const at = Date.now();
         // 按 text 去重：过闸时会「立即 append」，_consolidate 里还会再 append 一次兜底
         // （队列路径不可用时也不能丢）。幂等之后两条路径可以同时存在而不写重复。
         const known = new Set(cur.map((x) => String(x && x.text)));
-        let added = 0;
         for (const it of items) {
             const text = String(it && it.text || '');
             if (!text || known.has(text)) continue;
             known.add(text);
             cur.push({ text, score: it.score, at });
-            added += 1;
         }
-        this._queueWrite(cur);
+        this._queueAtomicWrite(cur);
         return cur;
+    }
+
+    /** 死信文件（同结构 + deadReason）：与队列同目录，data/记忆待写死信.jsonl。 */
+    _deadLetterPath() {
+        if (!this._queuePath) return null;
+        return path.join(path.dirname(this._queuePath), '记忆待写死信.jsonl');
+    }
+
+    /** 追加一条死信；超出上限只留最近 200 行（丢最旧）。 */
+    _appendDeadLetter(item) {
+        const p = this._deadLetterPath();
+        if (!p) return false;
+        try {
+            let lines = [];
+            try {
+                const raw = fs.readFileSync(p, 'utf8');
+                lines = raw.split(/\r?\n/).filter((l) => l.trim());
+            } catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
+            lines.push(JSON.stringify(item));
+            if (lines.length > DEAD_LETTER_MAX_LINES) lines = lines.slice(lines.length - DEAD_LETTER_MAX_LINES);
+            const tmp = p + '.' + process.pid + '.' + Math.random().toString(36).slice(2, 8) + '.tmp';
+            fs.writeFileSync(tmp, lines.join('\n') + '\n', 'utf8');
+            fs.renameSync(tmp, p);
+            return true;
+        } catch (e) {
+            this.context.log('warn', '[记忆演化] 死信落盘失败（条目留在队列，不丢）: ' + (e && e.message || e));
+            return false;
+        }
+    }
+
+    /** 日志里的稳定短 key：hash + 文本前 12 字（能对上是哪条，又不会刷一整行）。 */
+    _queueKey(it) {
+        const t = String((it && it.text) || '');
+        let h = 0;
+        for (let i = 0; i < t.length; i += 1) h = ((h * 31) + t.charCodeAt(i)) | 0;
+        return ((h >>> 0).toString(36)) + ':' + t.slice(0, 12);
     }
 
     /** MemOS 在不在线（1.2s 探针 + 30s 缓存）：避免每次巩固都先吃一次长超时 */
@@ -1178,33 +1271,111 @@ class MemoryEvolvePlugin extends Plugin {
         return this._memosAlive;
     }
 
-    /** 把队列里攒着的条目写回去（成功一条删一条，失败保留） */
+    /**
+     * 把队列里攒着的条目写回去（成功一条删一条，失败保留；满 3 次进死信）。
+     * 2026-11-25 审计 P1-4：单飞 + 写回前重读合并。
+     *   · 单飞：定时器 / _consolidate 可能同时调进来，两次 drain 各自拿旧快照整份重写，
+     *     后写的会把先写的成果（attempts、成功移除）覆盖回退。
+     *   · 合并：drain 过程中逐条 await /add（最长 150s/条），期间 _queueAppend 可能写入新条目；
+     *     写回前重读当前队列，只移除本次已处理的条目，期间新增的保留 —— 不再整份覆盖快照。
+     */
     async _drainQueue() {
+        if (this._draining) return 0;
+        this._draining = true;
+        try {
+            return await this._drainQueuePass();
+        } finally {
+            this._draining = false;
+        }
+    }
+
+    async _drainQueuePass() {
         // MemOS /add 内部也要调 LLM（本地或云端，看后端配置）；闸没开就先不重放
         // （连 reachability 都不必探）。
         if (!(await this._writeGateOpen())) return 0;
         if (!(await this._memosReachable())) return 0;
-        const items = this._queueLoad();
+        const state = this._queueLoadState();
+        if (!state.ok) {
+            // P0-2：读不出来就不重放、更不写回（否则下一次写盘会把积压抹掉）。
+            this.context.log('warn', '[记忆演化] 队列读失败（' + state.error + '），本轮不重放（防覆盖积压）');
+            return 0;
+        }
+        const items = state.items;
         if (!items.length) return 0;
         const remaining = [];
         let written = 0;
         let skipped = 0;
+        let dead = 0;
         for (const it of items) {
             // 2026-11-22：历史队列里可能已经混进主动脚手架（修复前入队的）。
             // 重放出口也必须过同一道过滤，否则旧污染会原样再喂给 MemOS。
             if (this._isScaffoldText(it.text)) { skipped += 1; continue; }
+            const prevAttempts = Math.max(0, Math.floor(Number(it && it.attempts) || 0));
+            // 已判死但上次死信落盘失败：本轮只再试落盘，不再调用 /add（防止无限重试）。
+            if (prevAttempts >= QUEUE_MAX_ATTEMPTS) {
+                const rec = { ...it, attempts: prevAttempts };
+                if (this._appendDeadLetter(rec)) { dead += 1; }
+                else remaining.push(rec);
+                continue;
+            }
+            const attempts = prevAttempts + 1;
             const res = await this._post('/add', {
                 messages: [{ role: 'user', content: '(他说的，值得记住)' + it.text }],
                 user_id: USER_ID,
                 source: 'evolve',   // B2 来源标注：反思/演化队列重放
+                // 审计 P0-1：后端 added=0 时仍会抽实体写图。已经失败过一次的条目重放时
+                // 明确关掉实体提取（老后端忽略未知字段），最多只污染一次图谱。
+                ...(prevAttempts > 0 ? { extract_entities: false } : {}),
             });
             // 2026-11-21 审计 P0：原来 `ok && !ok.error`（ok 是响应对象，恒真）→ 后端
             // 200+status:failed 也算写成功，队列条目被删。现在只认机器可读契约。
-            if (isAddOk(res)) { written += 1; continue; }
-            remaining.push(it);
+            // 2026-11-25 P0-1：`ok:true` 但 added=0/merged=0 是「上游明确说没提取到」——
+            // 不算写成功，计入 attempts；也不进 kept/整理日志（读侧不再把它当「记住了」）。
+            if (isAddOk(res) && (Number(res && res.added) > 0 || Number(res && res.merged) > 0)) {
+                written += 1;
+                continue;
+            }
+            const reason = addErrorText(res);
+            const rec = {
+                ...it,
+                attempts,
+                lastTriedAt: Date.now(),
+                lastReason: String(reason).slice(0, 160),
+            };
+            if (attempts >= QUEUE_MAX_ATTEMPTS) {
+                // 死信：同结构 + deadReason；写不进去就留在队列（下一轮只重试落盘）。
+                const deadRec = { ...rec, deadReason: String(reason).slice(0, 200), deadAt: Date.now() };
+                if (this._appendDeadLetter(deadRec)) dead += 1;
+                else remaining.push({ ...rec, deadReason: deadRec.deadReason });
+            } else {
+                remaining.push(rec);
+            }
+            // 每轮失败只打一行（原来完全静默；不要 30s 刷屏，一次失败一行）。
+            this.context.log('warn', '[记忆演化] 待写失败 attempts=' + attempts + '/' + QUEUE_MAX_ATTEMPTS
+                + ' key=' + this._queueKey(it) + ' reason=' + reason);
         }
-        this._queueWrite(remaining);
-        if (written) this.context.log('info', '[记忆演化] 队列补写成功 ' + written + ' 条（剩 ' + remaining.length + '）');
+        // P1-4：写回前重读当前队列，按 text（队列既有的去重键）合并：
+        //   · 快照里没有的 → drain 期间新入队，保留；
+        //   · 快照里有、本次已处理（成功/死信）的 → 不再写回；
+        //   · 快照里有、本次没处理成（remaining）的 → 用 remaining 的最新 attempts。
+        const inSnapshot = new Set(items.map((it) => String(it && it.text)));
+        const out = remaining.slice();
+        const have = new Set(out.map((x) => String(x && x.text)));
+        const fresh = this._queueLoadState();
+        if (fresh.ok) {
+            for (const cur of fresh.items) {
+                const t = String(cur && cur.text);
+                if (!t || have.has(t) || inSnapshot.has(t)) continue;
+                out.push(cur);
+                have.add(t);
+            }
+        } else {
+            // 读失败：不覆盖（可能带着 drain 期间的新条目），下轮重试。成功的这次先记一笔。
+            this.context.log('warn', '[记忆演化] 写回前重读队列失败（' + fresh.error + '），本轮不落盘（防覆盖新入队）');
+        }
+        if (fresh.ok) this._queueAtomicWrite(out);
+        if (written) this.context.log('info', '[记忆演化] 队列补写成功 ' + written + ' 条（剩 ' + out.length + '）');
+        if (dead) this.context.log('warn', '[记忆演化] 队列移入死信 ' + dead + ' 条（满 ' + QUEUE_MAX_ATTEMPTS + ' 次仍未被后端接受）');
         if (skipped) {
             this._stats.scaffoldSkipped += skipped;
             this.context.log('info', '[记忆演化] 队列重放剔除脚手架 ' + skipped + ' 条（不再喂给 MemOS）');
@@ -1260,7 +1431,31 @@ class MemoryEvolvePlugin extends Plugin {
         });
     }
 
+    /**
+     * /add 的超时（2026-11-25 审计 §382）：本地 4B 后端（11435）实测 3~5s，
+     * 150s 只会在队列重试时长时间占住 _consolidating；云端保持历史值。
+     */
+    _postTimeoutMs() {
+        try { return this._memosBackendIsLocal() ? POST_TIMEOUT_LOCAL_MS : POST_TIMEOUT_CLOUD_MS; }
+        catch (e) { return POST_TIMEOUT_CLOUD_MS; }   // 判不出来按云端（保守：别把慢请求误杀）
+    }
+
+    /** 超时日志（60s 内同一 route+backend 只喊一次，别被队列重试刷屏）。 */
+    _notePostTimeout(route, local, timeout) {
+        try {
+            const key = String(route) + ':' + (local ? 'local' : 'cloud');
+            const now = Date.now();
+            if (!this._postTimeoutLogged) this._postTimeoutLogged = {};
+            if (now - (this._postTimeoutLogged[key] || 0) < 60000) return;
+            this._postTimeoutLogged[key] = now;
+            this.context.log('warn', '[记忆演化] ' + route + ' 超时（' + Math.round(timeout / 1000)
+                + 's，backend:' + "'" + (local ? 'local' : 'cloud') + "'" + '）—— 后端没在时限内回包，按失败处理（条目保留）');
+        } catch (e) { /* 日志失败不改变超时语义 */ }
+    }
+
     _post(route, body) {
+        const local = (() => { try { return this._memosBackendIsLocal(); } catch (e) { return false; } })();
+        const timeout = local ? POST_TIMEOUT_LOCAL_MS : POST_TIMEOUT_CLOUD_MS;
         return new Promise((resolve) => {
             try {
                 const data = Buffer.from(JSON.stringify(body), 'utf8');
@@ -1268,14 +1463,19 @@ class MemoryEvolvePlugin extends Plugin {
                     host: '127.0.0.1', port: MEMOS_PORT, path: route, method: 'POST',
                     // 服务端 /add 实测 72~120 秒（提取+嵌入+图谱），20s 会把正式写入全灭
                     // （2026-11-01 E2E 实锤，见交接 §3 bug1）。
-                    headers: { 'Content-Type': 'application/json', 'Content-Length': data.length }, timeout: 150000,
+                    // 2026-11-25：本地后端按 40s、云端按 150s（见 _postTimeoutMs）。
+                    headers: { 'Content-Type': 'application/json', 'Content-Length': data.length }, timeout,
                 }, (res) => {
                     let s = '';
                     res.on('data', (c) => { s += c; });
                     res.on('end', () => { try { resolve(JSON.parse(s)); } catch (e) { resolve(null); } });
                 });
                 req.on('error', () => resolve(null));
-                req.setTimeout(150000, () => { try { req.destroy(); } catch (e) { try { __silentAudit.audit('index.js:114', e); } catch (e2) {} } resolve(null); });
+                req.setTimeout(timeout, () => {
+                    try { req.destroy(); } catch (e) { try { __silentAudit.audit('index.js:114', e); } catch (e2) {} }
+                    this._notePostTimeout(route, local, timeout);
+                    resolve(null);
+                });
                 req.write(data); req.end();
             } catch (e) { resolve(null); }
         });
@@ -1395,6 +1595,17 @@ class MemoryEvolvePlugin extends Plugin {
     // 长期巩固：去重后写库，并留整理日志
     async _consolidate(tag) {
         if (!this._pending.length) return;
+        // P1-3（2026-11-25）：巩固必须与 _flushPending/_drainQueue 过同一道写闸。
+        // 原来只有 flush 路径过闸，onLLMResponse/_maybeConsolidate 直调 _consolidate
+        // 会绕过本地模型开关/配额熔断。闸关时 _pending **不 splice**（下一轮还在）。
+        if (!(await this._writeGateOpen())) return;
+        // P0-2 延伸：队列读不出来时**不 splice**。否则 _queueAppend 因读失败放弃写盘，
+        // 这一批就从内存里消失、又没进队列 —— 静默丢数据。留在 _pending，下一轮再试。
+        const qStatePre = this._queueLoadState();
+        if (!qStatePre.ok) {
+            this.context.log('warn', '[记忆演化] 队列读失败（' + qStatePre.error + '），本轮巩固跳过（条目留在内存，不丢）');
+            return;
+        }
         const batch = this._pending.splice(0, this._pending.length);
 
         // ① 先落盘队列 —— 写盘之后这批才算「安全」。后面任何一步失败都只是「还没写成」，
@@ -1434,7 +1645,9 @@ class MemoryEvolvePlugin extends Plugin {
                 user_id: USER_ID,
                 source: 'evolve',   // B2 来源标注：反思提炼出的结论
             });
-            if (isAddOk(ok)) {
+            // 2026-11-25 P0-1：`ok:true` 但 added=0/merged=0 是「上游明确说没提取到」，
+            // 不是写成功 —— 不当 kept、留在队列计入 attempts（读侧也不再当「记住了」）。
+            if (isAddOk(ok) && (Number(ok && ok.added) > 0 || Number(ok && ok.merged) > 0)) {
                 kept.push(item);
                 this._stats.addOk += 1;
             } else {
@@ -1447,8 +1660,14 @@ class MemoryEvolvePlugin extends Plugin {
         // ③ 写成的（含判重跳过的）从队列删掉，没写成的继续留着
         const doneText = new Set([...kept, ...duped, ...skipped].map((x) => x.text));
         try {
-            const remaining = this._queueLoad().filter((q) => !doneText.has(q.text));
-            this._queueWrite(remaining);
+            const qState = this._queueLoadState();
+            if (!qState.ok) {
+                // P0-2：读不出来就不能写回（否则会把积压写成空/只剩本轮）。
+                this.context.log('warn', '[记忆演化] 队列读失败（' + qState.error + '），本轮不从队列删条目（防覆盖积压）');
+            } else {
+                const remaining = qState.items.filter((q) => !doneText.has(q.text));
+                this._queueAtomicWrite(remaining);
+            }
         } catch (e) { try { __silentAudit.audit('index.js:236', e); } catch (e2) {} }
 
         if (skipped.length) this._stats.scaffoldSkipped += skipped.length;

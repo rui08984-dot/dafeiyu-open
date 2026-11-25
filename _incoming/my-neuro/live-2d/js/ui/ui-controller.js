@@ -7,6 +7,9 @@ const { Events } = require('../core/events.js');
 const passthroughPolicy = require('../core/passthrough-policy.js');
 const petbodyLayout = require('../core/petbody-layout.js');
 const costumeStore = require('../core/costume-store.js');
+// 12 段场景台词单一真源（2026-11-25 P3b）：本合同 driver.js 读同一份 js/core/scene-lines.js，
+// 这里保留 SCENE_HINT 变量名，改动面最小。
+const { SCENE_LINES: SCENE_HINT } = require('../core/scene-lines.js');
 
 // Lucide 图标（sprite 在 index.html）：统一用 <use> 引用，颜色跟 currentColor
 const ICON = (name, cls = '') => `<svg class="ico${cls ? ' ' + cls : ''}" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
@@ -1017,9 +1020,9 @@ class UIController {
                     let pick = scenes[Math.floor(Math.random() * scenes.length)];
                     if (pick === window._lastScene && scenes.length > 1) pick = scenes[(scenes.indexOf(pick) + 1) % scenes.length];
                     window._lastScene = pick;
-                    const HINT = { '打招呼': '哟，来了。', '撒娇': '……你就不能多陪我一会儿嘛。', '生气': '哼，你自己玩去吧。', '难过': '……算了，没事。', '得意': '怎么样，服不服。', '晚安': '睡了，别熬夜。' };
+                    // 台词表来自文件顶部 require 的 SCENE_HINT（js/core/scene-lines.js，单一真源）
                     body.perform(pick);
-                    if (HINT[pick] && global.showSubtitle) global.showSubtitle(HINT[pick], 3200);
+                    if (SCENE_HINT[pick] && global.showSubtitle) global.showSubtitle(SCENE_HINT[pick], 3200);
                 } catch (e) { try { __silentAudit.audit('ui-controller.js:862', e); } catch (e2) {} }
                 closePanel();
             });

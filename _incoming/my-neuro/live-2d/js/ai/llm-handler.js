@@ -28,6 +28,9 @@ const contextBudget = require('../core/context-budget.js');
 // P0-2（2026-11-24）：工具回执体积上限。单轮工具循环能把 history 顶到 68k，
 // 压缩钩子只在回复定稿后跑，救不了那一轮；这里在每次请求前封顶（见模块头注释）。
 const toolResultCap = require('./tool-result-cap.js');
+// P0-1（2026-11-25 审计）：`see image` 的标注图以前是 base64 文本，模型从来没见过图。
+// 这里把工具回执里的 base64 剥成图片消息（纯函数，见模块头注释）。
+const toolImageAttach = require('./tool-image-attach.js');
 // ADR-014（2026-11-24）：artifact 清理——进程内只跑一次（保留最近 200 个 / 7 天）。
 const toolArtifact = require('./tool-result-artifact.js');
 let __artifactCleanupDone = false;
@@ -38,6 +41,44 @@ function _cleanupArtifactsOnce() {
         const r = toolArtifact.cleanupArtifacts();
         if (r && r.removed) logToTerminal('info', '🧹 tool-artifacts 清理：删除 ' + r.removed + ' 个（保留最近 200 个/7 天）');
     } catch (e) { /* 清理失败不影响对话 */ }
+}
+
+/**
+ * 把一轮失败翻译成遥测口径（2026-11-25）。
+ * 旧实现 runTurn 内部吞掉错误后正常 return → runTurnWithTurn 一律 endTurn('ok')，
+ * turn.end 里「失败」和「成功」长得一样。这里只做分类，不改任何对话行为。
+ * @returns {{outcome:'ok'|'error'|'interrupted'|'blocked', errorKind?:string}}
+ */
+function classifyTurnFailure(error) {
+    const msg = String((error && (error.message || error)) || '').trim();
+    const low = msg.toLowerCase();
+    if (msg === 'USER_INTERRUPTED' || low.includes('user_interrupted')) {
+        return { outcome: 'interrupted', errorKind: 'interrupted' };
+    }
+    // 配额/限流：llm-client 对 429 的 reason 就是 quota；文案里也可能只有中文
+    if (/quota|rate[\s_-]?limit|too many requests|insufficient|配额|请求过于频繁|频率超限|限额|额度/.test(low)
+        || /\b429\b/.test(msg)) {
+        return { outcome: 'blocked', errorKind: 'quota' };
+    }
+    if (msg.includes('未获取到有效') || msg.includes('空回复') || msg.includes('空响应')
+        || low.includes('empty response')) {
+        return { outcome: 'error', errorKind: 'empty' };
+    }
+    if (msg.includes('工具调用失败') || msg.includes('工具链') || low.includes('tool call failed')
+        || low.includes('tool_use')) {
+        return { outcome: 'error', errorKind: 'tool' };
+    }
+    if ((error && error.name === 'SyntaxError') || low.includes('syntaxerror')
+        || msg.includes('响应格式异常') || msg.includes('解析API响应') || low.includes('parse')) {
+        return { outcome: 'error', errorKind: 'parse' };
+    }
+    if (low.includes('network') || low.includes('fetch') || low.includes('econn')
+        || low.includes('etimedout') || low.includes('enotfound') || low.includes('socket')
+        || low.includes('timeout') || low.includes('timed out') || low.includes('abort')
+        || msg.includes('网络') || msg.includes('超时') || msg.includes('连接失败')) {
+        return { outcome: 'error', errorKind: 'network' };
+    }
+    return { outcome: 'error', errorKind: 'unknown' };
 }
 
 // ── 会话级工具子集的会话标识（ADR-014 轨道 2-7）──────────────────────────
@@ -155,28 +196,42 @@ function saveScreenshotForHistory(base64Image) {
 }
 
 /**
- * 轮末清理：宿主历史里只保留**最新一张**截图，更早的图片剥成文字（省 token）。
+ * 轮末清理：同一来源只保留**最新一张**截图，更早的图片剥成文字（省 token）。
  *
  * 为什么是轮末（ADR-014 漏一，2026-11-24）：这段逻辑原来在截图工具分支里**当场**剥宿主旧图。
  * 轮内冻结前缀覆盖的字节被它一改，从那条消息起整段缓存失效 —— 等价于自己打穿缓存。
  * 放到「工具循环已经结束、这一轮不再发请求」之后做：下一轮前缀本来就会因为新 user 消息
  * 重置一次，代价相同，而轮内保证几十次请求逐字节命中。
  *
+ * 2026-11-25 收尾：**按来源分槽**。旧实现是「全历史最新一张优先」——用户发的截图 +
+ *   `see image` 工具图在同一轮时，只要工具图更新，用户那张就被剥成文字（模型下一轮
+ *   问「我刚给你看的图」就答不上来）。现在：
+ *     · user 槽（用户消息里的 image_url）保留 1 张；
+ *     · tool 槽（工具附图，靠 `TOOL_IMAGE_TEXT` 标记识别）保留 1 张；
+ *   清理时只清**同槽**旧的，两槽互不挤占。
+ *
  * @param {Array} messages voiceChat.messages（原地改）
  * @returns {number} 被剥掉图片的消息条数
  */
 function stripOldScreenshotImages(messages) {
     if (!Array.isArray(messages)) return 0;
-    // 从后往前找最新一张带图的消息：它要留给模型（当前正在看的就是它）
-    let keepIdx = -1;
+    // 从后往前找每个槽的最新一张：它们要留给模型（当前正在看的就是它们）
+    let keepUser = -1;
+    let keepTool = -1;
     for (let i = messages.length - 1; i >= 0; i -= 1) {
         const m = messages[i];
-        if (m && m.role === 'user' && Array.isArray(m.content)
-            && m.content.some((p) => p && p.type === 'image_url')) { keepIdx = i; break; }
+        if (!m || m.role !== 'user' || !Array.isArray(m.content)) continue;
+        if (!m.content.some((p) => p && p.type === 'image_url')) continue;
+        if (toolImageAttach.isToolImageMessage(m)) {
+            if (keepTool < 0) keepTool = i;
+        } else if (keepUser < 0) {
+            keepUser = i;
+        }
+        if (keepUser >= 0 && keepTool >= 0) break;
     }
     let stripped = 0;
     messages.forEach((msg, i) => {
-        if (i === keepIdx) return;
+        if (i === keepUser || i === keepTool) return;
         if (!msg || msg.role !== 'user' || !Array.isArray(msg.content)) return;
         if (!msg.content.some((p) => p && p.type === 'image_url')) return;
         const textItems = msg.content.filter((p) => p && p.type === 'text');
@@ -203,6 +258,10 @@ function stripOldScreenshotImages(messages) {
  *   · 本轮有新截图（iteration===0 且 screenshotBase64）→ 不剥，整套图都留给模型；
  *   · 没有新截图 / 已经进入工具循环 → 历史图剥成文字（省 token）。
  *
+ * P0-1（2026-11-25）：`see image` 的工具附图是**这一轮的输入**（模型刚要看它），
+ *   不能被当成「历史图」剥掉 —— 否则图片在进请求前就被清空，等于没修。这里永远
+ *   保留**最新一条工具附图**，其余（含旧的工具图/用户旧截图）照旧剥。
+ *
  * @param {Array} messages 请求副本（原地改）
  * @param {string|null} screenshotBase64 本轮用户新截图
  * @param {number} iteration 当前工具循环轮次
@@ -211,15 +270,39 @@ function stripOldScreenshotImages(messages) {
 function stripHistoryImagesForRequest(messages, screenshotBase64, iteration) {
     if (!Array.isArray(messages)) return 0;
     if (screenshotBase64 && !(Number(iteration) > 0)) return 0;
+    // 最新一条工具附图只在**工具循环内**留给模型（see image 的回执就是它）。
+    // 2026-11-25 对抗审计 P1-1：跨轮不清理 → 180KB base64 永久驻留每轮请求。
+    // iteration===0 = 新一轮的第一次请求，此时历史里的工具图都已过期，全部剥掉；
+    // iteration>0 = 本轮工具循环，保留最新一张。
+    let keepToolImage = -1;
+    if (toolImageAttach.keepToolImageForIteration(iteration)) {
+        for (let i = messages.length - 1; i >= 0; i -= 1) {
+            if (toolImageAttach.isToolImageMessage(messages[i])) { keepToolImage = i; break; }
+        }
+    }
     let stripped = 0;
-    for (const msg of messages) {
-        if (!msg || msg.role !== 'user' || !Array.isArray(msg.content)) continue;
-        if (!msg.content.some((item) => item && item.type === 'image_url')) continue;
+    messages.forEach((msg, i) => {
+        if (i === keepToolImage) return;
+        if (!msg || msg.role !== 'user' || !Array.isArray(msg.content)) return;
+        if (!msg.content.some((item) => item && item.type === 'image_url')) return;
         const textItems = msg.content.filter((item) => item && item.type === 'text');
         msg.content = textItems.length > 0 ? textItems.map((item) => item.text).join(' ') : '(图片内容)';
         stripped += 1;
-    }
+    });
     return stripped;
+}
+
+/**
+ * 历史里是否已经有「工具附图」（see image 的回执）。
+ * 用途：模型返回空响应时，判断「是不是因为这张图不支持」——旧实现只看
+ * `screenshotBase64`（用户截图），工具附图导致的空响应会漏判，然后默默空转到放弃。
+ */
+function hasToolImageMessage(messages) {
+    if (!Array.isArray(messages)) return false;
+    for (const m of messages) {
+        if (toolImageAttach.isToolImageMessage(m)) return true;
+    }
+    return false;
 }
 
 /**
@@ -628,7 +711,14 @@ class LLMHandler {
             });
         };
 
+        // 本轮真实结局的「暗号」：runTurn 内部把错误吞成正常 return，外面无从得知；
+        // 在 catch 里置位，由 runTurnWithTurn 在 finally 落成 turn.end 的 outcome/errorKind。
+        let _turnHint = null;
+        // 保底模型救回来的一轮：字幕已经出了，不该被下面的「空 reply」守卫误判成失败
+        let _turnFallbackOk = false;
         const runTurn = async function(prompt) {
+            _turnHint = null;
+            _turnFallbackOk = false;
             // ADR-014：artifact 清理每进程一次（失败只 warn，不影响这轮对话）
             _cleanupArtifactsOnce();
             let hasRetriedWithoutImage = false; // 标志：是否已经重试过（避免无限循环）
@@ -959,10 +1049,10 @@ class LLMHandler {
                             perResultChars: config && config.context && config.context.tool_result_max_chars,
                             perTurnChars: config && config.context && config.context.turn_tool_result_max_chars,
                         });
-                        if (capRes.capped || capRes.stubbed) {
+                        if (capRes.capped || capRes.stubbed || capRes.skipped) {
                             logToTerminal('info', '🧰 工具回执限流：截断 ' + capRes.capped + ' 条 / 本轮省略 '
-                                + capRes.stubbed + ' 条 / 共省 ' + capRes.droppedChars + ' 字符（本轮工具回执 '
-                                + capRes.turnChars + ' 字符）');
+                                + capRes.stubbed + ' 条 / 跳过含图回执 ' + (capRes.skipped || 0) + ' 条 / 共省 '
+                                + capRes.droppedChars + ' 字符（本轮工具回执 ' + capRes.turnChars + ' 字符）');
                         }
                     } catch (e) { /* 限流失败不影响对话 */ }
 
@@ -1573,25 +1663,25 @@ class LLMHandler {
                                         }
 
                                         // 处理普通工具调用结果
+                                        // P0-1：嵌套轮里也可能再调 see image，同样走「tool 文本 + 图片消息」
                                         if (Array.isArray(newToolResult)) {
-                                            newToolResult.forEach(singleResult => {
+                                            const msgs = newToolResult.map(singleResult => {
                                                 const toolCall = visionResult.tool_calls.find(tc => tc.id === singleResult.tool_call_id);
-                                                const toolName = toolCall ? toolCall.function.name : 'unknown';
-
-                                                voiceChat.messages.push({
+                                                return {
                                                     'role': 'tool',
-                                                    'name': toolName,
+                                                    'name': toolCall ? toolCall.function.name : 'unknown',
                                                     'content': singleResult.content,
                                                     'tool_call_id': singleResult.tool_call_id
-                                                });
+                                                };
                                             });
+                                            toolImageAttach.appendToolResults(voiceChat.messages, msgs, { attachImages: !hasRetriedWithoutImage });
                                         } else {
-                                            voiceChat.messages.push({
+                                            toolImageAttach.appendToolResults(voiceChat.messages, [{
                                                 'role': 'tool',
                                                 'name': visionResult.tool_calls[0].function.name,
                                                 'content': newToolResult,
                                                 'tool_call_id': visionResult.tool_calls[0].id
-                                            });
+                                            }], { attachImages: !hasRetriedWithoutImage });
                                         }
                                     } else {
                                         // 🔥 工具调用失败，必须为每个tool_call添加错误消息，保证数量匹配！
@@ -1621,25 +1711,34 @@ class LLMHandler {
                             // 处理多工具调用结果
                             if (Array.isArray(toolResult)) {
                                 // 多个工具调用结果
-                                toolResult.forEach(singleResult => {
+                                // P0-1：先收齐全部 tool 消息再一次性追加 —— 图片作为 user 消息
+                                //   必须排在**整批** tool 响应之后，否则严格模式会判工具链不完整。
+                                const toolMsgs = toolResult.map(singleResult => {
                                     const toolCall = result.tool_calls.find(tc => tc.id === singleResult.tool_call_id);
-                                    const toolName = toolCall ? toolCall.function.name : 'unknown';
-
-                                    voiceChat.messages.push({
+                                    return {
                                         'role': 'tool',
-                                        'name': toolName,  // 🔥 添加name字段
+                                        'name': toolCall ? toolCall.function.name : 'unknown',  // 🔥 添加name字段
                                         'content': singleResult.content,
                                         'tool_call_id': singleResult.tool_call_id
-                                    });
+                                    };
                                 });
+                                const img = toolImageAttach.appendToolResults(voiceChat.messages, toolMsgs, { attachImages: !hasRetriedWithoutImage });
+                                if (img.attached) logToolAction('info', '🖼️ 工具截图已作为图片消息附加给模型（回执里只剩元素清单）');
+                                if (img.suppressed) logToolAction('info', '🖼️ 当前模型不支持图片：工具截图已剥离，按元素清单继续');
+                                if (img.imageTooLarge) logToolAction('warn', '🖼️ 工具截图超过 8MB，已省略图片，仅回元素清单');
+                                if (img.invalid) logToolAction('warn', '🖼️ 工具回执里的图片数据为空/损坏，已按元素清单继续');
                             } else {
                                 // 单个工具调用结果（向后兼容）
-                                voiceChat.messages.push({
+                                const img = toolImageAttach.appendToolResults(voiceChat.messages, [{
                                     'role': 'tool',
                                     'name': result.tool_calls[0].function.name,  // 🔥 添加name字段
                                     'content': toolResult,
                                     'tool_call_id': result.tool_calls[0].id
-                                });
+                                }], { attachImages: !hasRetriedWithoutImage });
+                                if (img.attached) logToolAction('info', '🖼️ 工具截图已作为图片消息附加给模型（回执里只剩元素清单）');
+                                if (img.suppressed) logToolAction('info', '🖼️ 当前模型不支持图片：工具截图已剥离，按元素清单继续');
+                                if (img.imageTooLarge) logToolAction('warn', '🖼️ 工具截图超过 8MB，已省略图片，仅回元素清单');
+                                if (img.invalid) logToolAction('warn', '🖼️ 工具回执里的图片数据为空/损坏，已按元素清单继续');
                             }
 
                             // 继续下一轮循环,AI会根据工具结果决定是否再次调用工具
@@ -1681,7 +1780,9 @@ class LLMHandler {
                     logToTerminal('warn', `⚠️ LLM返回了空响应 (连续第 ${consecutiveEmptyResponses} 次)`);
 
                     // 🔥 检查是否因为图片导致的空响应
-                    if (screenshotBase64 || useVisionModelForFirstRound) {
+                    // P0-1：工具附图（see image）也算「有图」——否则模型不支持视觉时会被判成
+                    //   普通空响应，催一句后继续空转，而不是走「剥图重试」的恢复通道。
+                    if (screenshotBase64 || useVisionModelForFirstRound || hasToolImageMessage(voiceChat.messages)) {
                         logToTerminal('warn', '⚠️ 检测到有截图但返回空响应，可能是模型不支持视觉');
                         throw new Error('模型不支持图片：LLM返回了空响应，可能是因为模型不支持 image_url 参数');
                     }
@@ -1842,8 +1943,8 @@ class LLMHandler {
                 } else {
                     logToTerminal('error', '❌ 未获取到有效的AI回复');
 
-                    // 🔥 检查是否因为图片导致的空回复
-                    if (screenshotBase64 || useVisionModelForFirstRound) {
+                    // 🔥 检查是否因为图片导致的空回复（P0-1：工具附图同样算「有图」）
+                    if (screenshotBase64 || useVisionModelForFirstRound || hasToolImageMessage(voiceChat.messages)) {
                         logToTerminal('warn', '⚠️ 检测到有截图但未获取到回复，可能是模型不支持视觉');
                         throw new Error('模型不支持图片：未获取到有效的AI回复，可能是因为模型不支持 image_url 参数');
                     }
@@ -1857,6 +1958,7 @@ class LLMHandler {
                 } catch (error) {
                     // 🔥 特殊处理：用户打断不是错误，静默退出
                     if (error.message === 'USER_INTERRUPTED') {
+                        _turnHint = { outcome: 'interrupted', errorKind: 'interrupted' };
                         console.log('用户打断处理完成，静默退出');
                         logToTerminal('info', '✅ 已响应用户打断');
                         motionDirector.cancel('user-interrupted');
@@ -1921,12 +2023,17 @@ class LLMHandler {
                                 voiceChat.showSubtitle(fbText, 3000);
                                 if (voiceChat.asrProcessor && asrEnabled) voiceChat.asrProcessor.resumeRecording();
                                 setTimeout(() => voiceChat.hideSubtitle(), 3000);
+                                _finalReply = String(fbText);
+                                _turnFallbackOk = true;
                                 break;
                             }
                         } catch (fbError) {
                             logToTerminal('error', `保底模型也失败: ${fbError.message}`);
                         }
                     }
+
+                    // 主模型失败且保底也没救回来 → 本轮结局不是 ok（旧实现这里 break 后仍记 ok）
+                    _turnHint = classifyTurnFailure(error);
 
                     let errorMessage = "抱歉，出现了一个错误";
 
@@ -2057,17 +2164,31 @@ class LLMHandler {
         //   ② 排队等待（turnGate）不该算进轮内耗时 —— 这里只在真正开跑时计时。
         const runTurnWithTurn = async function(prompt) {
             let outcome = 'ok';
+            let extra;
             try {
                 turnCtx.ensureTurn('chat');
                 turnCtx.markPhase('llm');
                 const reply = await runTurn(prompt);
+                // runTurn 把失败吞成正常 return（打断/空回复/工具链失败都走 catch 后 break），
+                // 真实结局只能看它留下的暗号；没有暗号才是真的 ok。
+                if (_turnHint) {
+                    outcome = _turnHint.outcome;
+                    extra = { errorKind: _turnHint.errorKind };
+                } else if (!_turnFallbackOk && (reply === null || reply === undefined || String(reply).trim() === '')) {
+                    // 空手而归也是失败（典型：工具循环达到 30 轮上限后静默 break）。
+                    // 以前这里照样记 ok，等于把「什么都没说」算成正常完成。
+                    outcome = 'error';
+                    extra = { errorKind: 'empty' };
+                }
                 turnCtx.markPhase('reply');
                 return reply;
             } catch (e) {
-                outcome = 'error';
+                const c = classifyTurnFailure(e);
+                outcome = c.outcome;
+                extra = { errorKind: c.errorKind };
                 throw e;
             } finally {
-                try { turnCtx.endTurn(outcome); } catch (e) { /* 收轮失败不影响对话 */ }
+                try { turnCtx.endTurn(outcome, extra); } catch (e) { /* 收轮失败不影响对话 */ }
             }
         };
 
@@ -2154,4 +2275,6 @@ module.exports = {
     stripOldScreenshotImages,
     // 请求体的历史图片清理（P1-1）：导出让 _probe 断言「剥图在冻结之前、快照==首请求字节」
     stripHistoryImagesForRequest,
+    // 轮结局分类（2026-11-25）：导出让 _probe 直接断言 outcome/errorKind 映射
+    classifyTurnFailure,
 };

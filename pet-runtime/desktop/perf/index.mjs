@@ -70,6 +70,12 @@ export function createPerfEngine(options = {}) {
   let gate = 1;             // 老引擎的包络权重（起势/收势）——它说收就收
   let manual = null;        // 手动层（VTS 注入/预设预览）
   let reactionLayer = null; // 一次性面部表演层（FACS 片段；默认空，见 setReaction）
+  // 待机层偏置（2026-11-25 P1，ADR-015 §3.4 / 审计 §3.2）：
+  //   {amp, bias:{headYaw,headPitch,breath,gazeX,gazeY,posture}} 由 perf/ambient.mjs 产出。
+  //   P1.5 起这里**只**用 amp 收敛本层自己的微抽/漂移：bias 的头/身/眼/呼吸在本画像里
+  //   归外部层（profile.mjs 的 EXTERNALLY_OWNED），写进 FACS 也会被画像丢弃。
+  //   真正的可见偏置走渲染器 setAmbientOffset → PROC_MOTION 单写（perf/ambient-apply.mjs）。
+  let ambientBias = null;
   let intentEmotion = 'neutral';
   let intentVariant = null;
   let intentStrength = 0;
@@ -138,6 +144,58 @@ export function createPerfEngine(options = {}) {
     manual = face ? Object.assign({}, face) : null;
   }
 
+  /**
+   * 待机层偏置（ambient）。传 null 关闭。
+   * P1.5：本层只消费 amp（收敛微抽）；bias 的落地在渲染器的 PROC_MOTION 单写。
+   * @param {{amp?:number,bias?:object}|null} next
+   */
+  function setAmbientBias(next) {
+    if (!next || typeof next !== 'object') { ambientBias = null; return null; }
+    const amp = clamp(Number(next.amp) || 0, 0, 1);
+    const b = next.bias && typeof next.bias === 'object' ? next.bias : {};
+    ambientBias = {
+      amp,
+      bias: {
+        headYaw: Number(b.headYaw) || 0,
+        headPitch: Number(b.headPitch) || 0,
+        breath: Number(b.breath) || 0,
+        gazeX: Number(b.gazeX) || 0,
+        gazeY: Number(b.gazeY) || 0,
+        posture: Number(b.posture) || 0,
+      },
+    };
+    return ambientBias;
+  }
+
+  /**
+   * 把 ambient 的「安静收敛」并进 idle 层。
+   *
+   * ⚠ 2026-11-25 P1.5 契约变更（ADR-015 §3.4 / 审计 §3.2）：
+   *   这里原来还把 bias 的 headYaw→headX、headPitch→headY、breath、gazeX/gazeY、
+   *   posture→bodyZ 写进 idle 层。但这 6 个通道在 profile.mjs 的 EXTERNALLY_OWNED 里
+   *   **全部**是外部所有（interaction-motion / GazeFollow / body-director），
+   *   buildProfile 建画像时整通道丢弃 —— 写了也到不了参数，是「假接线」。
+   *   现在 ambient 偏置的唯一落地路径是渲染器 setAmbientOffset → PROC_MOTION 单写
+   *   （perf/ambient-apply.mjs）；这里只保留它唯一真正有权做的事：
+   *   按 amp 把本层自己的微抽/漂移（browInnerUp / mouthSmile / eyeSmile …，均非外部通道）
+   *   收敛一点，避免和待机层的「安静」叠成两份抖动。
+   * @param {object|null} idleLayer
+   */
+  function applyAmbientToIdle(idleLayer) {
+    if (!ambientBias) return idleLayer;
+    const amp = clamp(ambientBias.amp, 0, 1);
+    const keep = clamp(1 - amp, 0.7, 1);
+    if (!idleLayer) return idleLayer;
+    const out = {};
+    for (const key of Object.keys(idleLayer)) {
+      const raw = Number(idleLayer[key]);
+      if (!Number.isFinite(raw)) continue;
+      const neutral = NEUTRAL_FACS[key] ?? 0;
+      out[key] = key === 'eyeOpen' ? 1 + (raw - 1) * keep : neutral + (raw - neutral) * keep;
+    }
+    return out;
+  }
+
   // 微表情：情绪淡下去时让眉毛/嘴角自己抖一下，避免「石化」。
   // （老引擎里也有一份，但 perf 接管参数后那份到不了渲染层，所以这里重做。）
   function microTwitch() {
@@ -199,6 +257,8 @@ export function createPerfEngine(options = {}) {
       // 极小的底色漂移，避免参数被钉死
       const drift = Math.sin(clock * 1.7) * 0.012;
       idleLayer = Object.assign({}, idleLayer, { browInnerUp: (idleLayer?.browInnerUp || 0) + Math.max(0, drift) });
+      // 待机层偏置（P1）：没有 ambient 时原样返回，旧行为逐值不变
+      idleLayer = applyAmbientToIdle(idleLayer);
     }
 
     // 4) 混合 + 平滑
@@ -266,6 +326,7 @@ export function createPerfEngine(options = {}) {
     gate = 1;
     manual = null;
     reactionLayer = null;
+    ambientBias = null;
     intentEmotion = 'neutral';
     intentStrength = 0;
     speakingFlag = false;
@@ -290,6 +351,9 @@ export function createPerfEngine(options = {}) {
      * reaction 是「演一段」的入口，两者的生命周期不同（一个持续，一个一次性）。
      */
     setReaction(layer) { reactionLayer = layer || null; },
+    /** 待机层偏置（P1）：由 ambient.mjs 每帧产出；只并进 idle 层，不新增 FACS 通道 */
+    setAmbientBias,
+    get ambient() { return ambientBias; },
     update,
     snapshot,
     report,
@@ -303,7 +367,7 @@ export function createPerfEngine(options = {}) {
   };
 }
 
-export { buildProfile, describeCoverage, applyFACS, PROFILE_SPECS, EXTERNALLY_OWNED, EXTERNALLY_OWNED_PARAMS } from './profile.mjs';
+export { buildProfile, describeCoverage, applyFACS, PROFILE_SPECS, EXTERNALLY_OWNED, EXTERNALLY_OWNED_PARAMS, PERF_SHARED_OWNED_PARAMS } from './profile.mjs';
 export { listEmotions, normalizeEmotion, EMOTION_ARCHETYPES } from './archetypes.mjs';
 export { VAD_PRESETS, VadController } from './vad.mjs';
 export { FACS_KEYS, NEUTRAL_FACS, createFACS, clampFACS, lerpFACS, scaleFACS, facsMagnitude } from './facs.mjs';

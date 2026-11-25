@@ -66,8 +66,11 @@ function markPhase(name) {
     current.phases.push({ name: n, offsetMs: Date.now() - current.startedAt });
 }
 
-/** 收轮：写 turn.end 事件（带 total_ms 与各阶段偏移），返回本轮记录。 */
-function endTurn(outcome) {
+/** 收轮：写 turn.end 事件（带 total_ms 与各阶段偏移），返回本轮记录。
+ *  extra：2026-11-25 起支持附加字段（如 errorKind）。旧调用 endTurn('ok') 行为不变；
+ *  metrics 会与内置 metrics 合并，其余键原样进 payload 与本轮记录。
+ */
+function endTurn(outcome, extra) {
     if (!current) return null;
     const t = current;
     current = null;
@@ -76,7 +79,7 @@ function endTurn(outcome) {
     t.outcome = String(outcome || 'ok').slice(0, 24);
     const metrics = { total_ms: t.totalMs, phases: t.phases.length };
     for (const p of t.phases) metrics['phase_' + p.name + '_ms'] = p.offsetMs;
-    emit({
+    const payload = {
         cat: 'turn',
         type: 'turn.end',
         title: '一轮结束(' + t.source + ')',
@@ -87,14 +90,28 @@ function endTurn(outcome) {
         // D9 场景评测要求「turn.end 有 outcome」：原来只写进内部 t.outcome，
         // 遥测里看不到 —— 事后无法区分正常收轮 / 工具批次 / 用户取消。
         outcome: t.outcome,
-    });
+    };
+    if (extra && typeof extra === 'object') {
+        if (extra.metrics && typeof extra.metrics === 'object') Object.assign(payload.metrics, extra.metrics);
+        for (const k of Object.keys(extra)) {
+            if (k === 'metrics' || extra[k] === undefined) continue;
+            payload[k] = extra[k];
+            t[k] = extra[k];
+        }
+    }
+    emit(payload);
     return t;
 }
 
 function stats() {
     return {
         current: current ? { id: current.id, source: current.source, startedAt: current.startedAt } : null,
-        last: last ? { id: last.id, totalMs: last.totalMs, phases: last.phases.slice(), outcome: last.outcome } : null,
+        last: last ? {
+            id: last.id, totalMs: last.totalMs, phases: last.phases.slice(),
+            outcome: last.outcome,
+            // 2026-11-25：失败归因也进 last（排障时不用再翻 telemetry）
+            ...(last.errorKind ? { errorKind: last.errorKind } : {}),
+        } : null,
     };
 }
 

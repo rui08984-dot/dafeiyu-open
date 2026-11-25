@@ -100,5 +100,102 @@ function mk() {
   eq('累计计数不丢', log.stats.skips, 50);
 }
 
+// ── ⑤ P0 新语义：perf.end / endedBy / during vs afterEnd ──────────────
+{
+  const { log, tick } = mk();
+  log.noteDecision({ source: 'auto', emotion: '', intensity: null, played: true, perfKind: 'v2', decision: { clipId: '01-curiosity', label: '疑惑', reason: 'v2-long', detail: { durationMs: 20000 } } });
+  tick(5000);
+  const end = log.noteEnd({ endedBy: 'interrupt' });
+  eq('perf.end 记录 kind', end.kind, 'perf.end');
+  eq('perf.end 记录 endedBy=interrupt', end.endedBy, 'interrupt');
+  eq('perf.end 记录 actualMs（开始到现在）', end.actualMs, 5000);
+  eq('perf.end 带 plannedMs', end.plannedMs, 20000);
+  eq('stats 计 endedBy', log.stats.byEndedBy.interrupt, 1);
+  ok('同一次表演不重复结账', log.noteEnd({ endedBy: 'natural' }) === null);
+  eq('lastPlay 已结账', log.lastPlay.endedAt != null, true);
+
+  tick(10000);   // 开始后 15s，结束后 10s
+  const u = log.noteUserInput();
+  eq('演完之后输入 → phase=afterEnd', u && u.phase, 'afterEnd');
+  eq('afterEnd 的 ms 仍按开始计时（旧字段兼容）', u.ms, 15000);
+  eq('afterEnd 记 sinceEndMs', u.sinceEndMs, 10000);
+  eq('stats 分账 afterEnd', log.stats.afterEnd, 1);
+  eq('stats 分账 during=0', log.stats.during, 0);
+}
+
+// ── ⑥ 播放中的输入记 during（打断），不能被算成被吸引 ────────────────
+{
+  const { log, tick } = mk();
+  log.noteDecision({ source: 'peak', emotion: 'happy', intensity: 0.8, played: true, perfKind: 'clip', decision: { clipId: 'lumen-1', label: '微笑', reason: 'ok', detail: { durationMs: 20000 } } });
+  tick(3000);
+  const u = log.noteUserInput();
+  eq('播放中输入 → phase=during', u && u.phase, 'during');
+  eq('during 的 sinceEndMs 为空', u.sinceEndMs, null);
+  eq('stats 分账 during', log.stats.during, 1);
+  eq('stats 分账 afterEnd=0', log.stats.afterEnd, 0);
+  eq('userAfter 仍是总数（旧字段语义不变）', log.stats.userAfter, 1);
+}
+
+// ── ⑦ afterEnd 窗口从「结束」算，不是从「开始」算 ─────────────────────
+{
+  const { log, tick } = mk();
+  log.noteDecision({ source: 'peak', emotion: 'sad', intensity: 0.9, played: true, perfKind: 'clip', decision: { clipId: 'c1', label: '难过流泪', reason: 'ok', detail: { durationMs: 2000 } } });
+  tick(2000);
+  log.noteEnd({ endedBy: 'natural' });
+  tick(FOLLOW_WINDOW_MS + 1);   // 距结束已超 90s（距开始更久）
+  ok('演完超过 90 秒不再记', log.noteUserInput() === null);
+
+  const y = mk();
+  y.log.noteDecision({ source: 'peak', emotion: 'sad', intensity: 0.9, played: true, perfKind: 'clip', decision: { clipId: 'c2', label: '难过流泪', reason: 'ok', detail: { durationMs: 30000 } } });
+  y.tick(30000);
+  y.log.noteEnd({ endedBy: 'natural' });
+  y.tick(FOLLOW_WINDOW_MS - 100);
+  const late = y.log.noteUserInput();
+  ok('长片演完后 90s 内仍算被吸引（旧实现按开始算会漏掉）', late && late.phase === 'afterEnd', JSON.stringify(late));
+}
+
+// ── ⑧ noteEnd 的归属校验与 endedBy 兜底 ──────────────────────────────
+{
+  const { log, tick } = mk();
+  log.noteDecision({ source: 'peak', emotion: 'shy', intensity: 0.8, played: true, perfKind: 'clip', decision: { clipId: 'lumen-91', label: '害羞', reason: 'ok', detail: {} } });
+  tick(1000);
+  ok('clipId 不匹配时不结账（片段 stop 不会误结 v2 的账）', log.noteEnd({ clipId: 'other-clip' }) === null);
+  const bad = log.noteEnd({ endedBy: 'nonsense' });
+  eq('非法 endedBy 回落 natural', bad.endedBy, 'natural');
+}
+
+// ── ⑨ 摘要（导演预算/被接率闭环）与 perf.request ─────────────────────
+{
+  const { log, tick } = mk();
+  log.noteDecision({ source: 'auto', emotion: '', intensity: null, played: true, perfKind: 'v2', decision: { clipId: 'k1', label: 'long', reason: 'v2-long', detail: { durationMs: 20000 } } });
+  tick(1000);
+  log.noteEnd({ endedBy: 'natural' });
+  tick(200000);
+  log.noteDecision({ source: 'peak', emotion: 'happy', intensity: 0.7, played: true, perfKind: 'clip', decision: { clipId: 'k2', label: '微笑', reason: 'ok', detail: { durationMs: 3000 } } });
+  tick(1000);
+  log.noteEnd({ endedBy: 'natural' });
+  tick(5000);
+  log.noteUserInput();
+  const sum = log.summary();
+  eq('摘要：播放数', sum.plays, 2);
+  eq('摘要：10 分钟内播放数', sum.plays10, 2);
+  eq('摘要：长段今日计数（>10s）', sum.longToday, 1);
+  eq('摘要：今日播放数', sum.playsToday, 2);
+  eq('摘要：被接率样本=已结账次数', sum.replySamples, 2);
+  eq('摘要：被接率', sum.replyRate, 0.5);
+
+  const req = log.noteRequest({
+    owner: 'v2', key: 'auto:idle', perfKind: 'v2', presence: 'away',
+    intensity: 0.3, maxMs: 8000, allowed: false, reason: 'presence:away', mode: 'dryrun',
+  });
+  eq('perf.request 记录 kind', req.kind, 'perf.request');
+  eq('perf.request 记录 allowed=false', req.allowed, false);
+  eq('perf.request 记录 mode', req.mode, 'dryrun');
+  eq('perf.request 计数', log.stats.requests, 1);
+  eq('perf.request 按 reason 计数', log.stats.byRequestReason['presence:away'], 1);
+  eq('摘要：今日请求数', log.summary().requestsToday, 1);
+  eq('摘要：今日被拦数', log.summary().blockedToday, 1);
+}
+
 console.log('  ' + (fail === 0 ? '✅' : '❌') + ' 表演决策日志：PASS ' + pass + ' / FAIL ' + fail);
 process.exit(fail === 0 ? 0 : 1);

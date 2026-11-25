@@ -19,6 +19,7 @@ const jsonStore = require('../../../js/core/json-store.js');
 const { isAddOk, addErrorText, isDeleteOk } = require('../memory-evolve/lib/memos-contract.js');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 // 记录室唯一真源见 js/core/records-path.js。
 // 2026-11-21 A2：原来这里自己拼路径，导致 PET_DATA_ROOT（测试隔离）对它不生效，
@@ -56,6 +57,17 @@ const INSIGHT_INJECT_LIMIT = 1;    // 每轮最多注入 1 条结论
 //   · 上限 5 对应打分加成 1+0.2*ln(6)≈1.36（原实现无上限，58 次时 1.8 封顶，top 分被
 //     从 79.2 抬到 98.0）。封顶后「被想起」仍比没想起高 ~36%，但不会自我循环放大。
 const REINFORCE_CAP = 5;
+// 强化表体积上限（2026-11-25 P1）：现场 666 keys 只增不减。
+//   · key 上限 2000（超出按 lastAt 淘汰最旧；同 lastAt 再按计数小者先淘汰）
+//   · 90 天 TTL（按 lastAt；旧格式纯数字值在载入时补 lastAt=now，之后自然老化）
+//   · 值从纯数字迁移为 {c, lastAt}，读侧两种都认（旧文件不用手工迁移）
+const REINFORCE_MAX_KEYS = 2000;
+const REINFORCE_TTL_DAYS = 90;
+const REINFORCE_TTL_MS = REINFORCE_TTL_DAYS * 86400000;
+// 向量缓存统计（供插件 inspect/stats 读取；不是打分链路的一部分）
+function emptyVecStats() {
+  return { hits: 0, evicted: 0, rebuilt: 0, incremental: false };
+}
 
 /** 记忆质量守卫计数器的空表（onInit 与构造器共用，避免未初始化时读 undefined） */
 function emptyQuality() {
@@ -297,6 +309,12 @@ class MemoryRecallPlugin extends Plugin {
     // 构造期先给默认值：单测/调试可能在 onInit 之前读计数器
     this._quality = emptyQuality();
     this._continuityDone = false;
+    // 增量 rebuild / 向量缓存统计：单测可能在 onInit 前直接调 _rebuild/ stats()
+    this._docsVersion = '';
+    this._lastRebuildMs = 0;
+    this._dedupDropped = 0;
+    this._dedupLoggedCount = -1;
+    this._vecStats = emptyVecStats();
   }
 
   async onInit() {
@@ -331,9 +349,10 @@ class MemoryRecallPlugin extends Plugin {
     // 语义放行阈值：词法不达标但 cosine 够高的命中，允许进注入（换说法也能召回）
     this._cosMin = Number(val('hybrid_cos_min', 0.55));
     if (!Number.isFinite(this._cosMin) || this._cosMin <= 0 || this._cosMin > 1) this._cosMin = 0.55;
-    this._vec = null;          // { vectors, dim, model, embedded, reused }
+    this._vec = null;          // { vectors, dim, model, embedded, reused, version, keys, cache }
     this._vecTriedAt = 0;
     this._vecWarned = false;
+    this._vecStats = emptyVecStats();   // 向量缓存命中/淘汰/增量统计（插件 inspect 可读）
     this._maxDocs = Number(val('max_docs', 4000)) || 4000;
     this._rebuildSeconds = Number(val('rebuild_seconds', 90)) || 90;
 
@@ -343,6 +362,9 @@ class MemoryRecallPlugin extends Plugin {
     this._charDf = new Map();   // 单字文档频率（独立表）：_df 只存 bigram/整词，查单字永远是 0
     this._index = [];
     this._builtAt = 0;
+    this._docsVersion = '';     // 文档集内容指纹（增量 rebuild：版本没变直接 return）
+    this._lastRebuildMs = 0;
+    this._dedupDropped = 0;     // 上次 rebuild 因与对话历史重复而跳过的 记忆库 条数
     this._recordsDir = RECORDS;   // 单测可指向临时目录；生产恒为记录室
     this._lastInject = null;
     // 闸门计数（2026-11-21）：cos 放行 / 稀有单字放行各多少次 —— 注入日志里带出来，
@@ -401,6 +423,10 @@ class MemoryRecallPlugin extends Plugin {
   _rebuild(opts) {
     const o = opts || {};
     const base = o.dir || this._recordsDir || RECORDS;
+    const t0 = Date.now();
+    // 90 秒定时器也会走到这里：先把上一轮检索累积的向量 usage 落盘（LRU 的输入），
+    // 再有版本未变就直接 return —— 不再每 90 秒把 1500 条全文重新分词建索引。
+    this._flushVectorUsage();
     let docs = [];
     const stats = { noise: 0, scaffold: 0 };
     toDocsFromJsonl(path.join(base, '对话历史.jsonl'), docs, stats);
@@ -469,9 +495,8 @@ class MemoryRecallPlugin extends Plugin {
     stats.tombstoned = tombstoned;       // 与 noise/scaffold 同层的载入期统计
     this._tombstonedCount = tombstoned;  // _sourcesText() 展示「墓碑 N」
 
-    // 载入期按角色挡掉的条数（脚手架/占位/工具回执）—— 见 debugState().quality.noiseDropped
-    this._quality.noiseDropped += stats.noise;
-    this._quality.scaffoldDropped += stats.scaffold;
+    // 载入期按角色挡掉的条数（脚手架/占位/工具回执）—— 见 debugState().quality.noiseDropped。
+    // ⚠ 只在「版本变了、真的重建」时累加；否则每 90 秒空跑一次会把计数吹大。
     // 一次性计数日志：真实记录室里 1393 行噪声（空占位/分隔线/脚手架），
     // 每 90 秒 rebuild 都打会刷屏，所以每进程只喊第一次。
     if (stats.noise > 0 && !this._noisePrunedLogged) {
@@ -481,11 +506,77 @@ class MemoryRecallPlugin extends Plugin {
           + ' 条噪声（其中系统脚手架 ' + stats.scaffold + ' 条：role=user 的括号指令/JSON 回执）');
       } catch (e) { /* 日志失败不影响索引 */ }
     }
-    this._installDocs(docs);
+    // 先整理（剪脚手架 + 按 maxDocs 截尾 + 算同来源名次），再对**最终保留集**做去重。
+    // ⚠ 顺序很重要：若先去重再截尾，_maxDocs 丢掉最旧的「对话」副本时，对应的「记忆库」
+    //    副本已经被删掉 → 那句话从索引里彻底消失。先截尾：被丢的对话副本不触发去重，
+    //    记忆库副本仍在；只有两边都活下来的重复才合并成一份。
+    const prepared = this._prepareDocs(docs);
+    this._dedupPrepared(prepared);
+    const version = this._fingerprintDocs(prepared.kept);
+    if (this._builtAt && version === this._docsVersion) {
+      this._lastRebuildMs = Date.now() - t0;
+      return;
+    }
+    this._lastRebuildMs = Date.now() - t0;
+    this._quality.noiseDropped += stats.noise;
+    this._quality.scaffoldDropped += stats.scaffold;
+    this._installPrepared(prepared);
   }
 
-  /** 把文档集装进索引（_rebuild 的内存后半段）。单独拆出来是为了单测能直连 mock 文档。 */
-  _installDocs(docs) {
+  /** 文档集内容指纹：src/role/text/t/stable 任一变化都会变。顺序敏感（数组顺序=时间顺序）。 */
+  _fingerprintDocs(docs) {
+    const h = crypto.createHash('md5');
+    for (const d of (docs || [])) {
+      if (!d) continue;
+      h.update(String(d.src || ''));
+      h.update('\u0001');
+      h.update(String(d.role || ''));
+      h.update('\u0001');
+      h.update(String(d.text || ''));
+      h.update('\u0001');
+      h.update(String(Number(d.t) || 0));
+      h.update('\u0001');
+      h.update(d.stable === false ? '0' : '1');
+      h.update('\u0002');
+    }
+    return h.digest('hex');
+  }
+
+  /**
+   * 记忆库 ↔ 对话历史去重（2026-11-25 P1-4）：同一句话在两个来源各存一份。
+   * 只跳过**归一化文本完全相同**的 记忆库 条目（复用近义去重的 normalizeForDedup：
+   * 忽略空白/标点/大小写）；近似句仍保留（可能是不同语境）。
+   * 必须在 _prepareDocs 之后调用（见 _rebuild 里的顺序说明）。
+   * @returns {number} 跳过的条数
+   */
+  _dedupPrepared(prepared) {
+    if (!prepared || !Array.isArray(prepared.kept)) return 0;
+    let dupSkipped = 0;
+    const convTexts = new Set();
+    for (const d of prepared.kept) {
+      if (d && d.src === '对话' && d.text) convTexts.add(normalizeForDedup(d.text));
+    }
+    if (convTexts.size) {
+      prepared.kept = prepared.kept.filter((d) => {
+        if (!d || d.src !== '记忆库' || !d.text) return true;
+        if (!convTexts.has(normalizeForDedup(d.text))) return true;
+        dupSkipped += 1;
+        return false;
+      });
+    }
+    this._dedupDropped = dupSkipped;
+    // 同一批重复量不重复刷屏（90 秒 tick 也会走到这里）；数量变了才再记一行。
+    if (dupSkipped > 0 && dupSkipped !== this._dedupLoggedCount) {
+      this._dedupLoggedCount = dupSkipped;
+      try {
+        this.context.log('info', '[memory-recall] 索引去重：跳过与对话历史重复的 记忆库 条目 ' + dupSkipped + ' 条');
+      } catch (e) { /* 日志失败不影响索引 */ }
+    }
+    return dupSkipped;
+  }
+
+  /** 把原始文档集整理成「可安装」形态（剪脚手架、按上限截尾、算同来源名次）。幂等。 */
+  _prepareDocs(docs) {
     const raw = Array.isArray(docs) ? docs : [];
     // 存量脚手架清理（2026-11-21 质量轮）：历史 jsonl 里已经有 20 条「（你正和用户一起看屏幕…）」
     // 被索引过。不去改盘上历史，只在装索引时按同一套通用判据剪掉 —— 下次 _rebuild 自然干净。
@@ -495,18 +586,6 @@ class MemoryRecallPlugin extends Plugin {
     for (const d of raw) {
       if (d && d.role === 'user' && isScaffolding(d.text, 'user')) { pruned += 1; continue; }
       list.push(d);
-    }
-    if (pruned > 0) {
-      this._quality.rebuildPruned += pruned;
-      this._quality.noiseDropped += pruned;
-      this._quality.scaffoldDropped += pruned;
-      // 一次性计数日志：每进程只喊一次，避免每 90 秒 rebuild 刷屏
-      if (!this._noisePrunedLogged) {
-        this._noisePrunedLogged = true;
-        try {
-          this.context.log('info', '[memory-recall] 索引清理：跳过 ' + pruned + ' 条系统脚手架（role=user 的括号指令/JSON 回执）');
-        } catch (e) { /* 日志失败不影响索引 */ }
-      }
     }
     // 数组顺序就是时间顺序，只留最新的一批
     const kept = list.length > this._maxDocs ? list.slice(list.length - this._maxDocs) : list;
@@ -520,6 +599,28 @@ class MemoryRecallPlugin extends Plugin {
         const r = rankBy.get(d.src) || 0;
         d.rank = r;
         rankBy.set(d.src, r + 1);
+      }
+    }
+    return { kept, pruned };
+  }
+
+  /** 把文档集装进索引（_rebuild 的内存后半段）。单独拆出来是为了单测能直连 mock 文档。 */
+  _installDocs(docs) {
+    return this._installPrepared(this._prepareDocs(docs));
+  }
+
+  _installPrepared(prepared) {
+    const { kept, pruned } = prepared || { kept: [], pruned: 0 };
+    if (pruned > 0) {
+      this._quality.rebuildPruned += pruned;
+      this._quality.noiseDropped += pruned;
+      this._quality.scaffoldDropped += pruned;
+      // 一次性计数日志：每进程只喊一次，避免每 90 秒 rebuild 刷屏
+      if (!this._noisePrunedLogged) {
+        this._noisePrunedLogged = true;
+        try {
+          this.context.log('info', '[memory-recall] 索引清理：跳过 ' + pruned + ' 条系统脚手架（role=user 的括号指令/JSON 回执）');
+        } catch (e) { /* 日志失败不影响索引 */ }
       }
     }
     const df = new Map();
@@ -540,14 +641,29 @@ class MemoryRecallPlugin extends Plugin {
       }
       for (const ch of chars) charDf.set(ch, (charDf.get(ch) || 0) + 1);
     }
+    // 文档集变了 → 向量要跟着走。先把旧 cache 的 usage 落盘再丢弃（否则最后一次检索的 lastUsedAt 丢失）。
+    this._flushVectorUsage();
     this._docs = kept;
     this._df = df;
     this._charDf = charDf;
     this._index = index;
     this._builtAt = Date.now();
-    // 文档集变了 → 向量要跟着走。异步补建，不阻塞索引（8090 挂了也只是一直用词法）。
+    this._docsVersion = this._fingerprintDocs(kept);
     this._vec = null;
     if (this._hybrid) setTimeout(() => { this._ensureVecIndex().catch(() => {}); }, 300);
+    return this._docsVersion;
+  }
+
+  /** 把内存里的向量 usage（lastUsedAt/hits）落盘；没变化时 hybrid-vectors 自己跳过写盘。 */
+  _flushVectorUsage() {
+    if (!this._vec || !this._vec.cache || !this._vec.cache.dirty) return;
+    try {
+      const hv = require('../../../js/core/hybrid-vectors.js');
+      const r = hv.flushUsage(path.join(this._recDir(), '记忆向量.json'), this._vec.cache, {
+        keepKeys: Array.isArray(this._vec.keys) ? this._vec.keys : []
+      });
+      if (r && r.evicted) this._vecStats.evicted += Number(r.evicted) || 0;
+    } catch (e) { /* usage 落盘失败不影响检索 */ }
   }
 
   /**
@@ -556,8 +672,18 @@ class MemoryRecallPlugin extends Plugin {
    */
   async _ensureVecIndex() {
     if (!this._hybrid) return null;
-    if (this._vec && this._vec.vectors && this._vec.vectors.length === this._docs.length) return this._vec;
-    if (Date.now() - this._vecTriedAt < 30000) return this._vec;   // 30s 内不重复尝试（8090 挂了别每轮撞）
+    // 版本未变 = 文档集完全一样 → 直接用现有向量，不重复 ensure/save（每 90 秒最多一次的意义所在）。
+    // ⚠ 版本不同即使条数相同也必须重建（一句被替换时 length 不变）—— 所以 version 优先，
+    //   只在老形状没有 version 时才退回按条数判断。
+    if (this._vec && this._vec.version) {
+      if (this._vec.version === this._docsVersion) return this._vec;
+    } else if (this._vec && this._vec.vectors && this._vec.vectors.length === this._docs.length) {
+      return this._vec;
+    }
+    // 30s 内不重复尝试（8090 挂了别每轮撞）。例外：已有向量但文档版本变了 ——
+    // 这是「真增量」，必须马上补嵌，不能被上次失败/构建的退避挡住。
+    const stale = !!(this._vec && this._vec.version && this._vec.version !== this._docsVersion);
+    if (!stale && Date.now() - this._vecTriedAt < 30000) return this._vec;
     this._vecTriedAt = Date.now();
     try {
       const hv = require('../../../js/core/hybrid-vectors.js');
@@ -571,7 +697,13 @@ class MemoryRecallPlugin extends Plugin {
         }
         return null;
       }
+      built.version = this._docsVersion;
       this._vec = built;
+      // 统计（插件 inspect/stats 可读）：hits=缓存复用条数；evicted=本次收口淘汰条数
+      this._vecStats.hits += Number(built.reused) || 0;
+      this._vecStats.evicted += Number(built.evicted) || 0;
+      this._vecStats.rebuilt += 1;
+      this._vecStats.incremental = !!built.incremental;
       // 只记一次（含「全复用」的情况）：不记的话日志里会以为混合召回没生效
       if (!this._vecLogged) {
         this._vecLogged = true;
@@ -589,7 +721,39 @@ class MemoryRecallPlugin extends Plugin {
     if (this._reinforce) return;
     // 读坏了由 json-store 改名隔离并返回 null（有 console.warn）；这里照旧从空表开始
     const raw = jsonStore.readJson(path.join(this._recDir(), '记忆强化.json'), null);
-    this._reinforce = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+    const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+    const out = {};
+    const now = Date.now();
+    for (const [key, val] of Object.entries(src)) {
+      if (!key) continue;
+      // 旧格式是纯数字（666 keys 只增不减的现场）；载入时补 lastAt=now，
+      // 让它从「本进程第一次读」起算 90 天 TTL，而不是立刻被当成过期清空。
+      if (val && typeof val === 'object') {
+        out[key] = { c: Math.max(0, Number(val.c) || 0), lastAt: Number(val.lastAt) || now };
+      } else {
+        out[key] = { c: Math.max(0, Number(val) || 0), lastAt: now };
+      }
+    }
+    this._reinforce = out;
+  }
+
+  _reinforceEntry(key) {
+    this._loadReinforce();
+    let e = this._reinforce[key];
+    if (!e || typeof e !== 'object') {
+      e = { c: Math.max(0, Number(e) || 0), lastAt: Date.now() };
+      this._reinforce[key] = e;
+    }
+    return e;
+  }
+
+  /** 读侧统一入口：新旧两种值形状都认，且封顶 REINFORCE_CAP（历史 58 次按 5 算）。 */
+  _reinforceCount(key) {
+    this._loadReinforce();
+    const e = this._reinforce && this._reinforce[key];
+    if (!e) return 0;
+    if (typeof e === 'object') return Math.min(REINFORCE_CAP, Number(e.c) || 0);
+    return Math.min(REINFORCE_CAP, Number(e) || 0);
   }
 
   _saveReinforce() {
@@ -602,20 +766,51 @@ class MemoryRecallPlugin extends Plugin {
       }
       return;
     }
+    this._loadReinforce();
+    const now = Date.now();
     // 存量污染自然收敛（2026-11-21 质量轮）：历史最高 58 次，读侧已按 5 封顶；
     // 这里在任何一次正常写回时把 >5 的值一起夹到 5，不需要单独的数据迁移脚本。
     let clamped = 0;
-    for (const k of Object.keys(this._reinforce || {})) {
-      const v = Number(this._reinforce[k]) || 0;
-      if (v > REINFORCE_CAP) { this._reinforce[k] = REINFORCE_CAP; clamped += 1; }
+    for (const key of Object.keys(this._reinforce || {})) {
+      const e = this._reinforce[key];
+      if (!e || typeof e !== 'object') {
+        this._reinforce[key] = { c: Math.max(0, Number(e) || 0), lastAt: now };
+        continue;
+      }
+      const c = Number(e.c) || 0;
+      if (c > REINFORCE_CAP) { e.c = REINFORCE_CAP; clamped += 1; }
+      if (!Number(e.lastAt)) e.lastAt = now;
     }
-    if (clamped && !this._reinforceClampLogged) {
+    // 90 天 TTL：按 lastAt 淘汰（强化表只该记住「最近还在被想起」的条目）
+    let expired = 0;
+    for (const key of Object.keys(this._reinforce || {})) {
+      const e = this._reinforce[key];
+      if (now - (Number(e && e.lastAt) || 0) > REINFORCE_TTL_MS) {
+        delete this._reinforce[key];
+        expired += 1;
+      }
+    }
+    // key 上限：按 (lastAt, c) 升序淘汰最旧/最弱的
+    let evicted = 0;
+    let keys = Object.keys(this._reinforce || {});
+    if (keys.length > REINFORCE_MAX_KEYS) {
+      const victims = keys.map((k) => ({ k, lastAt: Number(this._reinforce[k].lastAt) || 0, c: Number(this._reinforce[k].c) || 0 }))
+        .sort((a, b) => a.lastAt - b.lastAt || a.c - b.c || (a.k < b.k ? -1 : a.k > b.k ? 1 : 0));
+      for (const v of victims) {
+        if (Object.keys(this._reinforce).length <= REINFORCE_MAX_KEYS) break;
+        delete this._reinforce[v.k];
+        evicted += 1;
+      }
+    }
+    if ((clamped || expired || evicted) && !this._reinforceClampLogged) {
       this._reinforceClampLogged = true;
-      try { this.context.log('info', '[memory-recall] 强化表收敛：' + clamped + ' 条历史计数 >' + REINFORCE_CAP + ' 已夹到上限'); }
-      catch (e) { /* 日志失败不影响写回 */ }
+      try {
+        this.context.log('info', '[memory-recall] 强化表收敛：夹到上限 ' + clamped + ' 条，过期 ' + expired
+          + ' 条，超 ' + REINFORCE_MAX_KEYS + ' 淘汰 ' + evicted + ' 条');
+      } catch (e) { /* 日志失败不影响写回 */ }
     }
     try {
-      jsonStore.writeJson(file, this._reinforce || {});
+      jsonStore.writeJson(file, this._reinforce || {}, { pretty: false });
     } catch (e) { try { __silentAudit.audit('index.js:194', e); } catch (e2) {} }
   }
 
@@ -632,12 +827,18 @@ class MemoryRecallPlugin extends Plugin {
   _reinforceDocs(docs) {
     this._loadReinforce();
     let changed = 0;
+    const now = Date.now();
     for (const d of docs || []) {
       const key = this._docKey(d);
-      const cur = Math.min(REINFORCE_CAP, Number(this._reinforce[key]) || 0);
+      const e = this._reinforceEntry(key);
+      const cur = Math.min(REINFORCE_CAP, Number(e.c) || 0);
       const next = Math.min(REINFORCE_CAP, cur + 1);
-      if (next === cur && Number(this._reinforce[key]) >= REINFORCE_CAP) continue;  // 已到顶，不重复写
-      this._reinforce[key] = next;
+      // 已到顶也可能只是「又被想起」：lastAt 要刷新（否则 90 天 TTL 按最后一次**加计数**算会误删
+      // 每天都在用的条目）。为免每条注入都写盘，lastAt 最多每小时刷一次。
+      const touchLastAt = (now - (Number(e.lastAt) || 0)) > 3600000;
+      if (next === cur && !touchLastAt) continue;
+      e.c = next;
+      e.lastAt = now;
       changed += 1;
     }
     if (!changed) return;
@@ -729,7 +930,7 @@ class MemoryRecallPlugin extends Plugin {
       const importance = SRC_IMPORTANCE[this._docs[i].src] || 0.3;
       const key = this._docKey(this._docs[i]);
       // 读侧也封顶：历史里 58 次的条目按 5 次算，旧污染不会继续抬高排序
-      const hits = Math.min(REINFORCE_CAP, Number(this._reinforce && this._reinforce[key]) || 0);
+      const hits = this._reinforceCount(key);
       const reinforce = Math.min(1.8, 1 + 0.2 * Math.log(1 + hits));
       score *= (0.9 + 0.5 * activity + 0.9 * importance) * reinforce;
       if (score >= minScore) scored.push({ score, doc: this._docs[i], i });
@@ -1349,6 +1550,9 @@ class MemoryRecallPlugin extends Plugin {
     const cosRanks = hv.rankOf(cosScores);
     const fused = hv.fuseRRF([{ ranks: lexRanks, weight: this._wLex }, { ranks: cosRanks, weight: this._wVec }], 60);
     const rows = [...fused.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit);
+    // LRU 的输入：只把真正进 topN 的文档记一次「被用过」（lastUsedAt/hits）。
+    // 不阻塞检索：失败就跳过，下次检索还会记。
+    try { hv.noteHits(built, rows.map(([i]) => i)); } catch (e) { /* usage 统计失败不影响召回 */ }
     return rows.map(([i, f]) => ({
       i, doc: this._docs[i],
       score: lexScores[i], cos: cosScores[i] || 0, fused: f,
@@ -1685,7 +1889,9 @@ class MemoryRecallPlugin extends Plugin {
           });
         }
         if (entries.length) {
-          memoryUsage.noteInjected({ entries, at: Date.now() });
+          // P1-2（2026-11-25）：把本轮**用户查询**一起登记。结算时要把「她自己旧台词」
+          // 与「查询词里本来就有的实体」排除，否则重复词会被算成兑现。
+          memoryUsage.noteInjected({ entries, at: Date.now(), query: text.slice(0, 200) });
         } else if (injectedTexts.length) {
           this.context.log('warn', '[memory-recall] 注入条目对不回原文，本次不记兑现率（' + injectedTexts.length + ' 条）');
         }
@@ -1723,6 +1929,32 @@ class MemoryRecallPlugin extends Plugin {
     } catch (e) { try { __silentAudit.audit('index.js:memory-usage-tts', e); } catch (e2) {} }
   }
 
+  /**
+   * 可读运行统计（插件 inspect / doctor 调用；与 performance* 链路解耦）。
+   * @returns {{docs:number, vectors:number, hits:number, evicted:number, lastRebuildMs:number, incremental:boolean}}
+   *   hits      累计「向量缓存复用」条数（嵌入没有重算的文档）
+   *   evicted   累计被 LRU 淘汰的缓存条目
+   *   lastRebuildMs  最近一次真正重建索引（版本变化时）的耗时
+   *   incremental    最近一次向量构建是否只嵌了新增/变更文档
+   */
+  stats() {
+    const v = this._vec || {};
+    const s = this._vecStats || emptyVecStats();
+    return {
+      docs: (this._docs || []).length,
+      vectors: Array.isArray(v.vectors) ? v.vectors.length : 0,
+      hits: Number(s.hits) || 0,
+      evicted: Number(s.evicted) || 0,
+      lastRebuildMs: Number(this._lastRebuildMs) || 0,
+      incremental: !!s.incremental
+    };
+  }
+
+  /** inspect 别名：保持「插件 inspect」这个入口名字可读。 */
+  inspect() {
+    return this.stats();
+  }
+
   /** 供 doctor/调试：记忆质量守卫的可观测计数（2026-11-21 质量轮） */
   debugState() {
     const q = this._quality || {};
@@ -1732,6 +1964,8 @@ class MemoryRecallPlugin extends Plugin {
       builtAt: this._builtAt,
       lastInject: this._lastInject,
       reinforceCap: REINFORCE_CAP,
+      vectorCache: this.stats(),
+      dedupDropped: Number(this._dedupDropped) || 0,
       quality: {
         noiseDropped: Number(q.noiseDropped) || 0,
         scaffoldDropped: Number(q.scaffoldDropped) || 0,
@@ -1763,6 +1997,7 @@ class MemoryRecallPlugin extends Plugin {
               limit: { type: 'number', description: '最多几条，默认 5（facts 默认 8）' },
               n: { type: 'number', description: '要几条，默认 8' },
               include_expired: { type: 'boolean', description: '（facts）是否带上已被取代的旧事实（问「以前那只猫叫什么」时用）' },
+              include_events: { type: 'boolean', description: '（facts）是否带上一次性事件事实（默认过滤「今天下午开会」这类；长期特质/偏好始终返回）' },
             },
             required: ['action'],
           },
@@ -1805,12 +2040,19 @@ class MemoryRecallPlugin extends Plugin {
       if (name === 'facts') {
         // 事实层直查（2026-11-15）：默认只看**现在成立**的；include_expired 才带出被取代的，
         // 并且明确标出有效期 —— 问「以前那只猫叫什么」时要的就是这个。
+        // 2026-11-25 P0-3：片段卡提炼的一次性事件（kind=event）不是「现在成立的事实」
+        //（「下午三点开会」这类），默认过滤；要带出来必须显式 include_events:true。
         const uf = require('../../../js/core/user-facts.js');
+        const includeEvents = params && params.include_events === true;
         const rows = uf.searchFacts(String((params && params.query) || ''), {
           limit: Math.max(1, Math.min(20, Number(params && params.limit) || 8)),
           includeExpired: params && params.include_expired === true,
         });
-        return JSON.stringify({ ok: true, count: rows.length, items: rows });
+        const visible = includeEvents ? rows : rows.filter((r) => (r.kind || 'trait') !== 'event');
+        const hidden = rows.length - visible.length;
+        const out = { ok: true, count: visible.length, items: visible };
+        if (hidden) out.hidden_events = hidden;
+        return JSON.stringify(out);
       }
       if (name === 'recent_timeline') {
         if (!this._docs.length) this._rebuild();
@@ -1847,6 +2089,8 @@ MemoryRecallPlugin.isScaffolding = isScaffolding;
 MemoryRecallPlugin.bigramJaccard = bigramJaccard;
 MemoryRecallPlugin.normalizeForDedup = normalizeForDedup;
 MemoryRecallPlugin.REINFORCE_CAP = REINFORCE_CAP;
+MemoryRecallPlugin.REINFORCE_MAX_KEYS = REINFORCE_MAX_KEYS;
+MemoryRecallPlugin.REINFORCE_TTL_DAYS = REINFORCE_TTL_DAYS;
 MemoryRecallPlugin.DEDUP_JACCARD = DEDUP_JACCARD;
 
 module.exports = MemoryRecallPlugin;

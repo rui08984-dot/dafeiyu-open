@@ -493,6 +493,10 @@ class AddMemoryRequest(BaseModel):
     source: Optional[str] = None
     turn_id: Optional[str] = None
     confidence: Optional[float] = None
+    # 2026-11-25 审计 P0-1：`added=0` 的条目每 30s 被队列重投一次，每次都抽实体写图
+    # （graph_store.json 因此攒了重复节点）。调用方明确传 False 时跳过实体提取；
+    # 不传（None）与旧行为完全一致（仍然提取）。
+    extract_entities: Optional[bool] = None
 
 
 class RawMemoryMessage(BaseModel):
@@ -2086,7 +2090,9 @@ async def add_memory(request: AddMemoryRequest):
                 logger.info(f"[OK] 新增记忆: {content[:50]}... (类型:{memory_type}, 重要度:{importance})")
 
         # ========== 2. 自动提取实体 ==========
-        if entity_extractor and neo4j_client:
+        # 2026-11-25 审计 P0-1：队列重投且已确认「0 条」的条目会带 extract_entities=False，
+        # 此时不再抽实体/写图（避免 added=0 却反复往图谱灌同一批节点）。
+        if entity_extractor and neo4j_client and request.extract_entities is not False:
             try:
                 print(f"\n🕸️ [实体提取] 正在分析知识图谱实体...")
                 entities, relations = await entity_extractor.extract(full_conversation, context_summary)

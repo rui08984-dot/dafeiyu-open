@@ -117,6 +117,102 @@ function shouldSupersede(newText, oldText) {
     return false;
 }
 
+// ── 事实种类（2026-11-25 审计 P0-3）──────────────────────────────────────
+// 背景：`用户事实.json` 63 条全部 valid_to=null，其中 62 条是片段卡提炼的
+// **一次性事件**（「下午三点开会」「桌面开13个窗口」），却被 `recall action=facts`
+// 当成「现在成立的事实」回答。
+//
+// 口径（保守）：trait（长期）/ preference（偏好）/ event（一次性）。
+//   · 只有 source=episode 才可能是 event —— explicit/manual 写入按长期处理；
+//   · 「拿不准」一律 trait：宁可让一条事件多留 7 天，也不能把长期特质判成事件删掉。
+//   · event 带 valid_to = 事件日期 + 1 天（解析不出日期 → now + 7 天），
+//     由 activeFacts()/索引自然掉出，不再需要读侧每次都猜。
+const KIND_TRAIT = 'trait';
+const PREFERENCE_RE = /(喜欢|不喜欢|爱吃|不吃|讨厌|偏好|习惯|受不了|最怕|最爱|过敏|不能吃|迷上)/;
+const EVENT_TIME_RE = /(今天|今晚|昨天|昨晚|前天|明天|明早|明晚|后天|刚才|刚刚|凌晨|早上|早晨|上午|中午|下午|傍晚|晚上|半夜|深夜|周末|上周|下周|上个月|下个月|月底|月初|年底)/;
+// 只看**数字在前**的点钟（「一点点」「快点」不算），后接 半/钟/分/左右/前/后/整/标点/空白。
+const EVENT_CLOCK_RE = /(?:[0-9]{1,2}\s*[:：]\s*[0-9]{2})|(?:[0-9零一二三四五六七八九十两]{1,3}\s*点(?:半|钟|[0-9]{1,2}\s*分?|左右|前|后|多|整|[，。；、！？\s]|$))/;
+const ONE_OFF_VERB_RE = /(开会|出门|到家|回来|离开|走后|洗澡|洗了|睡了|睡醒|醒来|吃了|喝了|买了|去了|来了|打开|关闭|截图|发送|发了|送去|看完|玩完|打完|收拾|泡了|做完|聊了|遇到|提过|抽烟|准备去|报喜|升职|面试过)/;
+// 2026-11-25 审计 P0-2：习惯/周期性表述。原来「我一般晚上八点跑步」「我每天吃了晚饭就散步」
+// 命中 ONE_OFF_VERB_RE / EVENT_TIME_RE 就被判成一次性事件，次日/7 天后失效。
+// 习惯是长期成立的，必须先于 event 判定。
+const HABIT_RE = /(每天|每日|每周|每星期|每月|每年|一般|通常|平常|平时|习惯|总是|经常|常常|每晚|每早|每个|一到|都会|总要|天天)/;
+// 只有时段词、没有「今天/昨天/刚才」这类一次性日标记时，按习惯处理
+// （「我早上喝咖啡」是作息；「今天下午三点开会」仍是一次性事件）。
+const BARE_TIME_RE = /(早上|早晨|上午|中午|下午|傍晚|晚上|半夜|深夜)/;
+const DAY_MARK_RE = /(今天|今晚|昨天|昨晚|前天|明天|明早|明晚|后天|刚才|刚刚|周末|上周|下周|上个月|下个月|月底|月初|年底)/;
+// 天气/温度播报不是作息（「天气晴转多云，最高5度、晚上零下5度」）——先排除再谈习惯。
+const WEATHER_RE = /(天气|气温|降雨|降雪|风力|湿度|晴|多云|阴天|雨|雪|雷|雾|霾|零下|度)/;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function dayStartOf(ts) {
+    const d = new Date(Number(ts) || Date.now());
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+}
+
+/**
+ * 是不是习惯/周期性表述（纯文本，无需 LLM）。迁移脚本也用它把误判成 event 的旧事实改回来。
+ * 口径（保守）：命中习惯词 → 是；只有时段词且没有明确某天的标记、也没有一次性动词 → 是。
+ * 「每天/每晚 + 点钟」由 HABIT_RE 直接覆盖，优先 trait；
+ * 「今天/昨天/刚才 + 点钟」有 DAY_MARK_RE，仍走 event。
+ */
+function isHabitFact(text) {
+    const t = String(text || '').trim();
+    if (!t) return false;
+    if (HABIT_RE.test(t)) return true;
+    return BARE_TIME_RE.test(t) && !DAY_MARK_RE.test(t) && !ONE_OFF_VERB_RE.test(t) && !WEATHER_RE.test(t);
+}
+
+/**
+ * 给事实定 kind（trait | preference | event）。纯函数，迁移脚本与测试共用。
+ * @param {string} text
+ * @param {string} [source] 'episode' | 'explicit' | 'manual' | …
+ */
+function classifyFact(text, source) {
+    const t = String(text || '').trim();
+    if (!t) return KIND_TRAIT;
+    // 习惯/周期性优先于一切：它既不是一次性事件，也不该带有效期。
+    if (isHabitFact(t)) return KIND_TRAIT;
+    if (PREFERENCE_RE.test(t)) return 'preference';
+    if (String(source || '') !== 'episode') return KIND_TRAIT;
+    if (EVENT_TIME_RE.test(t) || EVENT_CLOCK_RE.test(t) || ONE_OFF_VERB_RE.test(t)) return 'event';
+    return KIND_TRAIT;   // 拿不准 → 长期（保守）
+}
+
+/**
+ * 一次性事件的天然寿命：事件日期 + 1 天；解析不出日期 → base + 7 天。
+ * 纯函数（baseTs 可注入），不读时钟以外的状态。
+ */
+function eventValidTo(text, baseTs) {
+    const t = String(text || '');
+    const base = Number.isFinite(Number(baseTs)) && Number(baseTs) > 0 ? Number(baseTs) : Date.now();
+    const m = t.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?/);
+    if (m) {
+        const mo = Number(m[1]);
+        const da = Number(m[2]);
+        if (mo >= 1 && mo <= 12 && da >= 1 && da <= 31) {
+            const y = new Date(base).getFullYear();
+            let at = new Date(y, mo - 1, da, 0, 0, 0, 0).getTime();
+            // 明显在过去（>180 天）→ 按明年算（「12月5日」写在 11 月 = 今年）
+            if (at < dayStartOf(base) - 180 * DAY_MS) at = new Date(y + 1, mo - 1, da, 0, 0, 0, 0).getTime();
+            return at + DAY_MS;
+        }
+    }
+    const ds = dayStartOf(base);
+    if (/前天/.test(t)) return ds - DAY_MS;                 // 事件日 + 1 天 = 昨天结束
+    if (/(昨天|昨晚)/.test(t)) return ds;                   // 昨天的事件今天已过期
+    if (/(明天|明早|明晚)/.test(t)) return ds + 2 * DAY_MS;
+    if (/后天/.test(t)) return ds + 3 * DAY_MS;
+    if (/(上周|上个月)/.test(t)) return ds;                 // 过去的事件，不再算「现在成立」
+    // 今天/今天内时段/只有点钟：事件日 = base 当天
+    if (EVENT_TIME_RE.test(t) || EVENT_CLOCK_RE.test(t)) {
+        if (/(周末|下周|下个月|月底|月初|年底)/.test(t)) return ds + 7 * DAY_MS;
+        return ds + DAY_MS;
+    }
+    return base + 7 * DAY_MS;                               // 完全解析不出日期
+}
+
 /** 是否值得送去 LLM 裁决（完全不沾边的不必浪费一次调用） */
 function shouldConsider(newText, oldText) {
     const n = String(newText || '').trim();
@@ -137,14 +233,37 @@ function addFact(input) {
     if (text.length > 200) return { ok: false, error: '事实太长（>200 字），应该拆成具体条目' };
     const now = Number(o.now) || Date.now();
     const facts = load();
+    // 2026-11-25 P0-3：写入时就定 kind；event 自带有效期（不靠读侧每次猜）。
+    const kind = (o.kind === 'event' || o.kind === 'preference' || o.kind === 'trait')
+        ? o.kind
+        : classifyFact(text, o.source);
+    let validTo = null;
+    if (Number.isFinite(Number(o.valid_to)) && Number(o.valid_to) > 0) validTo = Number(o.valid_to);
+    else if (Number.isFinite(Number(o.validTo)) && Number(o.validTo) > 0) validTo = Number(o.validTo);
+    // 只有**抽取侧**（片段卡晋升）显式要求时才自动给 event 加有效期。
+    // 直接 addFact 的其它入口（手工/裁决/旧调用方）行为不变 —— 语义变更必须由调用方声明，
+    // 否则「episode 来源」的旧用例/旧数据会在升级瞬间集体失效。
+    else if (kind === 'event' && o.expireEvents === true) validTo = eventValidTo(text, now);
     const superseded = [];
     let duplicate = false;
+    let dupId = null;
     // 显式指定要压掉哪些（LLM 裁决后由调用方传入）；不传时走纯规则的「几乎一字不差」
     const forceIds = Array.isArray(o.supersedeIds) ? o.supersedeIds : [];
 
     for (const f of facts) {
-        if (f.valid_to) continue;            // 已经失效的不再参与判定
-        if (String(f.fact).trim() === text) { duplicate = true; continue; }
+        // 已失效的（valid_to 已过）不再参与判定；valid_to 在未来的仍算 active（P0-3）。
+        if (f.superseded_by) continue;          // 已被新版本取代：即使 valid_to 在未来也不再参与
+        if (f.valid_to && Number(f.valid_to) <= now) continue;
+        if (String(f.fact).trim() === text) {
+            // 2026-11-25 审计 P1-2：同文本的现行事实就是「新版本」（内容完全一致），
+            // 记下它的 id 用作 superseded_by 的指向；它本身不再被压（压自己没意义）。
+            if (!dupId) { duplicate = true; dupId = f.id; continue; }
+            if (!forceIds.includes(f.id)) continue;
+            f.valid_to = now;
+            f.invalid_reason = '被新事实取代';
+            superseded.push(f.id);
+            continue;
+        }
         if (!forceIds.includes(f.id) && !shouldSupersede(text, f.fact)) continue;
         f.valid_to = now;
         f.invalid_reason = '被新事实取代';
@@ -152,16 +271,24 @@ function addFact(input) {
     }
 
     if (duplicate) {
+        // 审计 P1-2：以前这里只写 valid_to 就返回，旧事实「失效但没人接手」——
+        // superseded_by 永远是空，回滚/审计/searchFacts 都看不出被谁取代。
+        if (dupId) {
+            for (const f of facts) {
+                if (f.id !== dupId && superseded.includes(f.id)) f.superseded_by = dupId;
+            }
+        }
         save(facts);
-        return { ok: true, duplicate: true, id: null, superseded };
+        return { ok: true, duplicate: true, id: dupId, superseded };
     }
 
     const id = 'f' + now.toString(36) + Math.random().toString(36).slice(2, 6);
     facts.push({
         id,
         fact: text,
+        kind,
         valid_from: now,
-        valid_to: null,
+        valid_to: validTo,
         supersedes: superseded,
         source: String(o.source || 'manual'),
         confidence: Number.isFinite(Number(o.confidence)) ? Number(o.confidence) : 0.8,
@@ -231,11 +358,15 @@ function noteEvidence(factIdOrFact, type, opts) {
     return { ok: true, id: f.id, fact: f.fact, type, evidence: next, score: s, tier: evidence.tier(s) };
 }
 
-/** 现在成立的事实（valid_to 为空）。返回项**追加**只读 evidenceScore，原有字段不变。 */
+/**
+ * 现在成立的事实（未失效）。返回项**追加**只读 evidenceScore，原有字段不变。
+ * 2026-11-25 P0-3：event 事实的 valid_to 可能在未来（「下午三点开会」有效期到明天），
+ * 未来时间点 = 仍然成立 —— 只有 valid_to <= now 才算失效。
+ */
 function activeFacts() {
     const now = Date.now();
     return load()
-        .filter((f) => !f.valid_to)
+        .filter((f) => !f.superseded_by && (!f.valid_to || Number(f.valid_to) > now))
         .map((f) => ({ ...f, evidenceScore: evidence.score(evidenceOf(f), now) }));
 }
 
@@ -252,9 +383,12 @@ function searchFacts(query, opts) {
     const qSingle = q.replace(/[^\u4e00-\u9fa5a-z0-9]/gi, '');
     const isSingle = qSingle.length === 1;
     const all = load();
+    const now = Date.now();
     const rows = [];
     for (const f of all) {
-        if (f.valid_to && !o.includeExpired) continue;
+        // 2026-11-25 P0-3：valid_to 在未来 = 还没失效（一次性事件的「+1 天」窗口）。
+        const expired = !!f.superseded_by || (!!f.valid_to && Number(f.valid_to) <= now);
+        if (expired && !o.includeExpired) continue;
         let sim = q ? jaccard(q, f.fact) : 1;
         if (q && sim <= 0 && isSingle && String(f.fact).includes(qSingle)) sim = 0.5;
         // 完全无关的事实（相似度 0）在「带出历史」模式下也只在有查询时过滤
@@ -262,10 +396,12 @@ function searchFacts(query, opts) {
         rows.push({
             id: f.id,
             fact: f.fact,
+            // 旧数据没有 kind：按 trait 处理（保守）。读侧据此过滤一次性事件。
+            kind: f.kind || KIND_TRAIT,
             sim: +sim.toFixed(3),
             valid_from: f.valid_from || null,
             valid_to: f.valid_to || null,
-            expired: !!f.valid_to,
+            expired,
             superseded_by: f.superseded_by || null,
         });
     }
@@ -280,4 +416,8 @@ module.exports = {
     // 纯函数导出给测试
     _jaccard: jaccard, _shouldSupersede: shouldSupersede, _shouldConsider: shouldConsider,
     _headOf: headOf, _commonPrefixLen: commonPrefixLen,
+    // 事实种类（2026-11-25 P0-3）：trait | preference | event（迁移脚本与测试共用）
+    classifyFact, eventValidTo, KIND_TRAIT,
+    // 习惯/周期性判据（2026-11-25 P0-2）：迁移脚本用它把误判的 event 改回 trait
+    isHabitFact,
 };

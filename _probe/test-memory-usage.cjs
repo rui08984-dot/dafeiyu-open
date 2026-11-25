@@ -388,6 +388,42 @@ function injectMany(usage, items) {
       JSON.stringify(r12));
   }
 
+  // ── ⑨ entity 通道收紧（2026-11-25 P1-2，审计 §4 P1-6）───────────────────
+  // 两条真实 used 全是「她自己旧台词 + 回复里出现『清楚/屏幕』」→ 测的是「她有没有说中文」。
+  // 收紧后：assistant 自引不算 entity；查询词里本来就有的实体不算「引用了记忆」。
+  {
+    const selfText = '行吧，我看看……能看屏幕能听声音';
+    const selfV = MU.judgeUsage(selfText, '我看你屏幕挺清楚的', null, { role: 'assistant' });
+    ok('assistant 自引：entity 不计兑现', selfV.used === false && selfV.reason === 'assistant-self-reference',
+      JSON.stringify(selfV));
+    const selfFrag = MU.judgeUsage(selfText, selfText, MU.extractFragments(selfText), { role: 'assistant' });
+    ok('assistant 原样片段仍是强证据（fragment 口径不变）',
+      selfFrag.used === true && selfFrag.method === 'fragment', JSON.stringify(selfFrag));
+    const noQ = MU.judgeUsage('青岚湖畔捡到一只三花猫', '就是你说的青岚湖畔吧');
+    const withQ = MU.judgeUsage('青岚湖畔捡到一只三花猫', '就是你说的青岚湖畔吧', null, { query: '青岚湖畔在哪' });
+    ok('无 query：旧口径仍算 used（不误伤）', noQ.used === true, JSON.stringify(noQ));
+    ok('查询词里本来就有的实体不算兑现', withQ.used === false && withQ.reason === 'no-entity-overlap',
+      JSON.stringify(withQ));
+    const keep = MU.judgeUsage('我对香菜过敏', '你上次说吃香菜会难受', null, { query: '你问过我吗' });
+    ok('查询词之外的实体仍可命中（过滤不过度）', keep.used === true && keep.method === 'entity', JSON.stringify(keep));
+
+    // 走实例：noteInjected 记下的 query 会一路带到 noteUsed
+    const uq = makeUsage('entity-query.json', { now: () => T0 });
+    const qid = MU.idFor({ source: '对话', role: 'user', text: '青岚湖畔捡到一只三花猫', t: 0 });
+    uq.noteInjected({
+      entries: [{ id: qid, source: '对话', role: 'user', text: '青岚湖畔捡到一只三花猫', t: 0 }],
+      at: T0, query: '青岚湖畔在哪',
+    });
+    const rq = uq.noteUsed({ text: '就是你说的青岚湖畔吧', at: T0 + 1000 });
+    ok('实例：pending.query 参与结算过滤', rq.used === 0, JSON.stringify(rq));
+
+    const ua = makeUsage('entity-assistant.json', { now: () => T0 });
+    inject(ua, '记忆库', '行吧，我看看能看屏幕能听声音', T0, 'assistant');
+    const ra = ua.noteUsed({ text: '我看你屏幕挺清楚的', at: T0 + 1000 });
+    ok('实例：assistant 自引不增 used', ra.used === 0 && ua.stats({ at: T0 + 2000 }).total.used === 0,
+      JSON.stringify(ra));
+  }
+
   iso.cleanup(TMP);
   console.log('\n  记忆兑现率：' + pass + ' 通过 / ' + fail + ' 失败');
   process.exit(fail ? 1 : 0);

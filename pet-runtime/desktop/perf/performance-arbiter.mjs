@@ -14,8 +14,9 @@
 //   · 显式手动（playPerformance / perform 场景）用 preempt=true，优先级最高；
 //   · 同帧只能有一个 owner —— 后来的层拿到 {ok:false, reason:'busy'}，不会两套同时写脸。
 //
-// 优先级（用户 2026-11-21 拍板：显式手动 > 片段 > 长表演 > 微动作）：
-//   scenes/manual(5) > clip(3) > v2(2) > micro(1)
+// 优先级（用户 2026-11-21 拍板：显式手动 > 片段 > 长表演 > 微动作；
+// 2026-11-25 P2b 补 program 4 / ambient 1）：
+//   scenes/manual(5) > program(4) > clip(3) > v2(2) > micro/ambient(1)
 // 理由：
 //   · 手动是用户当场点出来的，必须立刻有反应，可以顶掉任何自动表演；
 //   · 片段是短表演（几秒）且有导演自己的 90s/6min/10min4次三门，错过这次通常
@@ -30,9 +31,13 @@
 // 纯模块：不 require fs / electron / DOM；时间源可注入（node 单测用假时钟）。
 
 export const PERFORMANCE_OWNER_PRIORITY = Object.freeze({
+  // P2b（2026-11-25，ADR-015 §9.2 待定项定案）：program 4（低于显式手动、高于 clip）；
+  // ambient 1（与 micro 同级：待机层不参与抢占，只是为了表里能查到优先级）。
   micro: 1,
+  ambient: 1,
   v2: 2,
   clip: 3,
+  program: 4,
   manual: 5,
   scenes: 5,
 });

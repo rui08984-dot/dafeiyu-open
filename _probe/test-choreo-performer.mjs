@@ -268,6 +268,72 @@ const ANGLE_SET = new Set(['AngleX', 'AngleY', 'AngleZ', 'PositionX', 'PositionY
   const perFrame = (performance.now() - t0) / N;
   ok('单帧采样 < 1ms', perFrame < 1, perFrame.toFixed(4) + 'ms（' + data.performances[worst].tracks.length + ' 轨）');
 
+  // ── P2b（2026-11-25）：收势 fadeOut / 手势 exit 补发 / canCutAt ──────────
+  // ① fadeOut：权重线性到 0，到点自动 stop；ms=0 等价旧 stop
+  {
+    const pf = mod.createPerformer();
+    pf.start('05-weight-shift', 0);
+    const before = pf.sample(6000, {});
+    ok('fadeOut 前权重为 1', !!before && Math.abs(before.overrideW - 1) < 1e-9 && before.fadeW === 1,
+      String(before && before.overrideW));
+    ok('fadeOut 返回 true（有表演在演）', pf.fadeOut(200) === true);
+    ok('fadeOut 后进入收势状态', pf.fading === true && pf.active === true);
+    const a = pf.sample(6000, {});   // 第一次 sample 锚定收势起点
+    const b = pf.sample(6100, {});   // 走到一半
+    const c = pf.sample(6199, {});   // 快到 0
+    ok('收势起点权重仍为 1（锚定在第一次 sample）', !!a && Math.abs(a.fadeW - 1) < 1e-9, String(a && a.fadeW));
+    ok('收势中点权重 ≈ 0.5（线性）', !!b && Math.abs(b.fadeW - 0.5) < 0.01, String(b && b.fadeW));
+    ok('收势末段权重 < 0.01', !!c && c.fadeW < 0.01, String(c && c.fadeW));
+    ok('收势到点自动 stop（sample=null，active=false）', pf.sample(6200, {}) === null && pf.active === false);
+
+    const p0 = mod.createPerformer();
+    p0.start('05-weight-shift', 0);
+    p0.sample(6000, {});
+    ok('fadeOut(0) 等价 stop（返回 true）', p0.fadeOut(0) === true);
+    ok('fadeOut(0) 立即失效', p0.sample(6001, {}) === null && p0.active === false);
+    ok('没有表演时 fadeOut 返回 false', mod.createPerformer().fadeOut(200) === false);
+  }
+
+  // ② 手势 exit：中途停止必须补发一次（否则资产留在手上）
+  {
+    const gk = '04-playful';   // gestureSteps[0].start = 0（取样即有进入）
+    const pg = mod.createPerformer();
+    pg.start(gk, 0);
+    const entered = pg.sample(500, {});
+    ok('中途停止前手势已进入', !!entered && entered.gestures.some((g) => g.on === true), JSON.stringify(entered && entered.gestures));
+    const stopped = pg.stop('interrupt');
+    ok('stop() 补发手势 exit（on=false / forced）', Array.isArray(stopped) && stopped.length === 1
+      && stopped[0].on === false && stopped[0].forced === true, JSON.stringify(stopped));
+    ok('补发的 exit 带作者的 exitDuration（fadeMs>0）', stopped[0].fadeMs > 0, String(stopped[0].fadeMs));
+    const drained = pg.takeExits();
+    ok('补发的 exit 只发一次（takeExits 后可取走）', drained.length === 1 && pg.takeExits().length === 0);
+
+    const pe = mod.createPerformer();
+    pe.start(gk, 0);
+    pe.sample(9500, {});   // 04 的 exitAt=8.987 → 已经正常收回
+    const afterExit = pe.stop('natural');
+    ok('已正常收回的手势不重复补发', afterExit.length === 0, JSON.stringify(afterExit));
+
+    const pn = mod.createPerformer();
+    pn.start(gk, 0);
+    pn.stop();
+    ok('从未进入过的手势不补发 exit（未进入不产生资产）', pn.takeExits().length === 0);
+  }
+
+  // ③ canCutAt / elapsedMs：sync 仍由调度器持有，这里只对时间
+  {
+    const pc = mod.createPerformer();
+    pc.start('01-curiosity', 1000);
+    ok('elapsedMs 按起点推算', pc.elapsedMs(3400) === 2400, String(pc.elapsedMs(3400)));
+    const cut = pc.canCutAt(3400, [1000, 3000, 8000]);
+    ok('canCutAt 给出 elapsedMs 与下一个 relax 点', cut.active === true && cut.elapsedMs === 2400 && cut.nextRelaxMs === 3000 && cut.canCut === true);
+    ok('canCutAt 在第一个点之前也报可切（下一点）', pc.canCutAt(1100, [1000, 3000]).nextRelaxMs === 1000);
+    const noRelax = pc.canCutAt(3400, []);
+    ok('没有 relax 点 → atomic / canCut=false', noRelax.atomic === true && noRelax.canCut === false);
+    ok('canCutAt 收势期间标 fading', (() => { pc.fadeOut(200); const r = pc.canCutAt(3500, [3000]); return r.fading === true; })());
+    ok('没有表演时 canCutAt 返回 inactive', mod.createPerformer().canCutAt(0, [1000]).active === false);
+  }
+
   console.log('');
   console.log(`  表演库 v2：${pass} 通过 / ${fail} 失败`);
   if (fail > 0) process.exit(1);

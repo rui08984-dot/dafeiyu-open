@@ -35,6 +35,13 @@ const INCLUDE = [
   //   连 mouse 命令都没有）。运行时的 _coreBin() 找的是 target/release ——
   //   打 debug 等于便携版永远少新能力，而且 debug 版更慢。
   'pet-core/target/release/pet-core.exe',
+  // 2026-11-25 P3：表演数据以前整个漏打 —— 便携版没有 97 段 FACS 片段、
+  // 没有 perf-sync.json（调度器退化 atomic）、没有节目单。只带运行必需的静态数据；
+  // performance-log / dispatch-history 是个人运行记录，见 EXCLUDE_FILES。
+  'pet-runtime/data/facs-clips',
+  'pet-runtime/data/game-profiles',
+  'pet-runtime/data/programs',
+  'pet-runtime/data/perf-sync.json',
   'asr', 'edge-tts', 'audio-loop', 'audio_common',
   '_incoming/my-neuro/live-2d',
   // 记录室在 my-neuro 根下，不在 live-2d 里 —— 漏了它 doctor 会报「核心用户记忆.txt 不存在」。
@@ -57,6 +64,8 @@ const EXCLUDE_FILES = [/\.log$/, /\.map$/, /thumbs\.db$/i,
   /^对话历史\.jsonl$/, /^心情\.json$/, /^人设漂移\.json$/, /^上次见面\.json$/, /^AI日记\.txt$/, /^活着感\.json$/,
   // ⚠️ 凭据文件绝不进包（2026-11-08 发现 dist 已泄漏真 key，已清）——用户凭运行环境.md 自己配
   /^config\.json$/, /^llm_providers\.json$/, /^config\.json\.bak/,
+  // 个人运行记录不进包（2026-11-25 P3）
+  /^performance-log\.jsonl$/, /^dispatch-history\.jsonl$/,
 ];
 
 let totalBytes = 0, totalFiles = 0;

@@ -129,5 +129,60 @@ const RECORDS = [
   ok('脏元素被忽略', b.totals.plays === 1, JSON.stringify(b.totals));
 }
 
+// ── ⑥ P0：打断率 / 被吸引率 / 实际时长 / 结束方式 ────────────────────
+{
+  const recs = [
+    mk({ kind: 'play', source: 'auto', clipId: 'v1', label: '疑惑', durationMs: 20000, perfKind: 'v2' }),
+    mk({ kind: 'play', source: 'peak', clipId: 'c1', label: '微笑', durationMs: 3000, perfKind: 'clip' }),
+    mk({ kind: 'play', source: 'idle', clipId: 'c2', label: '思考专注', durationMs: 5000 }),
+    mk({ kind: 'user_input_after', phase: 'during', clipId: 'v1', label: '疑惑', ms: 4000, sinceEndMs: null }),
+    mk({ kind: 'user_input_after', phase: 'afterEnd', clipId: 'c1', label: '微笑', ms: 5000, sinceEndMs: 2000 }),
+    mk({ kind: 'user_input_after', clipId: 'old', label: '旧日志', ms: 7000 }),
+    mk({ kind: 'perf.end', endedBy: 'interrupt', actualMs: 4000, plannedMs: 20000 }),
+    mk({ kind: 'perf.end', endedBy: 'natural', actualMs: 3000, plannedMs: 3000 }),
+    mk({ kind: 'perf.end', endedBy: 'natural', actualMs: 5000, plannedMs: 5000 }),
+  ];
+  const a = analyzeRecords(recs, { now: NOW });
+  eq('分档：during', a.phases.during, 1);
+  eq('分档：afterEnd', a.phases.afterEnd, 1);
+  eq('分档：旧日志未分档', a.phases.unphased, 1);
+  eq('打断率 = during / plays', a.rates.interruptRate, 33.3);
+  eq('被吸引率 = afterEnd / plays', a.rates.engagedRate, 33.3);
+  eq('比率分母是播放次数', a.rates.plays, 3);
+  eq('实际时长样本数', a.durations.samples, 3);
+  eq('平均实际时长', a.durations.avgActualMs, 4000);
+  eq('中位实际时长', a.durations.medianActualMs, 4000);
+  eq('结束方式直方图', a.endedBy, { interrupt: 1, natural: 2 });
+  eq('按播放器分账（缺 perfKind 记 clip）', a.byPerfKind, { v2: 1, clip: 2 });
+  // totals 保持旧形状（旧消费方 deepEqual 不受影响）
+  eq('totals 不被新字段污染', Object.keys(a.totals).sort(), ['plays', 'skips', 'userAfter']);
+
+  const report = formatReport(a);
+  ok('报告有打断率/被吸引率一行', /打断率 33\.3% · 被吸引率 33\.3%/.test(report), report.split('\n')[2]);
+  ok('报告有实际时长一行', /实际时长：平均 4000ms · 中位 4000ms/.test(report));
+  ok('报告有结束方式一行', /结束方式：.*natural=2/.test(report));
+  ok('被吸引率 <15% 给出压密度建议', /被吸引率 .*< 15%/.test(formatReport(analyzeRecords([
+    ...Array.from({ length: 8 }, (_, i) => ({ kind: 'play', clipId: 'p' + i, label: '微笑', ts: NOW })),
+    { kind: 'user_input_after', phase: 'afterEnd', clipId: 'p0', label: '微笑', ms: 1000, sinceEndMs: 500, ts: NOW },
+  ], { now: NOW }))));
+  ok('只有旧日志（无 phase）时不拿 0% 下结论', !/被吸引率 .*< 15%/.test(formatReport(analyzeRecords([
+    ...Array.from({ length: 8 }, (_, i) => ({ kind: 'play', clipId: 'q' + i, label: '微笑', ts: NOW })),
+    { kind: 'user_input_after', clipId: 'q0', label: '微笑', ms: 1000, ts: NOW },
+  ], { now: NOW }))));
+}
+
+// ── ⑦ P0：分档记录不会被旧日志污染；--since 仍按 ts 过滤 ──────────────
+{
+  const a = analyzeRecords([
+    mk({ kind: 'play', clipId: 'x', label: '微笑' }),
+    mk({ kind: 'user_input_after', phase: 'afterEnd', clipId: 'x', label: '微笑', ms: 1000 }),
+  ], { now: NOW });
+  eq('单播单接 → 被吸引率 100%', a.rates.engagedRate, 100);
+  eq('单播单接 → 打断率 0%', a.rates.interruptRate, 0);
+  const empty = analyzeRecords([], { now: NOW });
+  eq('空样本比率保持 null', [empty.rates.interruptRate, empty.rates.engagedRate], [null, null]);
+  eq('空样本时长保持 null', empty.durations.avgActualMs, null);
+}
+
 console.log('  ' + (fail === 0 ? '✅' : '❌') + ' 决策日志分析：PASS ' + pass + ' / FAIL ' + fail);
 process.exit(fail === 0 ? 0 : 1);

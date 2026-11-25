@@ -1,0 +1,20 @@
+{
+  "id": "shy-then-happy",
+  "title": "害羞→俏皮",
+  "license": "original",
+  "note": "P3a 示例节目单：先委屈/害羞（02-vulnerable），再俏皮（04-playful）。台词为原创，无外部素材。",
+  "beats": [
+    {
+      "seg": "02-vulnerable",
+      "maxMs": 15000,
+      "line": "那个……我刚才是不是说错话了？",
+      "transitionMs": 500
+    },
+    {
+      "seg": "04-playful",
+      "maxMs": 16000,
+      "line": "算了算了，我才不跟你计较呢。",
+      "sfx": "03"
+    }
+  ]
+}

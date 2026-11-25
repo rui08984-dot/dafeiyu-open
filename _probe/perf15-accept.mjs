@@ -13,6 +13,11 @@
  *
  * 用法：node _probe/perf15-accept.mjs
  * 前置：8004 自检口（宿主在跑、皮套已加载）。
+ *
+ * ⚠ 不要在用户正在使用时跑：本脚本逐段 playPerformance，会真的占屏 ~15 秒/轮，
+ *   并且曾把 452 条 manual 播放写进生产 performance-log（审计 §4.4）。
+ *   脚本收尾会调 resetPerformanceAuto() 交还自动触发的冷却/会话计数；
+ *   日志里留下的 manual 记录由 choreo-tune 的 autoOnly 排除，不会影响段偏好。
  */
 'use strict';
 // ⚠ 不用 fetch：Node 24 的 undici keep-alive 句柄在 process.exit 时触发
@@ -98,6 +103,16 @@ async function ev(js, timeoutMs = 120000) {
   // 收尾：确保没有残留在播（否则下一个任务会看到 active=true）
   const after = JSON.parse(await ev('JSON.stringify(window.petBody.performanceStatus ? window.petBody.performanceStatus() : {})') || '{}');
   ok('收尾后没有残留在播', after.active !== true, JSON.stringify({ active: after.active, key: after.key }));
+
+  // 收尾：清掉自动触发的冷却/会话计数（2026-11-25 P0）。
+  // 为什么必须做：playPerformance 会 perfAuto.note(key) 记冷却 —— 跑完不 reset，
+  // 用户接下来 3–6 分钟看不到同名段自动演，而这 15 段明明只是被「验收」过。
+  try {
+    const reset = await ev('window.petBody&&typeof window.petBody.resetPerformanceAuto==="function"?JSON.stringify(window.petBody.resetPerformanceAuto()):null');
+    ok('收尾重置自动触发记账（不污染生产冷却）', reset != null, String(reset || '').slice(0, 140));
+  } catch (e) {
+    ok('收尾重置自动触发记账（不污染生产冷却）', false, String((e && e.message) || e));
+  }
 
   console.log('');
   console.log(`  15 段长表演（客观段）：PASS ${pass} / FAIL ${fail}`);

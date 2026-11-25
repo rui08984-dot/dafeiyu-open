@@ -293,12 +293,15 @@ if (typeof module !== 'undefined' && module.exports) {
     if (overviewTimer) { clearInterval(overviewTimer); overviewTimer = null; }
     if (pageId === 'overview') {
       loadOverview(true);
-      // 演出两个快捷开关每次进总览都按能力注册表重读：能力页刚改完，这里不能还是旧值
+      // 演出开关每次进总览都按能力注册表重读：能力页刚改完，这里不能还是旧值
       refreshPerfSwitchState();
+      refreshPerformanceState();
       overviewTimer = setInterval(() => {
         if ($('overview').classList.contains('active')) loadOverview(true);
       }, 15000);
     }
+    // 演出页：三个列表 + 开关 + 状态一次性拉；进出这里不重建 DOM，3 秒心跳只刷状态
+    if (pageId === 'perform') loadPerformPage().catch(() => {});
     if (pageId === 'history') loadChatHistory();
     if (pageId === 'memory' && !memoryLoaded) loadMemory();
     // 装扮状态只在启动时读一次：皮套后于面板就绪（Cubism 15~60s）或首次读取恰逢加载窗口时，
@@ -434,12 +437,14 @@ if (typeof module !== 'undefined' && module.exports) {
   }
   document.getElementById('quiet-switch').addEventListener('change', (e) => applyQuiet(e.target.checked));
 
-  // ── 演出（2026-11-16）：两个表演框架的开关 + 手动试演 ──────────────────
-  // 为什么放在总览页而不是单独一页：用户要的是「整体设置里一眼看到她现在会怎么演」，
-  // 两个开关 + 一次试演就够判断，不需要进二级页。
-  //   v1 情绪微动作 = 说话时的小动作（ui.petbody_choreo，托盘也有同一个开关）
+  // ── 演出（2026-11-16 起；2026-11-25 P3b 迁成独立「演出」页）─────────────
+  // 为什么独立一页：总览原先把「两个开关 + 一次手动试演」塞在一行里，而长戏还有托盘、
+  // 能力页、皮套页三个入口；再接节目单就是四处入口四套文案。现在手动演出只在「演出」页，
+  // 总览只留开关与一行状态（ADR-015 §4.5 第 1、2 条：避免两处入口漂移）。
+  //   v1 情绪微动作 = 说话时的小动作（ui.petbody_choreo，托盘/能力页同一个键）
   //   v2 自动演长戏 = 情绪到位时演 19–38 秒（ui.petbody_perf_auto；节流在渲染层）
-  // 生效链路：写配置副本（保存时落盘）+ 立即 petbodyEval 让渲染层当前会话就变。
+  //   节目单自动   = performance.program.enabled（P3a 已接线；开关写配置 + setPerformanceConfig 热下发）
+  // 生效链路：control:set-config-value（白名单落盘）+ 立即 petbodyEval 让当前会话就变。
   const perfEval = (js, opts = {}) => api.petbodyEval(js).then((res) => {
     // control:petbody-eval 返回 { ok, value }（8004 /eval 的原始回包），不是裸值
     if (!res || res.ok === false) {
@@ -452,8 +457,8 @@ if (typeof module !== 'undefined' && module.exports) {
     return null;
   });
 
-  // 总览「演出」两个快捷开关的状态来源（2026-11-21 统一管辖）：
-  // 以前读本地 config 副本，能力页改完这两键、总览仍显示旧值（一个功能两套显示语义）。
+  // 演出开关的状态来源（2026-11-21 统一管辖；2026-11-25 覆盖总览 + 演出页两处控件）：
+  // 以前读本地 config 副本，能力页改完这些键、总览仍显示旧值（一个功能两套显示语义）。
   // 现在读能力注册表（control:capabilities → resolveCapabilityValue：config > 当前模型 > 默认），
   // 和能力页同一份数据；注册表失败才退回 config 副本，绝不把开关刷成「猜的值」。
   async function refreshPerfSwitchState() {
@@ -465,31 +470,214 @@ if (typeof module !== 'undefined' && module.exports) {
     };
     const choreo = valueOf('ui.petbody_choreo');
     const perfAuto = valueOf('ui.petbody_perf_auto');
-    if ($('choreo-switch')) {
-      $('choreo-switch').checked = choreo !== undefined
-        ? choreo
-        : !!(config.ui && config.ui.petbody_choreo === true);
-    }
-    if ($('perf-auto-switch')) {
-      $('perf-auto-switch').checked = perfAuto !== undefined
-        ? perfAuto
-        : !(config.ui && config.ui.petbody_perf_auto === false);
-    }
+    const program = valueOf('performance.program.enabled');
+    const paint = (ids, value, fallback) => {
+      const on = value !== undefined ? value : fallback;
+      for (const id of ids) { const box = $(id); if (box) box.checked = on; }
+    };
+    // 缺省与渲染层默认一致（choreo 默认关、perf-auto 默认开、program 默认开）
+    paint(['choreo-switch', 'perform-choreo-switch'], choreo,
+      !!(config.ui && config.ui.petbody_choreo === true));
+    paint(['perf-auto-switch', 'perform-auto-switch'], perfAuto,
+      !(config.ui && config.ui.petbody_perf_auto === false));
+    paint(['perform-program-switch'], program,
+      !(config.performance && config.performance.program && config.performance.program.enabled === false));
   }
 
-  async function loadPerformances() {
-    // 开关初值：能力注册表（与能力页同源）；缺省与渲染层默认一致（choreo 默认关、perf-auto 默认开）
-    await refreshPerfSwitchState();
-    // 段列表从渲染层拿：编译产物是唯一真相源，重编译后这里自动跟上
-    const list = await perfEval('window.__petPerformance ? window.__petPerformance.list() : null');
-    const sel = $('perf-pick');
-    if (!sel) return;
-    if (Array.isArray(list) && list.length) {
-      sel.innerHTML = list.map((p) => `<option value="${escapeHtml(p.key)}">${escapeHtml(p.title)} · ${Math.round(Number(p.duration) || 0)}s</option>`).join('');
-    } else {
-      sel.innerHTML = '<option value="">（桌宠未运行）</option>';
+  // ── 演出页纯函数（2026-11-25 P3b）──────────────────────────────────────
+  // 放这里是为了能在 Node 里直接跑（_probe/test-perf-ui.cjs 按标记提取执行）：
+  // 不启动 Electron 也能验「12 段就画 12 个按钮」「缺字段不写 0」「读哪个 reason 字段」。
+  // __PERF_UI_PURE_START__
+  function perfEscape(value) {
+    return String(value == null ? '' : value)
+      .replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  /** 12 段场景按钮：一个段一个按钮，data-scene 给点击用。 */
+  function buildSceneButtons(scenes) {
+    const list = Array.isArray(scenes) ? scenes : [];
+    return list
+      .filter((name) => String(name == null ? '' : name).trim())
+      .map((name) => `<button class="btn" type="button" data-scene="${perfEscape(name)}">${perfEscape(name)}</button>`)
+      .join('');
+  }
+
+  /** 15 段长戏下拉：value=运行时 key，文案=title · 秒数（秒数缺失时不写 0）。 */
+  function buildPerformanceOptions(list) {
+    const rows = Array.isArray(list) ? list : [];
+    return rows.filter((p) => p && p.key).map((p) => {
+      const secs = Number(p.duration);
+      const label = `${p.title || p.key}${Number.isFinite(secs) ? ' · ' + Math.round(secs) + 's' : ''}`;
+      return `<option value="${perfEscape(p.key)}">${perfEscape(label)}</option>`;
+    }).join('');
+  }
+
+  function perfNumber(value) {
+    if (value === undefined || value === null || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  function perfFirstNumber(...values) {
+    for (const value of values) { const n = perfNumber(value); if (n !== null) return n; }
+    return null;
+  }
+
+  /** 剩余秒数：不在演或不给进度就是 —，绝不把缺失当 0（显示 0 秒像坏了）。 */
+  function formatRemainingSeconds(status) {
+    if (!status || typeof status !== 'object' || !status.active) return '—';
+    const t = perfFirstNumber(status.t, status.elapsed);
+    const total = perfFirstNumber(status.duration, status.total);
+    if (t === null || total === null) return '—';
+    return Math.max(0, Math.round(total - t)) + ' 秒';
+  }
+
+  /** performanceDebug() 只读快照 → 「最近一次为什么没演」的一行文案。 */
+  function summarizePerformanceDebug(debug) {
+    const db = (debug && typeof debug === 'object') ? debug : {};
+    const dir = (db.director && typeof db.director === 'object') ? db.director : {};
+    const mode = String(dir.mode || 'off');
+    let reason = '';
+    const decision = dir.lastDecision;
+    if (decision && typeof decision === 'object') {
+      reason = String(decision.reason || (decision.decision && decision.decision.reason) || '').trim();
     }
-    refreshPerformanceState();
+    if (!reason) {
+      const ev = db.scheduler && db.scheduler.lastEvent;
+      if (ev && typeof ev === 'object') reason = String(ev.reason || ev.kind || ev.event || '').trim();
+      else if (typeof ev === 'string') reason = ev.trim();
+    }
+    if (reason) return { reason, mode, line: `为什么没演：${reason}（导演 ${mode}）` };
+    if (mode === 'off') return { reason: '', mode, line: '导演未开，不会自动演' };
+    return { reason: '', mode, line: '最近没有拦下的演出' };
+  }
+
+  /** 节目单当日预算余额：performanceDebug().program.budgetLeft 优先，缺键返回 null（= 未接线）。 */
+  function readProgramBudgetLeft(debug) {
+    const p = debug && typeof debug === 'object' ? debug.program : null;
+    if (!p || typeof p !== 'object') return null;
+    const direct = perfNumber(p.budgetLeft);
+    if (direct !== null) return direct;
+    const left = p.budget && p.budget.left;
+    const plays = perfNumber(left && typeof left === 'object' ? left.plays : left);
+    return plays;
+  }
+
+  /** listPrograms() 条目宽容解析（P3a 之前渲染层还没这个 API）。 */
+  /** listPrograms() 条目宽容解析（P3a 现在回 {items:[...]}；老/别家的数组也认）。 */
+  function normalizeProgramRows(list) {
+    const rows = Array.isArray(list) ? list : (list && Array.isArray(list.items) ? list.items : []);
+    return rows.filter((p) => p && (p.id || p.key)).map((p) => {
+      const id = String(p.id || p.key);
+      // 节目单的时长通常是「拍」的 maxMs 之和（listPrograms 只给 beats）
+      const beatMs = Array.isArray(p.beats)
+        ? p.beats.reduce((sum, b) => sum + (Number(b && b.maxMs) || 0), 0)
+        : null;
+      const secs = perfFirstNumber(
+        p.durationSec,
+        p.durationMs === undefined ? null : Number(p.durationMs) / 1000,
+        p.duration,
+        p.seconds,
+        beatMs === null ? null : beatMs / 1000
+      );
+      return { id, title: String(p.title || p.name || id), seconds: secs === null ? null : Math.round(secs) };
+    });
+  }
+
+  /** 节目单容器：未接线要说清楚，不能显示一个空列表让人以为坏了。 */
+  function buildProgramRows(rows, wired) {
+    if (!wired) return '<p class="hint" style="margin:8px 0">节目单未接线（渲染层还没有 listPrograms）</p>';
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) return '<p class="hint" style="margin:8px 0">节目单是空的</p>';
+    return list.map((r) => '<div class="row">'
+      + `<span class="row-label">${perfEscape(r.title)}<span class="sub mono">${perfEscape(r.id)}${r.seconds === null ? '' : ' · ' + r.seconds + ' 秒'}</span></span>`
+      + `<button class="btn small" type="button" data-program="${perfEscape(r.id)}">试演</button>`
+      + '</div>').join('');
+  }
+  // __PERF_UI_PURE_END__
+
+  // 场景/长戏/节目单三个列表只在进页面时拉一次；3 秒心跳只刷状态与预算，不重画列表。
+  async function loadPerformScenes() {
+    let scenes = FALLBACK_SCENES;
+    try {
+      const value = JSON.parse(await petEval('JSON.stringify(window.petBody && window.petBody.listScenes ? window.petBody.listScenes() : [])') || '[]');
+      if (Array.isArray(value) && value.length) scenes = value;
+    } catch { /* 皮套不在线就给默认六段，点了会有明确报错 */ }
+    const box = $('perform-scenes');
+    if (box) box.innerHTML = buildSceneButtons(scenes);
+  }
+
+  async function loadPerformLongList() {
+    // 段列表从渲染层拿：编译产物是唯一真相源，重编译后这里自动跟上
+    const list = await perfEval('window.__petPerformance ? window.__petPerformance.list() : null', { silent: true });
+    const sel = $('perform-pick');
+    if (!sel) return;
+    sel.innerHTML = buildPerformanceOptions(list) || '<option value="">（桌宠未运行）</option>';
+  }
+
+  async function loadPrograms() {
+    const box = $('perform-programs');
+    if (!box) return;
+    // listPrograms 由 P3a 的 program-runner 提供；没有就诚实显示「未接线」，不画假行。
+    // 三种状态要分开：桌宠不在线 / 没这个 API（未接线）/ 有 API 但列表空。
+    const raw = await perfEval(
+      'JSON.stringify((function(){try{if(!window.petBody)return {online:false,wired:false,list:null};'
+        + 'var wired=typeof window.petBody.listPrograms==="function";'
+        + 'return {online:true,wired:wired,list:wired?(window.petBody.listPrograms()||[]):null};'
+        + '}catch(e){return {online:false,wired:false,list:null,error:String(e&&e.message||e)};}})())',
+      { silent: true }
+    );
+    let info = null;
+    try { info = raw ? JSON.parse(raw) : null; } catch (e) { info = null; }
+    if (!info || info.online === false) { box.innerHTML = '<p class="hint" style="margin:8px 0">桌宠不在线，读不到节目单</p>'; return; }
+    const wired = info.wired === true;
+    const meta = (info.list && typeof info.list === 'object' && !Array.isArray(info.list)) ? info.list : null;
+    const notes = [];
+    if (meta) {
+      // 试演点不动的原因要提前说出来（三种拒绝理由：总开关 / 调度器 / 预算）
+      if (meta.enabled !== true) notes.push('节目单总开关关着');
+      if (meta.scheduler !== true) notes.push('调度器没开（performance.scheduler.enabled）');
+      if (meta.error) notes.push('数据错误：' + meta.error);
+    }
+    box.innerHTML = (notes.length
+      ? `<p class="hint" style="margin:8px 0">${perfEscape(notes.join(' · '))}</p>`
+      : '') + buildProgramRows(normalizeProgramRows(info.list), wired);
+  }
+
+  async function loadPerformPage() {
+    await refreshPerfSwitchState();
+    await Promise.all([loadPerformScenes(), loadPerformLongList(), loadPrograms()]);
+    await refreshPerformPageState();
+  }
+
+  async function readPerformanceDebugSnapshot() {
+    return perfEval('window.petBody && typeof window.petBody.performanceDebug === "function" ? window.petBody.performanceDebug() : null', { silent: true });
+  }
+
+  // 演出页「实时状态」：在演什么 / 剩余秒数 / 最近一次为什么没演 / 节目单预算余额
+  async function refreshPerformPageState() {
+    const st = await perfEval('window.__petPerformance ? window.__petPerformance.status() : null', { silent: true });
+    const db = await readPerformanceDebugSnapshot();
+    const prog = db && db.program && typeof db.program === 'object' ? db.program : null;
+    const stateEl = $('perform-state');
+    if (stateEl) {
+      if (!st && !db) stateEl.textContent = '桌宠未运行';
+      else if (prog && prog.active) {
+        // 节目单正在连戏：比 v2 单段更具体（第几拍 / 共几拍）
+        stateEl.textContent = `节目单：${prog.title || prog.programId || '?'}（第 ${Number(prog.beatIdx) + 1}/${Number(prog.beatCount) || '?'} 拍）`;
+      } else if (st && st.active) stateEl.textContent = '正在演：' + (st.title || st.key);
+      else stateEl.textContent = '空闲';
+    }
+    const remainEl = $('perform-remaining');
+    if (remainEl) remainEl.textContent = formatRemainingSeconds(st);
+    const skipEl = $('perform-skip');
+    if (skipEl) skipEl.textContent = db ? summarizePerformanceDebug(db).line : '读不到（桌宠不在线）';
+    const budgetEl = $('perform-budget');
+    if (budgetEl) {
+      const left = readProgramBudgetLeft(db);
+      budgetEl.textContent = !db
+        ? '—'
+        : (left === null ? '未接线' : left + ' 段');
+    }
   }
 
   // ── 演出/皮套状态显示的纯函数（2026-11-21）──────────────────────────────
@@ -513,10 +701,18 @@ if (typeof module !== 'undefined' && module.exports) {
     return `${fmt(t)}/${fmt(total)} 秒`;
   }
 
-  // 情绪增益是否真的被运行时接线：只认 status.options.emotionGain 存在且为有限数。
-  // 没有就禁用/标注，绝不显示一个改了没反应的滑杆。
+  // 情绪增益是否真的被运行时接线。
+  // 2026-11-25 P0：旧版只认 status.options.emotionGain，而渲染层的 buildPerformanceStatus
+  // 从不返回 options → 滑杆恒定被判「未接线」禁用（审计附录 A 第 5 条）。
+  // 现在以 status.gain.value（petbody-entry 一直有）为准，options.emotionGain 作为旧运行时兼容。
+  // 仍然不认顶层 status.emotionGain（那是随手塞的值，不代表接线）。
   function readEmotionGainOption(status) {
     if (!status || typeof status !== 'object') return null;
+    const gain = status.gain;
+    if (gain && typeof gain === 'object' && Object.prototype.hasOwnProperty.call(gain, 'value')) {
+      const n = Number(gain.value);
+      if (Number.isFinite(n)) return n;
+    }
     const options = status.options;
     if (!options || typeof options !== 'object') return null;
     if (!Object.prototype.hasOwnProperty.call(options, 'emotionGain')) return null;
@@ -532,6 +728,8 @@ if (typeof module !== 'undefined' && module.exports) {
   }
   // __CONTROL_V2_PURE_END__
 
+  // 总览只保留这一行状态（2026-11-25 P3b）：手动试演已迁到「演出」页，
+  // 这里只回答「她现在在不在演」——在演 / 空闲两个词，细节进演出页看。
   async function refreshPerformanceState() {
     const st = await perfEval('window.__petPerformance ? window.__petPerformance.status() : null', { silent: true });
     const el = $('perf-state');
@@ -539,11 +737,11 @@ if (typeof module !== 'undefined' && module.exports) {
       if (!st) {
         el.textContent = '桌宠未运行';
       } else if (st.active) {
-        el.textContent = `正在演：${st.title || st.key}（到 ${formatPerformanceProgress(st)}）`;
+        el.textContent = `在演：${st.title || st.key}（到 ${formatPerformanceProgress(st)}）`;
       } else {
         const auto = st.auto || {};
         const count = Number(auto.sessionCount) || 0;
-        el.textContent = `待机 · 本会话自动演过 ${count} 段${auto.lastAt ? '' : '（还没触发过）'}`;
+        el.textContent = `空闲 · 本会话自动演过 ${count} 段${auto.lastAt ? '' : '（还没触发过）'}`;
       }
     }
     paintEmotionGainAvailability(st);
@@ -577,18 +775,25 @@ if (typeof module !== 'undefined' && module.exports) {
     perfEval(`window.petBody && typeof window.petBody.setEmotionGain === 'function' ? window.petBody.setEmotionGain(${gain}) : null`, { silent: true });
   });
 
-  // 总览「演出」两个开关的写入口（2026-11-21 统一管辖）：
+  // 演出开关的写入口（2026-11-21 统一管辖；2026-11-25 两个页面同源）：
   // 以前只写本地 config 副本 + 标脏，要按「保存」才落盘；能力页同一键却是当场写盘。
   // 两个入口、两种语义 → 现在都走 control:set-config-value（能力页同一个 IPC + 同一份白名单），
-  // 总览只是快捷方式：点完立即落盘 + 立即下发渲染层，不再制造「显示开了、重启丢了」。
+  // 总览/演出页只是快捷方式：点完立即落盘 + 立即下发渲染层，不再制造「显示开了、重启丢了」。
+  const PERF_SWITCH_BOXES = {
+    'ui.petbody_choreo': ['choreo-switch', 'perform-choreo-switch'],
+    'ui.petbody_perf_auto': ['perf-auto-switch', 'perform-auto-switch'],
+    'performance.program.enabled': ['perform-program-switch'],
+  };
   async function togglePerformanceCapability(path, key, on) {
     let r = null;
     try { r = await api.setConfigValue(key, on); } catch (e) { r = { ok: false, error: (e && e.message) || String(e) }; }
     const wrote = !!(r && (r.ok === true || r.wrote === true));
     if (!wrote) {
-      // 没落盘就把开关拨回去 —— 不能让 UI 停在一个只有这层相信的状态
-      const box = key === 'ui.petbody_choreo' ? $('choreo-switch') : $('perf-auto-switch');
-      if (box) box.checked = !on;
+      // 没落盘就把两处同名开关一起拨回去 —— 不能让 UI 停在一个只有这层相信的状态
+      for (const id of (PERF_SWITCH_BOXES[key] || [])) {
+        const box = $(id);
+        if (box) box.checked = !on;
+      }
       toast('切换失败：' + ((r && r.error) || '写盘失败'));
       return false;
     }
@@ -596,42 +801,145 @@ if (typeof module !== 'undefined' && module.exports) {
     return true;
   }
 
-  $('choreo-switch')?.addEventListener('change', async (event) => {
-    const on = event.target.checked;
-    if (!(await togglePerformanceCapability('ui.petbody_choreo', 'ui.petbody_choreo', on))) return;
-    const ok = await perfEval(`window.petBody && window.petBody.setChoreography(${on ? 'true' : 'false'})`);
-    toast((on ? '情绪微动作已开' : '情绪微动作已关') + (ok === null ? '（配置已存，桌宠不在线，重启后生效）' : ''));
-  });
+  function bindPerfSwitch(id, path, key, onMessage, applyJs, offlineNote) {
+    const note = offlineNote || '（配置已存，桌宠不在线，重启后生效）';
+    $(id)?.addEventListener('change', async (event) => {
+      const on = event.target.checked;
+      if (!(await togglePerformanceCapability(path, key, on))) return;
+      let ok = null;
+      if (applyJs) ok = await perfEval(applyJs(on), { silent: true });
+      toast(onMessage(on) + (ok === null ? note : ''));
+      // 另一处同名开关跟着变（总览 ⇄ 演出页），避免两页各显示一套值
+      for (const other of (PERF_SWITCH_BOXES[key] || [])) {
+        if (other === id) continue;
+        const box = $(other);
+        if (box) box.checked = on;
+      }
+    });
+  }
 
-  $('perf-auto-switch')?.addEventListener('change', async (event) => {
-    const on = event.target.checked;
-    if (!(await togglePerformanceCapability('ui.petbody_perf_auto', 'ui.petbody_perf_auto', on))) return;
-    const ok = await perfEval(`window.petBody && window.petBody.setPerformanceAuto(${on ? 'true' : 'false'})`);
-    toast((on ? '自动演长戏已开' : '自动演长戏已关') + (ok === null ? '（配置已存，桌宠不在线，重启后生效）' : ''));
-  });
+  bindPerfSwitch('choreo-switch', 'ui.petbody_choreo', 'ui.petbody_choreo',
+    (on) => (on ? '情绪微动作已开' : '情绪微动作已关'),
+    (on) => `window.petBody && window.petBody.setChoreography(${on ? 'true' : 'false'})`);
+  bindPerfSwitch('perform-choreo-switch', 'ui.petbody_choreo', 'ui.petbody_choreo',
+    (on) => (on ? '情绪微动作已开' : '情绪微动作已关'),
+    (on) => `window.petBody && window.petBody.setChoreography(${on ? 'true' : 'false'})`);
+  bindPerfSwitch('perf-auto-switch', 'ui.petbody_perf_auto', 'ui.petbody_perf_auto',
+    (on) => (on ? '自动演长戏已开' : '自动演长戏已关'),
+    (on) => `window.petBody && window.petBody.setPerformanceAuto(${on ? 'true' : 'false'})`);
+  bindPerfSwitch('perform-auto-switch', 'ui.petbody_perf_auto', 'ui.petbody_perf_auto',
+    (on) => (on ? '自动演长戏已开' : '自动演长戏已关'),
+    (on) => `window.petBody && window.petBody.setPerformanceAuto(${on ? 'true' : 'false'})`);
+  // 节目单自动：运行时没有单元开关接口，走 setPerformanceConfig 整组下发（driver 启动时
+  // 把 config.performance 注入 window.__petPerformanceConfig；这里读回来改一个键再发回去，
+  // 不整组覆盖 —— 否则会把导演/待机层的现有配置打回默认）。
+  bindPerfSwitch('perform-program-switch', 'performance.program.enabled', 'performance.program.enabled',
+    (on) => (on ? '节目单自动已开' : '节目单自动已关'),
+    (on) => `(function(){try{
+      var on=${on ? 'true' : 'false'};
+      var live=window.__petPerformanceConfig;
+      var base=(live&&typeof live==="object")?JSON.parse(JSON.stringify(live)):{};
+      base.program=Object.assign({},base.program||{},{enabled:on});
+      if(live&&typeof live==="object"){live.program=Object.assign({},live.program||{},{enabled:on});}
+      return (window.petBody&&typeof window.petBody.setPerformanceConfig==="function")
+        ? window.petBody.setPerformanceConfig(base) : null;
+    }catch(e){return null;}})()`,
+    '（运行时还没接线，配置已存）');
 
-  $('perf-play')?.addEventListener('click', async () => {
-    const key = $('perf-pick') && $('perf-pick').value;
+  // 长戏「演 / 停」：从总览迁到演出页（ADR-015 §4.5 第 2 条），渲染层接口不变。
+  $('perform-play')?.addEventListener('click', async () => {
+    const key = $('perform-pick') && $('perform-pick').value;
     if (!key) { toast('没有可演的片段（桌宠可能没运行）'); return; }
     const ok = await perfEval(`window.petBody && window.petBody.playPerformance(${JSON.stringify(key)})`);
     toast(ok === true ? '开始演' : '没能开始（看她是不是已经停了）');
+    setTimeout(refreshPerformPageState, 600);
     setTimeout(refreshPerformanceState, 600);
   });
 
-  $('perf-stop')?.addEventListener('click', async () => {
+  $('perform-stop')?.addEventListener('click', async () => {
     await perfEval('window.petBody && window.petBody.stopPerformance()');
     toast('已停');
+    setTimeout(refreshPerformPageState, 300);
     setTimeout(refreshPerformanceState, 300);
   });
-  // 状态 3 秒刷一次：只在总览页可见时刷，别在后台空转
+
+  // 8103 /perform（浏览器来源必须带 X-Pet-Token；缺令牌 8103 会明确回 403）
+  async function postPerform(body) {
+    const token = (typeof window !== 'undefined' && window.petControlToken) ? String(window.petControlToken) : '';
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['X-Pet-Token'] = token;
+    return fetch('http://127.0.0.1:8103/perform', { method: 'POST', headers, body: JSON.stringify(body) });
+  }
+
+  // 点场景 = 显式手动（优先级最高，会顶掉正在演的长戏）。皮套页与演出页共用这一段。
+  async function performScene(name) {
+    try {
+      const response = await postPerform({ name });
+      if (response.status === 403) {
+        console.warn('[control] /perform 被 403 拒绝（缺 X-Pet-Token 或令牌不匹配）');
+        toast('演出失败：HTTP 403（缺写令牌）');
+        return;
+      }
+      if (!response.ok) { toast('演出失败：HTTP ' + response.status); return; }
+      // ADR-015 §4.5 第 5 条：/perform 以后回 {ok, started}；老版本回 {} 也不能当失败
+      let ack = null;
+      try { ack = await response.json(); } catch (e) { ack = null; }
+      if (ack && ack.ok === false) { toast('没演出来：' + (ack.error || ack.reason || '被拒')); return; }
+      toast('已抢占当前表演：' + name);
+    } catch {
+      toast('皮套不在线，演出没送出去');
+    }
+  }
+
+  // 节目单「试演」：走 8004 eval → window.petBody.playProgram(id)（P3a 的正式接口）。
+  // 8103 /perform 目前只认场景名（扩成 kind:'program' 是 ADR §4.3 的后续项），本页不等它。
+  // 三种拒绝理由必须说人话：disabled / scheduler-off / budget（外加 busy）。
+  const PROGRAM_REASON_TEXT = {
+    disabled: '节目单总开关关着（外观 → 能力 → 节目单（连戏））',
+    'scheduler-off': '调度器没开（performance.scheduler.enabled）',
+    budget: '今天的节目单额度用完了',
+    busy: '正在演别的东西，等这段结束',
+    'not-found': '找不到这个节目单',
+  };
+  async function performProgram(id, title) {
+    const res = await perfEval(
+      `window.petBody && typeof window.petBody.playProgram === 'function' ? window.petBody.playProgram(${JSON.stringify(String(id))}) : null`,
+      { silent: true }
+    );
+    if (res === null) { toast('节目单未接线或皮套不在线'); return; }
+    if (res && res.ok === true) {
+      toast('已抢占当前表演：' + (title || id));
+      setTimeout(refreshPerformPageState, 600);
+      return;
+    }
+    const reason = String((res && res.reason) || 'unknown');
+    toast('没演出来：' + (PROGRAM_REASON_TEXT[reason] || reason));
+  }
+
+  $('perform-scenes')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-scene]');
+    if (!button) return;
+    performScene(button.dataset.scene);
+  });
+
+  $('perform-programs')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-program]');
+    if (!button) return;
+    const title = button.closest('.row')?.querySelector('.row-label')?.textContent || '';
+    performProgram(button.dataset.program, title.trim());
+  });
+
+  // 状态 3 秒刷一次：只在总览 / 演出页可见时刷，别在后台空转。
   let perfStateTimer = null;
   function tickPerfState() {
     const page = document.querySelector('.page.active');
-    if (page && page.id === 'overview') refreshPerformanceState();
+    if (!page) return;
+    if (page.id === 'overview') refreshPerformanceState();
+    else if (page.id === 'perform') refreshPerformPageState();
   }
   clearInterval(perfStateTimer);
   perfStateTimer = setInterval(tickPerfState, 3000);
-  // 注意：真正的初始化（含开关初值）在启动流程里 config 加载完之后调 loadPerformances()，
+  // 注意：真正的初始化（含开关初值）在启动流程里 config 加载完之后调 loadPerformPage()，
   // 这里不能提前调 —— config 还是空对象时会把开关显示成默认值。
 
   // 启动/停止桌宠：语义照 v1（启动前确认保存；退出事件可能先于 IPC 返回）
@@ -2309,29 +2617,15 @@ function renderAll() {
       const value = JSON.parse(await petEval('JSON.stringify(window.petBody && window.petBody.listScenes ? window.petBody.listScenes() : [])') || '[]');
       if (Array.isArray(value) && value.length) scenes = value;
     } catch { /* 皮套不在线就给默认六段，点了会有明确报错 */ }
-    $('scene-box').innerHTML = scenes.map(name => `<button class="btn" type="button" data-scene="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join('');
+    // 按钮 HTML 与演出页共用 buildSceneButtons（2026-11-25 P3b：两处必须一样）
+    $('scene-box').innerHTML = buildSceneButtons(scenes);
   }
-  $('scene-box').addEventListener('click', async event => {
+  // 皮套页的场景按钮保留（用户习惯），点击与演出页走同一段 performScene：
+  // toast 现在明确写「已抢占当前表演」（ADR-015 §4.5 第 7 条）。
+  $('scene-box').addEventListener('click', (event) => {
     const button = event.target.closest('[data-scene]');
     if (!button) return;
-    try {
-      // 8103 浏览器来源写令牌（2026-11-21）：本页是 file:// 源，POST 必须带 X-Pet-Token。
-      // 令牌由 control-preload.js 经 contextBridge 暴露；缺令牌时 8103 会明确回 403。
-      const token = (typeof window !== 'undefined' && window.petControlToken) ? String(window.petControlToken) : '';
-      const headers = { 'Content-Type': 'application/json' };
-      if (token) headers['X-Pet-Token'] = token;
-      const response = await fetch('http://127.0.0.1:8103/perform', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ name: button.dataset.scene })
-      });
-      if (response.status === 403) console.warn('[control] /perform 被 403 拒绝（缺 X-Pet-Token 或令牌不匹配）');
-      toast(response.ok
-        ? '已发送：' + button.dataset.scene
-        : (response.status === 403 ? '演出失败：HTTP 403（缺写令牌）' : '演出失败：HTTP ' + response.status));
-    } catch {
-      toast('皮套不在线，演出没送出去');
-    }
+    performScene(button.dataset.scene);
   });
 
   // ── 记录页（对话历史 + 分页 + 截图预览，语义照 v1）───────────────────
@@ -3197,7 +3491,7 @@ function renderAll() {
         delete config.__llm_providers;
       }
       renderAll();
-      loadPerformances();   // 演出分节：config 已就绪，此时读开关初值才对
+      loadPerformPage();   // 演出页：config 已就绪，此时读开关初值才对
       // 知识库/操控/技能的按钮绑定原先只在「进皮套页」时执行 → 首次打开那三页按钮全死。
       // 这里启动即绑一次（两个 wire 内部都有幂等 guard）。
       // 静默初始值由总览轮询（control:overview ← 8103 /state）回填，不再在设置页写第二份。

@@ -126,7 +126,8 @@ export class BodyDirector {
   }
 
   // 待机小动作的包络：慢进慢出、中间保持；说话时压到 6 成，别和头部跟随抢戏。
-  stepIdle(step, speaking) {
+  // amp（2026-11-25 P1）：ambient 待机层的幅度上限（0..1，默认 1 = 旧行为逐值不变）。
+  stepIdle(step, speaking, amp = 1) {
     const idle = this.idle;
     const out = this.offsets;
     out.x = out.y = out.z = out.bodyX = out.bodyZ = out.posX = out.hipZ = out.ear = 0;
@@ -139,7 +140,7 @@ export class BodyDirector {
       return out;
     }
     const env = smooth(clamp(idle.age / idle.entry, 0, 1)) * smooth(clamp((idle.dur - idle.age) / idle.exit, 0, 1));
-    const w = env * idle.amp * (speaking ? 0.6 : 1) * idle.sign;
+    const w = env * idle.amp * (speaking ? 0.6 : 1) * idle.sign * amp;
     // 幅度克制：头部 ≤4°，躯干 ≤3°（再大就不像"待机时的小动作"了）
     switch (idle.kind) {
       case 'tilt': out.z = w * 1.5; out.x = -w * 0.5; out.y = w * 0.25; break;                        // 歪头
@@ -164,12 +165,16 @@ export class BodyDirector {
     return Math.sin(age * TAU * 3.2) * Math.exp(-age * 7) * 0.85;
   }
 
-  sample({ delta = 0.016, state = 'idle', speechRate = 0 } = {}) {
+  sample({ delta = 0.016, state = 'idle', speechRate = 0, amp = 1 } = {}) {
     const step = clamp(delta, 0, 0.1);
     this.t += step;
     const t = this.t;
     const speaking = state === 'speaking';
     const speech = clamp(speechRate, 0, 1);
+    // ambient 只在「真待机」时压幅度：派活/说话时用 1（那不是待机，别把指令动作也压没）
+    const ambientAmp = this.workState === 'idle' && Number.isFinite(Number(amp))
+      ? clamp(Number(amp), 0, 1)
+      : 1;
 
     // done 到点自动回待机（主进程只调一次 setWorkState('done')，剩下的由这里收尾）。
     if (this.workState === 'done' && t - this.doneAt >= DONE_DURATION) {
@@ -191,25 +196,27 @@ export class BodyDirector {
     // 说话的"激动程度"必须低通：它来自每帧口型开合，是抖的。
     this.speechSmooth += (speech - this.speechSmooth) * (1 - Math.exp(-step / 0.35));
     const sSm = this.speechSmooth;
-    const scale = (speaking ? 1.06 + 0.12 * sSm : 1) * this.energy * this.focus;
+    const scale = (speaking ? 1.06 + 0.12 * sSm : 1) * this.energy * this.focus * ambientAmp;
     // 频率只做很小的平滑变化；相位用累加，绝不用 t*rate（那会让波形整体跳）。
     const rate = speaking ? 1 + 0.05 * sSm : 1;
     this.phase += step * rate;
     // 思考时呼吸放慢一点（专注的人呼吸浅而慢）
     const breathRate = this.workState === 'thinking' ? 0.82 : 1;
 
-    const breath = 0.5 + 0.5 * Math.sin(this.phase * TAU * breathRate / this.cycle.breath);
+    const breathRaw = 0.5 + 0.5 * Math.sin(this.phase * TAU * breathRate / this.cycle.breath);
+    // 呼吸是物理链的输入：压幅度时只压「偏离中位 0.5」的部分，中位不能动（否则像不呼吸了）。
+    const breath = ambientAmp === 1 ? breathRaw : 0.5 + (breathRaw - 0.5) * ambientAmp;
     const swayA = Math.sin(this.phase * TAU * breathRate / this.cycle.sway);
     const swayB = Math.sin(this.phase * TAU * breathRate / this.cycle.sway2 + 1.1);
     const bob = Math.sin(this.phase * TAU * breathRate / this.cycle.bob + 0.4);
-    const ear = this.earPulse(step);
+    const ear = this.earPulse(step) * ambientAmp;
 
     // 待机调度：只在 idle 跑（工作中不插小动作，否则像没在听指令）。
     if (this.workState === 'idle') {
       this.nextIdleAt -= step;
       if (!this.idle && this.nextIdleAt <= 0) this.pick();
     } else if (this.idle) this.idle = null;
-    const idle = this.stepIdle(step, speaking);
+    const idle = this.stepIdle(step, speaking, ambientAmp);
 
     // done 的小跳（只动本模块管着的位移/肩/髋，不碰别的层）
     const hop = this.doneHop();

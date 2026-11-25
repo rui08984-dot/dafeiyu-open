@@ -246,6 +246,12 @@ const FIELD_OPTIONAL = new Map([
         ['ui.show_chat_box', 'applyCapabilityLive → global.__setChatBoxVisible'],
         ['llm.filler_enabled', '/reload-config → app.js 写 global.__latencyFillerCfg'],
         ['auto_close_services.enabled', 'control-main 关面板时 readJson(configPath) 现读'],
+        // 2026-11-25 P3：performance.* 写盘后由 control-main 推给 petBody.setPerformanceConfig（热下发）
+        ['performance.scheduler.enabled', 'control:set-config-value → applyPerformanceConfigLive → petBody.setPerformanceConfig'],
+        ['performance.director.enabled', 'control:set-config-value → applyPerformanceConfigLive → petBody.setPerformanceConfig'],
+        ['performance.ambient.enabled', 'control:set-config-value → applyPerformanceConfigLive → petBody.setPerformanceConfig'],
+        ['performance.program.enabled', 'control:set-config-value → applyPerformanceConfigLive → petBody.setPerformanceConfig'],
+        ['performance.writer.enabled', 'control:set-config-value → applyPerformanceConfigLive → petBody.setPerformanceConfig'],
     ]);
     const hotCaps = activeConfigCaps.filter((c) => c.hot === true);
     const unbacked = hotCaps.filter((c) => !HOT_RUNTIME.has(c.key));

@@ -56,19 +56,26 @@ console.log('\n参数所有权护栏（§69 B3）：');
   ok('两个基础层互抢 = fight（会被判红）', conflicts[0] && conflicts[0].kind === 'fight');
 }
 
-// ── ①b 合法的分层合成不算 fight（否则健康哨兵永久红 = 狼来了）─────────────
+// ── ①b 合法的分层合成不算 fight；choreo（v2）不再是合成层 ──────────────────
+// 2026-11-25 P0 契约变更（ADR-015 §3.0 / 审计 §4.1「所有权黑洞」）：
+//   choreo 绕过 mixer 直接写 Cubism 参数，把 blink/lip/proc-motion 压掉是**真实抢写**。
+//   原断言把 choreo 判 compose，正是「冲突永远为 0 = 假绿」的来源 —— 随契约一起改：
+//   choreo 参与 → fight；perf-override（表演的最终覆盖层）/ action 仍算 compose。
 {
   const cases = [
-    ['ParamAngleX', [LAYER.CHOREO, LAYER.PROC_MOTION]],           // 加法偏置叠在待机摆动上
-    ['ParamEyeLOpen', [LAYER.BLINK, LAYER.PERF_OVERRIDE]],        // 覆盖层是表演的最终裁决
-    ['ParamMouthOpenY', [LAYER.LIP, LAYER.PERF_OVERRIDE]],
-    ['ParamAngleZ', [LAYER.ACTION, LAYER.PROC_MOTION]],
+    ['ParamAngleX', [LAYER.CHOREO, LAYER.PROC_MOTION], 'fight'],      // v2 加法偏置抢待机摆动
+    ['ParamEyeLOpen', [LAYER.BLINK, LAYER.PERF_OVERRIDE], 'compose'], // 覆盖层是表演的最终裁决
+    ['ParamMouthOpenY', [LAYER.LIP, LAYER.PERF_OVERRIDE], 'compose'],
+    ['ParamAngleZ', [LAYER.ACTION, LAYER.PROC_MOTION], 'compose'],
   ];
   const fw = writeMap(cases.map(([p, owners]) => [p, [0.1, 0.9], owners]));
   const r = evaluateFrameConflicts(fw);
-  ok('choreo/perf-override/action 参与的冲突判为 compose', r.conflicts.every((c) => c.kind === 'compose'),
-    JSON.stringify(r.conflicts.map((c) => c.kind)));
-  ok('计数分开：compose=4 / fights=0', r.compose === 4 && r.fights === 0, `compose=${r.compose} fights=${r.fights}`);
+  const byParam = new Map(r.conflicts.map((c) => [c.param, c.kind]));
+  ok('choreo 参与 = fight（不再假绿）', byParam.get('ParamAngleX') === 'fight', JSON.stringify([...byParam]));
+  ok('perf-override / action 参与仍判 compose',
+    cases.filter(([, , kind]) => kind === 'compose').every(([p]) => byParam.get(p) === 'compose'),
+    JSON.stringify([...byParam]));
+  ok('计数分开：compose=3 / fights=1', r.compose === 3 && r.fights === 1, `compose=${r.compose} fights=${r.fights}`);
 }
 
 // ── ② 阈值内微调 / 单次写 / 单 owner 多次写 不算冲突 ────────────────────

@@ -51,6 +51,7 @@ export const UNITS = [
   { label: '单测 游戏安全闸', file: '_probe/test-game-safety-gate.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 JS↔pet-core 字段契约', file: '_probe/test-core-field-contract.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 操控层韧性（focus重试/pid前台/三级回落/snapshot/稳定/归一/verify）', file: '_probe/test-act-resilience.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 点击/聚焦验证通道（UIA 回读为准/元素像素/遮挡三分类，P0-3）', file: '_probe/test-control-verify.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 事实表仲裁', file: '_probe/test-fact-store.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 认知内核（goal/plan/arbiter 纯函数）', file: '_probe/test-mind-kernel.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 认知内核接线（重启/注入/节流）', file: '_probe/test-mind-kernel-plugin.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
@@ -131,6 +132,8 @@ export const UNITS = [
   { label: '回归 编舞轨道采样（纯函数）', file: '_probe/test-choreo-tracks.mjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '回归 表演库 v2（离线产物+播放器）', file: '_probe/test-choreo-performer.mjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '回归 表演自动触发（情绪映射+节流）', file: '_probe/test-choreo-auto.mjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 演出调度器（relax 抢占/收势/排队/原子/旧 API）', file: '_probe/test-perf-scheduler.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 同步点标注（15+97 覆盖/间距/幂等/降级）', file: '_probe/test-perf-sync.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '回归 功能注册表（声明/死键/自检）', file: '_probe/test-capabilities.mjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '回归 插件清单与工具名', file: '_probe/check-plugins.mjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '回归 配置模板（结构/脱敏/漂移）', file: '_probe/check-config-template.mjs', tier: 'smoke', needsHost: null, parallelSafe: true },
@@ -274,6 +277,29 @@ export const UNITS = [
     // 需要抢前台的三条记 SKIP（真机交互档手动跑 runner.mjs 不带 --quiet）。
     args: ['--quiet'] },
   { label: '验收 后台操控（不抢前台/移出屏幕仍可读可点）', file: '_probe/control-background-accept.cjs', tier: 'full', needsHost: '8004', parallelSafe: false },
+
+  // ── 2026-11-25 ADR-015 / 审计修复新增（全部离线纯逻辑，入 smoke）──────────
+  { label: '单测 表演所有权护栏（v2 写入集/exp3 pin/冲突计数）', file: '_probe/test-perf-ownership.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 演出导演（presence/预算/强度/被接率）', file: '_probe/test-perf-director.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 演出契约（配置键/能力/UI 入口/syncCoverage）', file: '_probe/test-perf-contract.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 Ambient 待机层（状态/停留/加权池/幅度）', file: '_probe/test-perf-ambient.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 Ambient 偏置落地（系数/钳位/speaking 减半）', file: '_probe/test-perf-ambient-apply.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 调度器接线（disabled 对拍/收势/账目）', file: '_probe/test-perf-scheduler-integration.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 节目单运行器（串接/最短段/中断/预算）', file: '_probe/test-program-runner.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 场景台词单一真源（12 键/两消费者）', file: '_probe/test-scene-lines.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 演出页契约（页面/入口去重/开关）', file: '_probe/test-perf-ui.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 按键路由（游戏 PostMessage/非游戏 SendInput）', file: '_probe/test-key-routing.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 窗口标题统一匹配（精确/前缀/唯一子串/歧义）', file: '_probe/test-window-match.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 focus 回读（前台不符 → 不 confirmed）', file: '_probe/test-focus-verified.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 MemOS 搜索失败可观测（1 静默/2 warn/成功清零）', file: '_probe/test-memos-failure.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 截断 JSON 假成功修复（parseError/telemetry）', file: '_probe/test-tool-result-truncated.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 插件热重载 hash（同内容跳过/失败保留旧实例）', file: '_probe/test-plugin-reload-hash.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 turn.end 真实 outcome（error/interrupted/blocked）', file: '_probe/test-turn-outcome.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 launcher 心跳/死因/陈旧锁', file: '_probe/test-launcher-heartbeat.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 see image 图片管线（剥 base64/附 image_url/分槽）', file: '_probe/test-see-image-pipeline.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 向量缓存 LRU/增量/原子写', file: '_probe/test-vector-cache-lru.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 画像 prompt 预算（6000 字符/截断重试）', file: '_probe/test-profile-prompt-budget.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 记忆待写队列/事实层（attempt/死信/event 过滤）', file: '_probe/test-memory-queue-facts.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
 ];
 
 /** 取某档应跑的全部项：--core 含 smoke，--full 含全部。 */

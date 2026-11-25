@@ -93,6 +93,55 @@ const DEFAULT_CANDIDATES = {
     version: 1
 };
 
+// ── 画像分析 prompt 预算（2026-11-25 P1 成本修复）──────────────────────────
+// 现场：_buildCandidatePrompt 把**整份缩进版画像 JSON**（35KB）灌进 prompt，
+//   实测 15.6K tokens ×2（空回复重试同一份），max_tokens=4000 仍被 finish_reason=length
+//   截断，随后按「LLM 返回为空」失败 → 每 3 分钟烧一次云配额、画像却不动。
+// 契约（本文件的唯一真相）：
+//   · 只喂紧凑画像：按类别取最近/高置信 topN（habit 20 / preference 15 / trait 10 / fact 10），
+//     单条 80 字；不再 JSON.stringify(..., null, 2)；
+//   · prompt 总字符硬闸 6000（超了按「fact → trait → preference → habit」丢类别，
+//     再丢候选摘要，最后丢最旧消息 —— 越靠前的类别越该保住）；
+//   · max_tokens 1200；
+//   · 空正文 / finish_reason=length / JSON 花括号不闭合 → topN 减半重试一次；
+//     仍失败记 profile.analysis.skip reason:'too_long'，不写空候选。
+const PROFILE_PROMPT_MAX_CHARS = 6000;
+const PROFILE_PROMPT_ITEM_MAX = 80;
+const PROFILE_PROMPT_MESSAGE_MAX = 200;
+const PROFILE_PROMPT_MAX_TOKENS = 1200;
+const PROFILE_PROMPT_CANDIDATE_MAX = 30;
+const PROFILE_PROMPT_CANDIDATE_TEXT_MAX = 40;
+const PROFILE_PROMPT_RELATION_LIMIT = 5;
+// 丢类别顺序：先从「最不影响长期画像」的类别开始丢。habit 最后丢（行为模式最值钱）。
+const PROFILE_PROMPT_DROP_ORDER = Object.freeze(['fact', 'trait', 'preference', 'habit']);
+const PROFILE_PROMPT_CATEGORY_CAPS = Object.freeze({ habit: 20, preference: 15, trait: 10, fact: 10 });
+
+// 候选观察的 JSON Schema（服务端约束解码；老服务不认时 _callProfileLLM 降级一次纯 prompt）
+const OBSERVATIONS_SCHEMA = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['observations'],
+    properties: {
+        observations: {
+            type: 'array',
+            items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['match_id', 'category', 'text', 'evidence', 'one_off', 'self_declared', 'obsolete_profile_text'],
+                properties: {
+                    match_id: { type: ['string', 'null'] },
+                    category: { type: 'string', enum: ['habit', 'trait', 'like', 'dislike', 'fact', 'relationship'] },
+                    text: { type: 'string' },
+                    evidence: { type: 'string' },
+                    one_off: { type: 'boolean' },
+                    self_declared: { type: 'boolean' },
+                    obsolete_profile_text: { type: 'string' }
+                }
+            }
+        }
+    }
+};
+
 class UserProfilePlugin extends Plugin {
 
     async onInit() {
@@ -402,14 +451,69 @@ class UserProfilePlugin extends Plugin {
     }
 
     async _extractCandidates(recentMessages) {
-        const prompt = this._buildCandidatePrompt(recentMessages);
-        const response = await this._callProfileLLM(prompt, { temperature: 0.2 });
-        const parsed = this._parseJsonObject(response);
+        // 第一次用正常预算；输出空/被截断 → topN 减半、消息减半再试一次。
+        // 两次都失败就不再写空候选（旧行为会把「LLM 返回为空」抛给 _distill，每 3 分钟重试同一份 35KB prompt）。
+        let result = await this._runCandidatePrompt(recentMessages, PROFILE_PROMPT_CATEGORY_CAPS, this._numberCfg('max_context_messages', 40));
+        if (this._profileOutputTruncated(result)) {
+            const half = {};
+            for (const [k, v] of Object.entries(PROFILE_PROMPT_CATEGORY_CAPS)) {
+                half[k] = Math.max(1, Math.floor(v / 2));
+            }
+            this.context.log('warn', `[画像] 候选分析输出不完整，降级重试（topN 减半）: ${this._profilePromptLogLine(result)}`);
+            result = await this._runCandidatePrompt(recentMessages, half,
+                Math.max(4, Math.ceil(this._numberCfg('max_context_messages', 40) / 2)));
+        }
+        if (this._profileOutputTruncated(result)) {
+            this.context.log('warn', `profile.analysis.skip reason:'too_long' ${this._profilePromptLogLine(result)}`);
+            return [];
+        }
+
+        const parsed = this._parseJsonObject(result.text);
         const observations = Array.isArray(parsed.observations) ? parsed.observations : [];
 
         return observations
             .map(obs => this._normalizeObservation(obs))
             .filter(obs => obs && obs.text);
+    }
+
+    async _runCandidatePrompt(recentMessages, caps, messageLimit) {
+        const prompt = this._buildCandidatePrompt(recentMessages, { caps, messageLimit });
+        const stats = Object.assign({}, this._lastPromptStats);
+        const out = await this._callProfileLLM(prompt, {
+            temperature: 0.2, withMeta: true, schema: 'observations', max_tokens: PROFILE_PROMPT_MAX_TOKENS
+        });
+        const text = typeof out === 'string' ? out : String((out && out.text) || '');
+        return {
+            text,
+            finishReason: String((out && out.finishReason) || ''),
+            stats
+        };
+    }
+
+    /**
+     * 输出是否「没拿到可用正文」。三个信号任一成立即算：
+     *   · 正文为空（本地小模型只回 reasoning 的典型形态）；
+     *   · finish_reason === 'length'（专用画像模型的 HTTP 通道能拿到）；
+     *   · 花括号不闭合（context.callLLM 只回字符串，拿不到 finish_reason → 用结构判据兜底）。
+     */
+    _profileOutputTruncated(result) {
+        if (!result) return true;
+        const text = String(result.text || '').trim();
+        if (!text) return true;
+        if (String(result.finishReason || '').toLowerCase() === 'length') return true;
+        const opens = (text.match(/\{/g) || []).length;
+        const closes = (text.match(/\}/g) || []).length;
+        return opens > closes;
+    }
+
+    _profilePromptLogLine(result) {
+        const s = (result && result.stats) || this._lastPromptStats || {};
+        return 'promptChars=' + (Number(s.chars) || 0)
+            + ' tokensEst=' + (Number(s.tokensEst) || 0)
+            + ' maxTokens=' + PROFILE_PROMPT_MAX_TOKENS
+            + ' finishReason=' + String((result && result.finishReason) || 'unknown')
+            + ' profileChars=' + (Number(s.profileChars) || 0)
+            + ' dropped=' + JSON.stringify(s.dropped || []);
     }
 
     async _updateCandidatePool(observations) {
@@ -655,23 +759,39 @@ ${JSON.stringify(candidates.map(c => ({
     // ===== Profile LLM =====
 
     async _callProfileLLM(prompt, options = {}) {
+        const withMeta = options.withMeta === true;
+        const wrap = (text, finishReason) => (withMeta
+            ? { text: String(text || ''), finishReason: String(finishReason || '') }
+            : String(text || ''));
         const primary = this._cfg.profile_llm || {};
         const hasDedicated = primary.model && primary.api_key && primary.base_url;
 
         if (!hasDedicated) {
             const opts = {
                 temperature: options.temperature ?? 0.2,
-                max_tokens: primary.max_tokens || options.max_tokens || 4000
+                max_tokens: this._numberValue(options.max_tokens,
+                    this._numberValue(primary.max_tokens, PROFILE_PROMPT_MAX_TOKENS))
             };
-            let out = await this.context.callLLM(prompt, opts);
-            // 空返回重试一次（2026-11-07 日志：画像后台分析失败 LLM 返回为空 ×3——
-            // 主模型偶发只回 reasoning 不回 content；抬一点温度重试，仍空才报错并写明方向）
-            if (!String(out || '').trim()) {
+            if (options.schema === 'observations') opts.response_format = this._profileResponseFormat();
+            let out;
+            try {
+                out = await this.context.callLLM(prompt, opts);
+            } catch (err) {
+                if (!this._isSchemaRejected(err) || !opts.response_format) throw err;
+                this._warnSchemaUnsupported('主对话模型');
+                const relaxed = Object.assign({}, opts);
+                delete relaxed.response_format;
+                out = await this.context.callLLM(prompt, relaxed);
+            }
+            // context.callLLM 只回字符串（拿不到 finish_reason）。空返回的重试交给
+            // _extractCandidates 的「更紧凑 prompt」路径；这里保留旧的一次同 prompt 重试，
+            // 仅用于非分析调用（润色/冷启动），避免它们因偶发空正文直接失败。
+            if (!withMeta && !String(out || '').trim()) {
                 await new Promise((r) => setTimeout(r, 1500));
                 out = await this.context.callLLM(prompt, { ...opts, temperature: (opts.temperature ?? 0.2) + 0.1 });
             }
-            if (!String(out || '').trim()) throw new Error('LLM 返回为空（重试后仍空：多为模型只回思考不回正文或额度受限）');
-            return out;
+            if (!withMeta && !String(out || '').trim()) throw new Error('LLM 返回为空（重试后仍空：多为模型只回思考不回正文或额度受限）');
+            return wrap(out, '');
         }
 
         const configs = [primary];
@@ -679,7 +799,7 @@ ${JSON.stringify(candidates.map(c => ({
         if (fallback.enabled && fallback.model && fallback.api_key && fallback.base_url) {
             configs.push({
                 ...fallback,
-                max_tokens: primary.max_tokens || options.max_tokens || 4000,
+                max_tokens: this._numberValue(primary.max_tokens, PROFILE_PROMPT_MAX_TOKENS),
                 timeout_seconds: primary.timeout_seconds || 120
             });
         }
@@ -688,10 +808,11 @@ ${JSON.stringify(candidates.map(c => ({
         for (const cfg of configs) {
             const timeouts = [this._numberValue(cfg.timeout_seconds, 120), this._numberValue(cfg.timeout_seconds, 120) * 2];
             for (const timeoutSeconds of timeouts) {
+                const payload = this._buildChatPayload(cfg, prompt, options);
                 try {
                     const { data } = await axios.post(
                         `${this._trimTrailingSlash(cfg.base_url)}/chat/completions`,
-                        this._buildChatPayload(cfg, prompt, options),
+                        payload,
                         {
                             headers: {
                                 Authorization: `Bearer ${cfg.api_key}`,
@@ -700,15 +821,67 @@ ${JSON.stringify(candidates.map(c => ({
                             timeout: timeoutSeconds * 1000
                         }
                     );
-                    return data.choices?.[0]?.message?.content || '';
+                    const choice = data.choices?.[0] || {};
+                    return wrap(choice.message?.content || '', choice.finish_reason || '');
                 } catch (err) {
+                    // 服务端不认 response_format（老 llama.cpp / 兼容层会直接 400）：
+                    // 去掉结构化约束再试一次，只 warn 一次，不让画像链路永久停摆。
+                    if (payload.response_format && this._isSchemaRejected(err)) {
+                        this._warnSchemaUnsupported(cfg.model || '画像模型');
+                        payload.response_format = undefined;
+                        try {
+                            const { data } = await axios.post(
+                                `${this._trimTrailingSlash(cfg.base_url)}/chat/completions`,
+                                payload,
+                                {
+                                    headers: {
+                                        Authorization: `Bearer ${cfg.api_key}`,
+                                        'Content-Type': 'application/json'
+                                    },
+                                    timeout: timeoutSeconds * 1000
+                                }
+                            );
+                            const choice = data.choices?.[0] || {};
+                            return wrap(choice.message?.content || '', choice.finish_reason || '');
+                        } catch (err2) {
+                            lastError = err2;
+                            this.context.log('warn', `画像模型调用失败 (${cfg.model}, ${timeoutSeconds}s): ${err2.message}`);
+                            continue;
+                        }
+                    }
                     lastError = err;
                     this.context.log('warn', `画像模型调用失败 (${cfg.model}, ${timeoutSeconds}s): ${err.message}`);
                 }
             }
         }
 
+        // P0-2（2026-11-25）：画像专用 axios 不走 plugin-context.callLLM 的 catch，
+        // 网络/超时（无 HTTP 状态码）失败在这里补一次 llm-health 记账 —— 否则后台
+        // ensureCanRun 看不到失败，每个周期继续撞。只在**重试全部用尽**后记一次。
+        try { require('../../../js/api-utils.js').noteLlmNetworkFailure(lastError); } catch (e) { /* 记账失败不影响抛错 */ }
+
         throw lastError || new Error('画像模型调用失败');
+    }
+
+    _profileResponseFormat() {
+        return {
+            type: 'json_schema',
+            json_schema: { name: 'profile_observations', strict: true, schema: OBSERVATIONS_SCHEMA }
+        };
+    }
+
+    /** 只认 4xx + 文案提到 schema/response_format 的拒绝（网络超时/429 不算）。 */
+    _isSchemaRejected(err) {
+        const status = Number(err && (err.status || (err.response && err.response.status))) || 0;
+        if (!(status >= 400 && status < 500)) return false;
+        const text = String((err && err.message) || '') + ' ' + String((err && err.body) || '');
+        return /response_format|json_schema|json schema|grammar|schema/i.test(text);
+    }
+
+    _warnSchemaUnsupported(who) {
+        if (this._schemaWarned) return;
+        this._schemaWarned = true;
+        this.context.log('warn', `[画像] ${who}不支持 response_format/json_schema，已降级为纯 prompt 约束（只记一次）`);
     }
 
     _buildChatPayload(cfg, prompt, options) {
@@ -716,8 +889,11 @@ ${JSON.stringify(candidates.map(c => ({
                             model: cfg.model,
                             messages: [{ role: 'user', content: prompt }],
                             temperature: options.temperature ?? 0.2,
-                            max_tokens: this._numberValue(cfg.max_tokens || options.max_tokens, 4000)
+                            max_tokens: this._numberValue(options.max_tokens,
+                                this._numberValue(cfg.max_tokens, PROFILE_PROMPT_MAX_TOKENS))
         };
+
+        if (options.schema === 'observations') payload.response_format = this._profileResponseFormat();
 
         if (cfg.thinking_mode) {
             payload.thinking = { type: String(cfg.thinking_mode) };
@@ -1010,25 +1186,14 @@ ${JSON.stringify(preferences, null, 2)}
 ${JSON.stringify(graph, null, 2)}`;
     }
 
-    _buildCandidatePrompt(recentMessages) {
-        const candidateSummary = this._candidateStore.candidates
-            .filter(c => c.status !== 'archived')
-            .slice(-50)
-            .map(c => ({
-                id: c.id,
-                category: c.category,
-                text: c.text,
-                count: c.count,
-                first_seen: c.first_seen,
-                last_seen: c.last_seen,
-                self_declared: c.self_declared
-            }));
+    _buildCandidatePrompt(recentMessages, options = {}) {
+        const opts = options || {};
+        const caps = Object.assign({}, PROFILE_PROMPT_CATEGORY_CAPS, opts.caps || {});
+        const messageLimit = Math.max(1, Number(opts.messageLimit) || this._numberCfg('max_context_messages', 40));
+        const profile = this._buildCompactProfile(caps);
+        const candidateSummary = this._compactCandidateSummary();
 
-        // 2026-11-21：隔离区不喂给画像模型。否则它会把刚隔离的一次性事件/测试元行为
-        // 当成「已有正式画像」再次观察、再次晋升，隔离就白做了。
-        const { quarantined: _quarantined, ...activeProfile } = this._profile;
-
-        return `你是用户画像观察器。请从最近对话中提取"可能值得长期跟踪"的用户观察，输出候选观察，不要直接判断它已是长期画像。
+        const head = `你是用户画像观察器。请从最近对话中提取"可能值得长期跟踪"的用户观察，输出候选观察，不要直接判断它已是长期画像。
 
 重要原则：
 - 只提取与主人长期画像有关的观察：habit(习惯/行为模式)、trait(性格/做派)、like、dislike、fact(稳定事实)、relationship。
@@ -1038,14 +1203,10 @@ ${JSON.stringify(graph, null, 2)}`;
 - 如发现某个正式画像项已被明确否定/取代，可填写 obsolete_profile_text。
 - 只输出 JSON，不要 markdown，不要解释。
 
-已有正式画像：
-${JSON.stringify(activeProfile, null, 2)}
+已有正式画像（紧凑版：按最近出现排序，单条 ≤${PROFILE_PROMPT_ITEM_MAX} 字）：
+`;
 
-已有候选池摘要：
-${JSON.stringify(candidateSummary, null, 2)}
-
-最近对话：
-${JSON.stringify(recentMessages.map(m => ({ role: m.role, content: m.content })), null, 2)}
+        const tail = `
 
 输出格式（category 必须填**一个**词，从下面 6 个里选一个，不要照抄整行、不要带竖线/逗号）：
 {
@@ -1061,6 +1222,157 @@ ${JSON.stringify(recentMessages.map(m => ({ role: m.role, content: m.content }))
     }
   ]
 }`;
+
+        const labelCandidates = '\n\n已有候选池摘要：\n';
+        const labelMessages = '\n\n最近对话（旧→新）：\n';
+
+        const msgs = (Array.isArray(recentMessages) ? recentMessages : [])
+            .slice(-messageLimit)
+            .map(m => ({
+                role: m && m.role === 'assistant' ? '她' : '主人',
+                text: this._truncatePromptText(m && m.content, PROFILE_PROMPT_MESSAGE_MAX)
+            }))
+            .filter(m => m.text);
+
+        const dropped = [];
+        const compose = () => {
+            const profileText = JSON.stringify(profile);
+            const candidateText = JSON.stringify(candidateSummary);
+            const msgText = msgs.map(m => `${m.role}：${m.text}`).join('\n');
+            return head + profileText + labelCandidates + candidateText + labelMessages + msgText + tail;
+        };
+
+        let prompt = compose();
+
+        // ① 超预算 → 先丢候选摘要（辅助信息：插件侧 _findCandidateForObservation 还会模糊匹配，
+        //    丢 match_id 只会多出一条候选，不会丢观察；而 30 条摘要能占 3KB+）。
+        while (prompt.length > PROFILE_PROMPT_MAX_CHARS && candidateSummary.length) {
+            candidateSummary.pop();
+            if (!dropped.includes('candidates')) dropped.push('candidates');
+            prompt = compose();
+        }
+
+        // ② 仍超 → 从最旧的对话丢（保留至少 1 条最新的；对话是当轮分析的输入）。
+        while (prompt.length > PROFILE_PROMPT_MAX_CHARS && msgs.length > 1) {
+            msgs.shift();
+            if (!dropped.includes('messages')) dropped.push('messages');
+            prompt = compose();
+        }
+
+        // ③ 仍超 → 按优先级丢整个画像类别（fact 最先，habit 最后；habit 是行为模式，最值钱）。
+        //    画像是「避免重复晋升」的唯一上下文，比候选摘要更该保住，所以放最后丢。
+        for (const cat of PROFILE_PROMPT_DROP_ORDER) {
+            if (prompt.length <= PROFILE_PROMPT_MAX_CHARS) break;
+            if (cat === 'preference') {
+                if (!profile.preferences) continue;
+                delete profile.preferences;
+            } else {
+                const key = cat === 'habit' ? 'habits' : cat + 's';
+                if (!profile[key]) continue;
+                delete profile[key];
+            }
+            dropped.push(cat);
+            prompt = compose();
+        }
+
+        // ④ 最后一道硬闸：单条消息本身超长时截到剩余预算（不把 prompt 撑破）。
+        if (prompt.length > PROFILE_PROMPT_MAX_CHARS && msgs.length) {
+            const overflow = prompt.length - PROFILE_PROMPT_MAX_CHARS;
+            const last = msgs[msgs.length - 1];
+            last.text = this._truncatePromptText(last.text, Math.max(1, last.text.length - overflow - 1));
+            if (!dropped.includes('messages')) dropped.push('messages');
+            prompt = compose();
+        }
+
+        this._lastPromptStats = {
+            chars: prompt.length,
+            tokensEst: Math.ceil(prompt.length / 2.2),   // 中文约 2.2 字符/token（现场 35KB ≈ 15.6K tokens）
+            maxTokens: PROFILE_PROMPT_MAX_TOKENS,
+            profileChars: JSON.stringify(profile).length,
+            candidateChars: JSON.stringify(candidateSummary).length,
+            messages: msgs.length,
+            dropped
+        };
+        return prompt;
+    }
+
+    /**
+     * 紧凑画像：只带「最近/高置信」的 topN，单条 ≤80 字，无缩进。
+     * 画像项本身没有 confidence 字段（晋升闸已经做过置信筛选），这里用 `_meta.items.last_seen`
+     * 做「最近」排序；没有 meta 的旧条目按出现顺序兜底（越靠后越新）。
+     */
+    _buildCompactProfile(caps = {}) {
+        const c = Object.assign({}, PROFILE_PROMPT_CATEGORY_CAPS, caps || {});
+        const out = {};
+        if (this._profile.name) out.name = this._truncatePromptText(this._profile.name, 40);
+        if (this._profile.nickname) out.nickname = this._truncatePromptText(this._profile.nickname, 40);
+
+        const habits = this._promptItems('habits', c.habit);
+        if (habits.length) out.habits = habits;
+
+        // preference 的 15 条是 likes+dislikes **合计**：混排后按最近出现取前 15，再拆回两组。
+        const prefs = [];
+        for (const [field, tag] of [['preferences.likes', '喜欢'], ['preferences.dislikes', '不喜欢']]) {
+            for (const item of this._promptItemObjects(field)) prefs.push(Object.assign({}, item, { tag }));
+        }
+        prefs.sort((a, b) => (b.at - a.at) || (a.idx - b.idx));
+        const prefTop = prefs.slice(0, Math.max(0, Number(c.preference) || 0));
+        if (prefTop.length) {
+            out.preferences = {
+                likes: prefTop.filter(x => x.tag === '喜欢').map(x => x.text),
+                dislikes: prefTop.filter(x => x.tag === '不喜欢').map(x => x.text)
+            };
+        }
+
+        const traits = this._promptItems('traits', c.trait);
+        if (traits.length) out.traits = traits;
+        const facts = this._promptItems('facts', c.fact);
+        if (facts.length) out.facts = facts;
+        const rel = this._promptItems('relationships', PROFILE_PROMPT_RELATION_LIMIT);
+        if (rel.length) out.relationships = rel;
+        return out;
+    }
+
+    _promptItems(field, limit) {
+        return this._promptItemObjects(field)
+            .slice(0, Math.max(0, Number(limit) || 0))
+            .map(x => x.text);
+    }
+
+    _promptItemObjects(field) {
+        const list = this._getProfileList(field) || [];
+        const meta = (this._profile._meta && this._profile._meta.items) || {};
+        const out = [];
+        list.forEach((text, idx) => {
+            const s = String(text || '').trim();
+            if (!s) return;
+            const m = meta[this._profileMetaKey(field, text)] || {};
+            const at = Date.parse(String(m.last_seen || m.promoted_at || '')) || 0;
+            out.push({ text: this._truncatePromptText(s, PROFILE_PROMPT_ITEM_MAX), at, idx });
+        });
+        return out.sort((a, b) => (b.at - a.at) || (a.idx - b.idx));
+    }
+
+    _compactCandidateSummary() {
+        const candidates = (this._candidateStore && Array.isArray(this._candidateStore.candidates))
+            ? this._candidateStore.candidates
+            : [];
+        return candidates
+            .filter(c => c && c.status !== 'archived')
+            .slice(-PROFILE_PROMPT_CANDIDATE_MAX)
+            .map(c => ({
+                id: c.id,
+                category: c.category,
+                text: this._truncatePromptText(c.text, PROFILE_PROMPT_CANDIDATE_TEXT_MAX),
+                count: c.count,
+                last_seen: c.last_seen
+            }));
+    }
+
+    _truncatePromptText(text, max) {
+        const s = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+        const n = Math.max(1, Number(max) || PROFILE_PROMPT_ITEM_MAX);
+        return s.length > n ? s.slice(0, n - 1) + '…' : s;
     }
 
     // ===== MemOS =====

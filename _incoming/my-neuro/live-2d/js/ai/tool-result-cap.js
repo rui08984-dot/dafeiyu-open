@@ -46,6 +46,34 @@ const STUB_MARKER = STUB_PREFIX + '；需要细节请重新调用工具（用 of
 let _artifact = null;
 try { _artifact = require('./tool-result-artifact.js'); } catch (e) { _artifact = null; }
 
+// 含图回执识别（P0-1，2026-11-25）：`imageIsBase64` / 超长 base64 信封一律**整段跳过**。
+// 为什么不能走「JSON 信封只截 detail」：baseLen 里含整张 base64（实测 180,753 字节），
+// budget 必然 <256 → 返回 null → 退化成纯文本盲切 → JSON 非法 + 续读指针被切掉。
+// 图片本身由 llm-handler 剥成 image_url 消息；这里只保证「绝不切坏」。
+let _looksLikeToolImageEnvelope = null;
+try {
+    const imgAttach = require('./tool-image-attach.js');
+    if (imgAttach && typeof imgAttach.looksLikeToolImageEnvelope === 'function') {
+        _looksLikeToolImageEnvelope = imgAttach.looksLikeToolImageEnvelope;
+    }
+} catch (e) { _looksLikeToolImageEnvelope = null; }
+
+/** 兜底判定（tool-image-attach 不可用时）：与它同口径。 */
+function _isImageEnvelopeFallback(text) {
+    const s = typeof text === 'string' ? text : '';
+    if (s.length < 2000) return false;
+    if (/"imageIsBase64"\s*:\s*true/.test(s)) return true;
+    const m = /"image"\s*:\s*"/.exec(s);
+    if (!m) return false;
+    const start = m.index + m[0].length;
+    const end = s.indexOf('"', start);
+    return end >= 0 && (end - start) >= 2000;
+}
+
+function isImageEnvelope(text) {
+    return _looksLikeToolImageEnvelope ? _looksLikeToolImageEnvelope(text) : _isImageEnvelopeFallback(text);
+}
+
 // 回执里已经自带续读指针的，不要再落一份重复全文（dispatch/file 已经写过一份）
 const CONTINUATION_RE = /artifactPath|tool-artifacts|完整(?:结果|内容|原文)已落盘/;
 
@@ -122,6 +150,11 @@ function capText(content, limit, opts) {
     const artifactPath = String((opts && opts.artifactPath) || '');
     if (!text || text.length <= max) return { text, capped: false, dropped: 0 };
     if (_isStub(text)) return { text, capped: false, dropped: 0 };
+    // 含图回执：整段跳过（不截断、不二次序列化）——切坏 JSON 比超体积更糟；
+    // 图片投递由 llm-handler / tool-image-attach 负责。
+    if (isImageEnvelope(text)) {
+        return { text, capped: false, dropped: 0, skipped: true, skipReason: 'image' };
+    }
 
     // ① JSON 信封：只截 detail，保住 next/artifactPath/其它字段
     const env = _capJsonEnvelope(text, max, artifactPath);
@@ -200,11 +233,15 @@ function _capJsonEnvelope(text, max, artifactPath) {
  * @param {Array} messages voiceChat.messages（同一份宿主数组；调用方在发请求前执行）
  * @param {number} turnStartIndex 本轮第一条 user 消息在数组里的下标；非法/未知时跳过累计闸
  * @param {{perResultChars?:number, perTurnChars?:number}} [opts]
- * @returns {{capped:number, stubbed:number, droppedChars:number, turnChars:number, artifacts:number}}
+ * @returns {{capped:number, stubbed:number, droppedChars:number, turnChars:number, artifacts:number,
+ *            skipped:number, skipReasons:string[]}}
  */
 function enforceToolBudget(messages, turnStartIndex, opts) {
     const limits = resolveLimits(opts);
-    const out = { capped: 0, stubbed: 0, droppedChars: 0, turnChars: 0, artifacts: 0 };
+    const out = {
+        capped: 0, stubbed: 0, droppedChars: 0, turnChars: 0, artifacts: 0,
+        skipped: 0, skipReasons: [],
+    };
     if (!Array.isArray(messages) || !messages.length) return out;
 
     // ① 单条上限：对所有 tool 消息（含历史加载进来的旧回执）。
@@ -214,6 +251,13 @@ function enforceToolBudget(messages, turnStartIndex, opts) {
         const orig = _textOf(m.content);
         if (!orig || _isStub(orig)) continue;             // 已省略的不再动（P1-2 幂等恢复）
         let r = capText(orig, limits.perResultChars);
+        if (r.skipped) {
+            // P0-1：含图回执整段跳过（cap.skip reason:image）——内容换成任何字都会让
+            // 「工具回执里还有 base64」的旧历史被切坏/泄漏，原样留着交给剥图/投递路径。
+            out.skipped += 1;
+            out.skipReasons.push(String(r.skipReason || 'image'));
+            continue;
+        }
         if (!r.capped) continue;
         // P1-3：真丢内容且原文没有续读指针 → 先把全文落 artifact，再把**真实路径**写进标记
         let artPath = '';
@@ -241,6 +285,10 @@ function enforceToolBudget(messages, turnStartIndex, opts) {
         if (!m || m.role !== 'tool') continue;
         const text = _textOf(m.content);
         if (!text) continue;
+        // P0-1：含图回执**不计入**单轮总量、也绝不进「从最旧开始省略」的候选 ——
+        // 否则一条 180KB 的工具图会把同轮其它正常回执全挤没，自己还被换成省略标记。
+        // （skipped 计数在单条闸那一遍已经做过，这里不重复计。）
+        if (isImageEnvelope(text)) continue;
         total += text.length;
         if (!_isStub(text)) idxs.push(i);
     }
@@ -268,5 +316,6 @@ module.exports = {
     resolveLimits,
     capText,
     enforceToolBudget,
+    isImageEnvelope,
     _isStub,
 };

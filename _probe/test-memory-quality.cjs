@@ -133,7 +133,10 @@ function stopTimers(p) {
     await q.onUserInput({ text: '我不吃香菜' });
     const inj = q._patches.filter((x) => x.id === 'memory-recall-context');
     ok('注入 patch 已写入', inj.length === 1, 'patches=' + q._patches.map((x) => x.id).join(','));
-    ok('注入后强化 +1', q._reinforce[key] === 1, 'count=' + q._reinforce[key]);
+    // 2026-11-25 契约变更：强化表值从纯数字改为 {c, lastAt}（90 天 TTL 需要 lastAt）。
+    // 断言口径改用读侧统一入口 _reinforceCount（旧数字格式仍兼容）。
+    ok('注入后强化 +1', q._reinforceCount(key) === 1, 'count=' + q._reinforceCount(key));
+    ok('强化条目带 lastAt（TTL 依据）', Boolean(q._reinforce[key] && q._reinforce[key].lastAt > 0));
     ok('debugState.reinforced=1', q.debugState().quality.reinforced === 1);
     stopTimers(q); rmrf(d2);
 
@@ -158,8 +161,8 @@ function stopTimers(p) {
     c._injectLimit = 1;
     const key4 = installOneDoc(c, '我不喜欢吃香菜');
     for (let i = 0; i < 8; i += 1) await c.onUserInput({ text: '我不吃香菜' });
-    ok('连续注入 8 次后计数封顶 5', c._reinforce[key4] === P.REINFORCE_CAP, 'count=' + c._reinforce[key4]);
-    ok('强化表里不存在 >5 的值', Object.values(c._reinforce).every((v) => v <= P.REINFORCE_CAP));
+    ok('连续注入 8 次后计数封顶 5', c._reinforceCount(key4) === P.REINFORCE_CAP, 'count=' + c._reinforceCount(key4));
+    ok('强化表里不存在 >5 的值', Object.keys(c._reinforce).every((k) => c._reinforceCount(k) <= P.REINFORCE_CAP));
     ok('注入次数本身照常计数（8）', c.debugState().quality.reinforced === 8, 'reinforced=' + c.debugState().quality.reinforced);
     stopTimers(c); rmrf(d4);
 

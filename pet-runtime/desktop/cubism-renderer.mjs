@@ -2,6 +2,7 @@ import { InteractionMotion } from './interaction-motion.mjs';
 import { classifyParam, PHYSICS_BOTH } from './perf/physics-io.mjs';
 import { applyGazeOffsets } from './perf/gaze-commit.mjs';
 import { shouldRestackBlink, writesEyeOpen } from './perf/blink-stack.mjs';
+import { applyAmbientOffsets, ambientOffsets, normalizeAmbientBias } from './perf/ambient-apply.mjs';
 import { BodyDirector } from './body-director.mjs';
 import { MotionDirector, listActions } from './motion-vocab.mjs';
 import { normalizePresentationIntent } from '../contracts/presentation.ts';
@@ -46,6 +47,15 @@ export class JellyfishRenderer extends CubismUserModel {
     // 一个都不写 EyeOpen —— 旧代码只看「有没有表情」，于是有表情时眨眼恒被平方。
     this.eyeWritingExpressions = new Set();
     this.interaction = new InteractionMotion(); this.bodyDirector = new BodyDirector();
+    // 待机层幅度（2026-11-25 P1，ADR-015 §3.4）：ambient 给的 0..1 预算，1 = 旧行为。
+    // 只影响待机摆动/呼吸/小动作的幅度，不改频率、不改工作态。
+    this.ambientAmp = 1;
+    // 待机层偏置（2026-11-25 P1.5）：归一化后的 {amp, bias}，由宿主每帧 setAmbientOffset 推入。
+    // 真正的落地在 updateView 的 PROC_MOTION 那次写入里（applyAmbientOffsets）——
+    // 这里只存，不写参数，避免同帧第二次 set 触发冲突告警。
+    this._ambientOffset = null;
+    // 本帧实际加了多少（诊断：performanceDebug().ambient.offsets）。null = 本帧没应用。
+    this._ambientApplied = null;
     // 动作层：英文标签 → 参数编舞；speechRate 是按口型开合估出来的语速（0..1）。
     this.motionDirector = new MotionDirector(); this.speechRate = 0;
     // 派活状态的真值在动作层：它一变（含 done 到点自动回 idle），把身体层一起切过去。
@@ -512,6 +522,34 @@ export class JellyfishRenderer extends CubismUserModel {
   }
   // 提前收尾：走 200ms 淡出，不是硬切。
   stopAction(fade) { return this.motionDirector.stop(fade); }
+  /**
+   * 待机层幅度（P1）：ambient.mjs 每帧给的 0..1 预算。
+   * 1 = 完全按旧行为；0..1 之间只压待机摆动/呼吸/小动作的幅度，不改任何频率与所有权。
+   */
+  setAmbientAmp(value) {
+    const n = Number(value);
+    this.ambientAmp = Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 1;
+    return this.ambientAmp;
+  }
+  /**
+   * 待机层偏置落地（P1.5）：ambient.mjs 的 bias（FACS 偏移单位）在这里归一化成 [-1,1] 存起来。
+   * 接受 `{amp, bias:{...}}` 或 `{...bias, amp}` 两种形状（宿主传的是后者）。传 null 关闭。
+   *
+   * 只存不写：参数在 updateView 里并进 PROC_MOTION 的**同一次**写入（head/body 各一处），
+   * 保证 ParamAngleX/Y/Z、ParamEyeBallX/Y、ParamBreath、ParamBodyAngleZ 每帧仍只有一个写者。
+   */
+  setAmbientOffset(amb) {
+    if (!amb || typeof amb !== 'object') { this._ambientOffset = null; return null; }
+    const bias = amb.bias && typeof amb.bias === 'object' ? amb.bias : amb;
+    const amp = Number(amb.amp);
+    this._ambientOffset = {
+      amp: Number.isFinite(amp) ? Math.min(1, Math.max(0, amp)) : 0,
+      bias: normalizeAmbientBias(bias),
+    };
+    return this._ambientOffset;
+  }
+  /** 本帧偏置的应用结果（只读诊断口；没应用时为 null）。 */
+  get ambientApplied() { return this._ambientApplied; }
   // ── 派活状态（主进程在 HTTP /dispatch 前后调用）───────────────────────────
   // idle → thinking（接活）→ busy（干活，可选）→ done（交差，2.5 秒后自动回 idle）。
   // 状态只在动作层维护一份，这里做入口和联动，避免两份状态打架。
@@ -809,38 +847,60 @@ export class JellyfishRenderer extends CubismUserModel {
       });
     }
     const active = !this.previewMode && view.state === 'speaking';
+    const ambientAmp = this.previewMode ? 1 : (Number.isFinite(Number(this.ambientAmp)) ? this.ambientAmp : 1);
     const movement = this.interaction.sample({ now, delta, elapsed: this.elapsed, state: this.previewMode ? 'idle' : interactionState,
-      head: enabled('proc-head')||workActive, body: enabled('proc-body')||workActive, blink: enabled('proc-blink')||workActive, work:workActive, speechRate:this.speechRate, workState:this.motionDirector.workState, reducedMotion:globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches===true });
+      head: enabled('proc-head')||workActive, body: enabled('proc-body')||workActive, blink: enabled('proc-blink')||workActive, work:workActive, speechRate:this.speechRate, workState:this.motionDirector.workState, reducedMotion:globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches===true, amp: ambientAmp });
     // Feed the rig's physics chain: without these inputs its 131 physics settings stay
     // still and only the head and ears appear to move.
-    const body = this.bodyDirector.sample({ delta, state: this.previewMode ? 'idle' : interactionState, speechRate: this.speechRate });
+    const body = this.bodyDirector.sample({ delta, state: this.previewMode ? 'idle' : interactionState, speechRate: this.speechRate, amp: ambientAmp });
+    const gazeEyeX = gazeFrame && Number.isFinite(Number(gazeFrame.eyeX)) ? Number(gazeFrame.eyeX) : 0;
+    const gazeEyeY = gazeFrame && Number.isFinite(Number(gazeFrame.eyeY)) ? Number(gazeFrame.eyeY) : 0;
+    const gazeHeadX = gazeFrame && Number.isFinite(Number(gazeFrame.headX)) ? Number(gazeFrame.headX) : 0;
+    const gazeHeadY = gazeFrame && Number.isFinite(Number(gazeFrame.headY)) ? Number(gazeFrame.headY) : 0;
+    // ── 待机层偏置（P1.5）：只做「同一所有者内部的一个加法项」───────────────
+    // 源值仍然完全由 body-director / interaction-motion / GazeFollow 决定；
+    // ambient 不新增写者、不新开 set —— 它只改这一次写入的目标值。
+    // 之所以等到这里才算：body/movement/gaze 都已就位，且必须在 body 与 head 两次
+    // PROC_MOTION 写入之前共用同一份结果（两处各算一次会出现两个不同的偏置）。
+    const ambOffset = this.previewMode ? null : this._ambientOffset;
+    const ambBase = {
+      breath: body.breath,
+      bodyZ: body.bodyZ + body.idleBodyZ,
+      headX: movement.yaw + body.idleX + gazeHeadX,
+      headY: movement.pitch + body.idleY + gazeHeadY,
+      headZ: movement.roll + body.idleZ,
+      gazeX: movement.gazeX + gazeEyeX,
+      gazeY: movement.gazeY + gazeEyeY,
+      posX: body.posX + body.idlePosX,
+      posZ: body.posZ,
+    };
+    const ambSpeaking = interactionState === 'speaking';
+    const ambOut = applyAmbientOffsets(ambBase, ambOffset && ambOffset.bias, { speaking: ambSpeaking });
+    const ambWriters = (enabled('proc-body') || workActive) || (enabled('proc-head') || workActive);
+    this._ambientApplied = ambOffset && ambWriters
+      ? { speaking: ambSpeaking, amp: ambOffset.amp, offsets: ambientOffsets(ambOffset.bias, { speaking: ambSpeaking }) }
+      : null;
     if (enabled('proc-body') || workActive) {
       this.withOwner(LAYER.PROC_MOTION, () => {
-        this.set('ParamBreath', body.breath);
+        this.set('ParamBreath', ambOut.breath);
         // 待机小动作（歪头/换重心/耳朵抖/轻晃）的偏移量叠在基础摆动上。
-        this.set('ParamBodyAngleZ', body.bodyZ + body.idleBodyZ);
+        this.set('ParamBodyAngleZ', ambOut.bodyZ);
         this.set('HipAngleX', body.hipX); this.set('HipAngleY', body.hipY); this.set('HipAngleZ', body.hipZ + body.idleHipZ);
         this.set('LeanInput', body.lean);
-        this.set('PositionX', body.posX + body.idlePosX); this.set('PositionY', body.posY); this.set('PositionZ', body.posZ);
+        this.set('PositionX', ambOut.posX); this.set('PositionY', body.posY); this.set('PositionZ', ambOut.posZ);
         // ⚠ 2026-11-13：这里原来还有 `set('ShoulderY'/'ShoulderZ', …)` —— 这两个参数
         //   是 pet.physics3.json 的 **Output**，写在物理前必被物理覆盖（影子比对里就是
         //   那 2 处「白写」）。删掉，健康哨兵的 wasted 基线随之归 0，以后再出现白写就是新问题。
         this.set('LControl', body.earL + body.idleEar); this.set('RControl', body.earR - body.idleEar);
       });
     }
-    const gazeEyeX = gazeFrame && Number.isFinite(Number(gazeFrame.eyeX)) ? Number(gazeFrame.eyeX) : 0;
-    const gazeEyeY = gazeFrame && Number.isFinite(Number(gazeFrame.eyeY)) ? Number(gazeFrame.eyeY) : 0;
-    const gazeHeadX = gazeFrame && Number.isFinite(Number(gazeFrame.headX)) ? Number(gazeFrame.headX) : 0;
-    const gazeHeadY = gazeFrame && Number.isFinite(Number(gazeFrame.headY)) ? Number(gazeFrame.headY) : 0;
     if (enabled('proc-head') || workActive) {
-      // 待机小动作里的歪头也是头部的偏移，一起叠上
-      const headX = movement.yaw + body.idleX, headY = movement.pitch + body.idleY, headZ = movement.roll + body.idleZ;
       this.withOwner(LAYER.PROC_MOTION, () => {
-        // 眼神偏移直接并进同一路写入（不再单独写一遍，避免同帧同参数两次写触发冲突告警）
-        this.set('ParamAngleX', headX + gazeHeadX); this.set('ParamAngleY', headY + gazeHeadY); this.set('ParamAngleZ', headZ);
-        this.set('ParamEyeBallX', movement.gazeX + gazeEyeX); this.set('ParamEyeBallY', movement.gazeY + gazeEyeY);
+        // 眼神/待机偏置直接并进同一路写入（不再单独写一遍，避免同帧同参数两次写触发冲突告警）
+        this.set('ParamAngleX', ambOut.headX); this.set('ParamAngleY', ambOut.headY); this.set('ParamAngleZ', ambOut.headZ);
+        this.set('ParamEyeBallX', ambOut.gazeX); this.set('ParamEyeBallY', ambOut.gazeY);
         // The accessory/second physics bank reads the controller layer, not the head bones.
-        this.set('AngleX', headX + gazeHeadX); this.set('AngleY', headY + gazeHeadY); this.set('AngleZ', headZ);
+        this.set('AngleX', ambOut.headX); this.set('AngleY', ambOut.headY); this.set('AngleZ', ambOut.headZ);
       });
     } else if (gazeFrame) {
       // 头/眼动画被关掉时仍然要跟鼠标（旧 GazeFollow 是无条件写的）

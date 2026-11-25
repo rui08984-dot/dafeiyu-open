@@ -2422,6 +2422,36 @@ function applyModelParamWrite(paths, key, value) {
   };
 }
 
+/**
+ * performance.* 的热下发（2026-11-25 P3）：控制中心/能力页写完 config 后，把整组
+ * performance 配置推给运行中的皮套（window.petBody.setPerformanceConfig）。
+ * 为什么需要：这些键标了 hot=true，但旧链路只写盘 + reload-config；皮套在渲染进程里，
+ * 不重读 config，于是「显示已开、实际没变」。失败不阻塞保存 —— 返回 hotApplied:false，
+ * 由 UI 提示「已写盘、重启生效」。
+ */
+function applyPerformanceConfigLive(configPath) {
+  return new Promise((resolve) => {
+    let perf = null;
+    try { perf = (readJson(configPath, {}) || {}).performance || null; } catch (e) { resolve({ ok: false, error: '读配置失败' }); return; }
+    const js = 'window.petBody && typeof window.petBody.setPerformanceConfig === "function"'
+      + ' ? (window.petBody.setPerformanceConfig(' + JSON.stringify(perf || {}) + '), true) : false';
+    const data = Buffer.from(JSON.stringify({ js }), 'utf8');
+    const req = http.request({
+      host: '127.0.0.1', port: 8004, path: '/eval', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': data.length }, timeout: 3000,
+    }, (res) => {
+      let s = ''; res.on('data', (c) => { s += c; });
+      res.on('end', () => {
+        try { const j = JSON.parse(s); resolve({ ok: j.ok === true && j.value === true }); }
+        catch (e) { resolve({ ok: false, error: '响应非 JSON' }); }
+      });
+    });
+    req.on('error', (e) => resolve({ ok: false, error: e.message }));
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'timeout' }); });
+    req.write(data); req.end();
+  });
+}
+
 ipcMain.handle('control:set-config-value', async (_event, payload) => {
   const key = payload && payload.key;
   const value = payload && payload.value;
@@ -2506,9 +2536,14 @@ ipcMain.handle('control:set-config-value', async (_event, payload) => {
   // 2026-11-17 六十三轮：虽然只改一个键，写盘/热重载/读回也必须和整份保存同一条链；
   // 以前这里 writeJsonVerified 的返回值被丢掉、reload 结果也没人看，等于「写盘成功 = 生效」。
   const result = await saveAndApply(configPath, patch, { mode: 'merge', verifyKeys: [key] });
+  // performance.* 写盘后热下发给皮套；失败不算保存失败（已写盘），但如实标记。
+  const hotPerf = (String(key).startsWith('performance.') && result.ok)
+    ? await applyPerformanceConfigLive(configPath)
+    : null;
   return {
     ok: result.ok, key, value: getConfigPath(readJson(configPath, {}), key), hot: cap.hot !== false,
     wrote: result.wrote, reload: result.reload, readback: result.readback,
+    ...(hotPerf ? { hotApplied: hotPerf.ok === true, ...(hotPerf.ok ? {} : { hotError: hotPerf.error || '热下发失败' }) } : {}),
     ...(result.error ? { error: result.error } : {}),
   };
 });
