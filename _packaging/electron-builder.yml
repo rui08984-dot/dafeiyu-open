@@ -50,11 +50,13 @@ files:
   - "!.runtime/**"
   - "!crash-dumps/**"
   - "!**/*.log"
+  # 轮转后的 *.log.1 不匹配 *.log（2026-11-26 实测把 10MB 个人运行日志带进了包）
+  - "!**/*.log.*"
   - "!@AutomationLog.txt"
-  # 隐私 / 本机状态：安装包不带用户密钥与窗口位置
-  - "!config.json"
+  # 隐私 / 本机状态：只排除备份与窗口位置。
+  # config.json / llm_providers.json 由 build-installer.ps1 在 staging 之后写入
+  # **安装版默认配置**（空 key、无个人路径），必须进包，否则宿主启动即 throw。
   - "!config.json.bak*"
-  - "!llm_providers.json"
   - "!llm_providers.json.bak*"
   - "!panel-bounds.json"
   - "!avatar-loading-position.json"
@@ -63,6 +65,26 @@ files:
   - "!scripts/.voice-host-work/**"
   # 打包工具自身，没必要进安装包
   - "!scripts/electron-ui-package/**"
+
+# 随包运行时（由 build-installer.ps1 的 Prepare-ExtraResources 准备）：
+#   resources/pet-core/target/release/pet-core.exe → main.js resolvePetCore() 的打包后分支
+#   resources/tts/dafeiyu-tts.exe                  → 宿主启动时拉起（js/services/local-tts.js）
+extraResources:
+  - from: out/extra/pet-core
+    to: pet-core
+  - from: out/extra/tts
+    to: tts
+  # 渲染层 js/core/lumen-semantic.js 的可选依赖（唯一实现在 pet-runtime，别复制第二份）
+  - from: ../pet-runtime/desktop/perf/lumen-semantic-client.cjs
+    to: pet-runtime/desktop/perf/lumen-semantic-client.cjs
+
+# 安装根目录放一份给人看的说明（和 DaFeiyu.exe 同级）
+extraFiles:
+  - from: build-resources/安装说明.txt
+    to: 安装说明.txt
+
+# 打包后硬校验：删运行日志、校验默认配置无真实 key（见 build-resources/after-pack.cjs）
+afterPack: build-resources/after-pack.cjs
 
 # 不重新编译原生模块：uiohook-napi 1.5.4 自带 N-API prebuild，Electron 28 可直接用
 npmRebuild: false

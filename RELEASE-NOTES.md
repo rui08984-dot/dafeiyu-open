@@ -3,6 +3,15 @@
 生成方式：`node scripts/export-public-tree.mjs`（源：主仓 + 应用仓的 tracked 文件）。
 状态：**纯本地树**，未配置 remote、未 push。
 
+## v0.3.1 一键安装包（2026-11-26）
+
+- 产物：`DaFeiyu-Setup-0.3.1.exe`（约 117MB，NSIS；装到 `%LOCALAPPDATA%\Programs\大肥鱼`，免管理员）。
+- 随包：Electron 28 + live-2d 应用、皮套与模型（16.5MB moc3 + 纹理）、Cubism Core、`pet-core.exe`（Rust 快轨）、edge-tts 单文件 exe（语音，联网）。
+- 首启：自动打开控制中心「模型」页；默认 provider=cloud（OpenAI 兼容）/ `gpt-4o-mini` / 空 key，填 key 保存即生效。
+- 不含：本地 4B 记忆模型、ASR / MemOS / 一起看 / OCR 等 Python 服务（按 README「从源码运行」部署完整树）。
+- 构建：`_packaging/build-installer.ps1 -Nsis`；语音 exe：`_packaging/build-tts.ps1`（PyInstaller，约 11MB）。
+- 真机验收（2026-11-26）：干净目录静默安装 → 首启自动落「模型」页 → 注入真实 key → `POST 8103/chat` 得到回复；渲染层 ok、随包 TTS 合成 200、pet-core 截图走 Rust 快轨。
+
 ## 包含
 
 - 主仓白名单：`pet-runtime/ pet-core/ scripts/ _probe/ docs/(curated) asr/ audio_common/ audio-loop/ edge-tts/ live-danmaku/ extensions/ _packaging/ .github/` + 根入口/说明/架构/compose。

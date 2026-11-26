@@ -1,6 +1,15 @@
-# 大肥鱼 · 桌面 AI 伴侣（公开代码树）
+# 大肥鱼 · 桌面 AI 伴侣
 
-> 这是一份**可公开、可部署的完整代码树**，不是免配置一键包。
+## 一键安装（Windows 10/11 x64）
+
+从 [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) 下载 **`DaFeiyu-Setup-0.3.1.exe`**（约 117MB），双击安装。
+
+- 第一次启动会自动打开设置窗的「模型」页：填 **API Key**（支持任意 OpenAI 兼容网关），点保存即可对话。
+- 安装版已含：皮套与模型、Cubism Core、Rust 内核 `pet-core`、edge-tts 语音（联网，无需 key）。
+- 安装版不含：本地 4B 记忆模型、ASR / MemOS / 一起看等 Python 服务；需要时按下面「从源码运行」部署完整树。
+- 安装包未代码签名，Windows SmartScreen 可能提示「未知发布者」，选择「仍要运行」。
+
+> 本仓库同时是一份**可公开、可部署的完整代码树**（安装包就是用它构建的），不是免配置一键包。
 > **只需自备 LLM API key**；Live2D 模型（经作者授权）、Cubism SDK/Core、MemOS 均已随仓（含许可文件）。
 >
 > **本项目基于 [morettt/my-neuro](https://github.com/morettt/my-neuro)（MIT）二次开发**，保留上游版权与署名；第三方素材许可见 `NOTICE`。不是上游官方版本。
@@ -8,7 +17,7 @@
 包含：Electron 宿主应用层（`_incoming/my-neuro/`）、桌宠运行时与表演引擎（`pet-runtime/`）、
 Rust 内核（`pet-core/`）、语音/ASR/TTS/一起看服务、插件、门禁测试与安装自检。
 
-## 前置条件
+## 前置条件（从源码运行）
 
 | 依赖 | 版本 | 用途 |
 |---|---|---|
@@ -18,7 +27,7 @@ Rust 内核（`pet-core/`）、语音/ASR/TTS/一起看服务、插件、门禁�
 | Git | 任意较新版本 | 获取代码 |
 | Docker Desktop | 可选 | 8090 嵌入服务 / MemOS |
 
-## 五步启动
+## 从源码运行（开发者）
 
 ### 0.（推荐）一键引导
 

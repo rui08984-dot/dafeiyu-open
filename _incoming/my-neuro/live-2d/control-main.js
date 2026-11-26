@@ -79,7 +79,13 @@ let controlWindow = null;
 // 新进程会被锁弹掉——必须把 page 经 additionalData 转发给已有窗口，
 // 否则表现为「换装跳转没了」（2026-11-01 规整修复）。
 // --control-isolated：QA/截图用隔离实例（独立 userData + 不参与单实例锁 + 关窗即退）。
+// --control-center：安装版用（宿主与控制中心同一个 exe / 同一个 app identity）。
+//   宿主 main.js 也持单实例锁，所以控制中心必须换一个独立 userData（锁随之独立），
+//   否则 requestSingleInstanceLock 失败 → 面板秒退（2026-11-26 实测）。
 const __isolated = process.argv.includes('--control-isolated');
+if (process.argv.includes('--control-center') && !__isolated) {
+  try { app.setPath('userData', path.join(app.getPath('userData'), 'control-center')); } catch (e) { /* 取不到就保持默认 */ }
+}
 if (__isolated) {
   const os = require('os');
   app.setPath('userData', path.join(os.tmpdir(), 'pet-control-qa-' + Date.now()));

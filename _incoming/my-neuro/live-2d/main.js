@@ -72,6 +72,9 @@ const {
 const { ShortcutManager } = require('./js/shortcut-manager')
 const screenshot = require('screenshot-desktop');
 const { logToTerminal } = require('./js/api-utils');
+// 首启判定 / 随包语音（2026-11-26 安装包 A）：纯函数在 first-run.js，生命周期在 local-tts.js
+const { needsApiKey } = require('./js/core/first-run');
+const { startBundledTts, stopBundledTts } = require('./js/services/local-tts');
 // 配置写盘唯一入口（原子写 + 回读校验）：别再在别处写第二份 JSON.stringify+writeFileSync
 const { writeJsonVerified, patchVerified } = require('./js/core/config-persist');
 
@@ -1685,6 +1688,8 @@ function createWindow () {
     });
 
     win.loadFile('index.html')
+    // 首启引导：等她先画出来（3s），再看是不是空 key；只在本进程做一次。
+    setTimeout(() => { try { maybeOpenFirstRunPanel(); } catch (e) { /* 已在内部兜底 */ } }, 3000);
     // 2026-11-23 穿透根治：启动主进程光标轮询（不依赖窗口 mousemove）。
     // 这是唯一能在「已穿透」状态下仍读到鼠标位置的通道 → 才能做到「进入即恢复」。
     try { startPassthroughWatcher(win); } catch (e) { try { __silentAudit.audit('main.js:pt-start', e); } catch (e2) {} }
@@ -2061,7 +2066,6 @@ function openControlCenter() {
     const env = { ...process.env };
     delete env.ELECTRON_RUN_AS_NODE;
     delete env.ELECTRON_NO_ATTACH_CONSOLE;
-
     // 把设置窗定位到皮套旁边 —— 布局算法在 Rust 内核里（pet-core），
     // 这里只负责把参数递过去、拿回坐标。皮套与设置窗并排，换装时能看到效果。
     const panelArgs = [];
@@ -2076,7 +2080,13 @@ function openControlCenter() {
       }
     } catch (e) { console.error('[panel] 定位失败:', e && e.message); }
 
-    const child = spawn(process.execPath, [path.join(appDir, 'control-main.js')], {
+    // 2026-11-26 安装包 A：packaged Electron 固定加载 package.json.main，
+    // 传脚本路径（spawn electron control-main.js）在安装版里会被忽略 → 变成「又开一个桌宠」。
+    // 安装版改走入口分支（control-entry.cjs 识别 --control-center），开发态不变。
+    const spawnArgs = app.isPackaged
+      ? [appDir, '--control-center']
+      : [path.join(appDir, 'control-main.js')];
+    const child = spawn(process.execPath, spawnArgs, {
       cwd: appDir, env, detached: true, stdio: 'ignore', windowsHide: false,
     });
     child.on('error', (error) => console.error('[tray] 打开设置失败:', error && error.message || error));
@@ -2091,6 +2101,29 @@ function openControlCenter() {
 
 function readConfigJson() {
   try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (e) { return {}; }
+}
+
+// ── 首启引导（2026-11-26 安装包 A）────────────────────────────────────────
+// 公开安装包只带一份空 key 的 provider：启动后自动把控制中心落到「模型」页，
+// 让用户填地址/密钥/模型（保存走 /reload-config，热重载，不用重启）。
+// 每个进程只判定一次；已经配置好的用户完全无感（不弹窗、不写盘）。
+let __firstRunChecked = false;
+function maybeOpenFirstRunPanel() {
+  if (__firstRunChecked) return;
+  __firstRunChecked = true;
+  try {
+    const cfg = readConfigJson();
+    let providersDoc = null;
+    try {
+      providersDoc = JSON.parse(fs.readFileSync(path.join(configBaseDir, 'llm_providers.json'), 'utf8'));
+    } catch (e) { providersDoc = null; }
+    if (!needsApiKey(cfg, providersDoc)) return;
+    console.log('[first-run] 未检测到可用的 API key → 打开控制中心「模型」页');
+    process.env.PET_PANEL_PAGE = 'model';
+    openControlCenter();
+  } catch (e) {
+    console.error('[first-run] 首启检查失败（跳过）:', e && e.message || e);
+  }
 }
 
 function isTtsMuted() {
@@ -2559,7 +2592,7 @@ function setUpTray(win) {
 }
 
 // 在主进程启动时调用
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
     // ── LLM 网关绕开系统代理（2026-11-25，她突然"说不出话"的根因）────────────
     // Electron 的 fetch 默认走 Windows 系统代理（Clash 2080）。Clash 的 ✈️Final 分组
     // 一旦选到死节点，**所有未命中规则的域名**（含 api.commandcode.ai）都会挂 20s 后
@@ -2584,27 +2617,34 @@ app.whenReady().then(() => {
                 '172.19.*', '172.20.*', '172.21.*', '172.22.*', '172.23.*', '172.24.*', '172.25.*',
                 '172.26.*', '172.27.*', '172.28.*', '172.29.*', '172.30.*', '172.31.*', '*.local', '<local>'];
             const allBypass = [...bypass, ...sysBypass];
-            // 从 Windows 注册表读系统代理地址（PAC 里用）
-            let sysProxy = '127.0.0.1:2080';   // Clash Verge mihomo mixed 端口的兜底值
+            // 2026-11-26 安装包 A：先问 Chromium「这台机器的系统代理是什么」，别硬编码 127.0.0.1:2080。
+            // 陌生人的机器大多没有代理：硬写一个不存在的代理会把所有 LLM 请求送死（她永远说不出话）。
+            // 系统直连 → 不装 PAC；有代理 → 装 PAC，且末尾留 `; DIRECT` 兜底（代理挂了还能直连）。
+            let resolved = '';
             try {
-                const winReg = require('winreg');
-                // 走注册表太重 —— 直接读 IE 设置也不轻。Clash Verge 的 mixed 端口写死在
-                // 2080（本机实测），若用户改了端口，改 config.network.proxy_bypass 即可。
-            } catch (e) { /* ignore */ }
-            const pacEntries = allBypass.map((b) => {
-                // PAC 语法：把 Windows 通配（127.*）转成 Chromium 通配（127.*）
-                const entries = b.split(';').map(s => s.trim()).filter(Boolean);
-                return entries;
-            }).flat().filter(Boolean);
-            const pacScript = [
-                'function FindProxyForURL(url, host) {',
-                ...pacEntries.map((b) => `  if (shExpMatch(host, '${b}')) return 'DIRECT';`),
-                `  return 'PROXY ${sysProxy}';`,
-                '}'
-            ].join('\n');
-            session.defaultSession.setProxy({ mode: 'pac_script', pacScript })
-                .then(() => logToTerminal('info', `[网络] LLM 网关直连绕行已生效（PAC，共 ${pacEntries.length} 条规则）：${bypass.join(',')}`))
-                .catch((e) => logToTerminal('warn', '[网络] setProxy 失败（保持系统默认）: ' + (e && e.message || e)));
+                const probeHost = String(bypass[0] || 'example.com').replace(/^\*\./, 'www.').replace(/[;,*\s]/g, '');
+                resolved = await session.defaultSession.resolveProxy('https://' + probeHost + '/');
+            } catch (e) { resolved = ''; }
+            const proxyMatch = /(?:^|;)\s*(?:PROXY|HTTPS)\s+([^;\s]+)/i.exec(String(resolved || ''));
+            if (!proxyMatch) {
+                logToTerminal('info', `[网络] 系统直连（resolveProxy=${resolved || '未知'}），跳过 PAC 覆盖`);
+            } else {
+                const sysProxy = String(proxyMatch[1]).replace(/[^\w.\-\[\]:]/g, '');
+                const pacEntries = allBypass.map((b) => {
+                    // PAC 语法：把 Windows 通配（127.*）转成 Chromium 通配（127.*）
+                    const entries = b.split(';').map(s => s.trim()).filter(Boolean);
+                    return entries;
+                }).flat().filter(Boolean);
+                const pacScript = [
+                    'function FindProxyForURL(url, host) {',
+                    ...pacEntries.map((b) => `  if (shExpMatch(host, '${b}')) return 'DIRECT';`),
+                    `  return 'PROXY ${sysProxy}; DIRECT';`,
+                    '}'
+                ].join('\n');
+                session.defaultSession.setProxy({ mode: 'pac_script', pacScript })
+                    .then(() => logToTerminal('info', `[网络] LLM 网关直连绕行已生效（PAC，代理 ${sysProxy}，共 ${pacEntries.length} 条规则）：${bypass.join(',')}`))
+                    .catch((e) => logToTerminal('warn', '[网络] setProxy 失败（保持系统默认）: ' + (e && e.message || e)));
+            }
         }
     } catch (e) { /* 读不到配置就保持系统默认，不阻断启动 */ }
 
@@ -2625,6 +2665,14 @@ app.whenReady().then(() => {
     // 启动 HTTP API 服务器
     const httpServer = new HttpServer();
     httpServer.start();
+
+    // 随包语音（安装版）：resources/tts/dafeiyu-tts.exe 存在才起；开发树/完整部署下 9883 已在线，这里只探测。
+    try {
+        startBundledTts({ log: (m) => logToTerminal('warn', m) }).then((r) => {
+            if (r && r.ok && r.reason === 'spawned') logToTerminal('info', `[tts] 随包语音已启动（pid=${r.pid}，端口 ${r.port}）`);
+            else if (r && r.reason === 'not-bundled') { /* 开发树：静默 */ }
+        }).catch((e) => logToTerminal('warn', '[tts] 随包语音启动异常: ' + (e && e.message || e)));
+    } catch (e) { /* 不能因为语音拖垮宿主 */ }
 
     // 隐私知情确认（一次性，商业合规：屏幕感知=高敏感能力，须显式披露——docs/隐私说明.md §3）。
     // 只在「一起看/主播陪玩启用且未确认过」时弹一次；确认写进 config.privacy.ack_screen_watch。
@@ -2688,6 +2736,8 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
     try { stopPassthroughWatcher(); } catch (e) { /* 退出时清理失败不影响关闭 */ }
+    // 随包语音是宿主拉起的子进程：连 bootloader 一起收掉，别留下孤儿占 9883
+    try { stopBundledTts(); } catch (e) { /* 退出时清理失败不影响关闭 */ }
     avatarSwitchTransaction?.dispose();
     avatarSwitchTransaction = null;
     if (shortcutManager) {

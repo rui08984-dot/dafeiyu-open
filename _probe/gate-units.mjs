@@ -53,6 +53,7 @@ export const UNITS = [
   { label: '单测 操控层韧性（focus重试/pid前台/三级回落/snapshot/稳定/归一/verify）', file: '_probe/test-act-resilience.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 点击/聚焦验证通道（UIA 回读为准/元素像素/遮挡三分类，P0-3）', file: '_probe/test-control-verify.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 事实表仲裁', file: '_probe/test-fact-store.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
+  { label: '单测 首启判定（空 key/本地端点/占位符）+ 随包语音定位', file: '_probe/test-first-run.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 认知内核（goal/plan/arbiter 纯函数）', file: '_probe/test-mind-kernel.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 认知内核接线（重启/注入/节流）', file: '_probe/test-mind-kernel-plugin.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },
   { label: '单测 认知内核计划生成（LLM 3–8 步/失败降级/截断）', file: '_probe/test-mind-kernel-plan.cjs', tier: 'smoke', needsHost: null, parallelSafe: true },

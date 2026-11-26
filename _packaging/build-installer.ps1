@@ -76,7 +76,12 @@ param(
     [string]$CertPath,
     [string]$CertPassword = 'dafeiyu-dev',
     [string]$BinariesMirror,
-    [switch]$SkipNpmInstall
+    [switch]$SkipNpmInstall,
+    # 产品版本号（安装包文件名/程序版本）。应用自身的 package.json 版本与产品线无关，
+    # 公开版按 release tag 走：v0.3.1 → DaFeiyu-Setup-0.3.1.exe。
+    [string]$Version = '0.3.1',
+    # 不随包 edge-tts 单文件 exe（体积敏感时用；默认随包，开箱有语音）
+    [switch]$SkipTts
 )
 
 $ErrorActionPreference = 'Stop'
@@ -174,7 +179,7 @@ function Prepare-AppStage {
         'config.json', 'config.json.bak*',
         'llm_providers.json', 'llm_providers.json.bak*',
         'panel-bounds.json', 'avatar-loading-position.json',
-        'character_backups*.json', '*.log', '@AutomationLog.txt'
+        'character_backups*.json', '*.log', '*.log.*', '@AutomationLog.txt'
     )
     $excludeDirs = @(
         (Join-Path $herDir 'node_modules\electron'),   # 运行时由 electron-builder 注入，不复制 200MB
@@ -214,11 +219,21 @@ function Prepare-AppStage {
     }
     $dev['electron'] = $electronRange
 
+    # 安装版入口分发（2026-11-26）：packaged Electron 不认「脚本路径」参数，
+    # openControlCenter() 必须靠 --control-center 走入口分支，否则会再起一个桌宠。
+    $entrySrc = Join-Path $here 'build-resources\control-entry.cjs'
+    if (-not (Test-Path -LiteralPath $entrySrc -PathType Leaf)) {
+        Fail "缺少安装版入口文件：$entrySrc"
+    }
+    Copy-Item -LiteralPath $entrySrc -Destination (Join-Path $appStageDir 'control-entry.cjs') -Force
+
     $stagePkg = [ordered]@{
         name         = $pkg.name
-        version      = $pkg.version
+        # 产品版本走 -Version（公开版按 release tag）；应用自身版本 1.0.0 与产品线无关
+        version      = $Version
         description  = $pkg.description
-        main         = $pkg.main
+        # 只改安装版入口：源码树 package.json 仍是 main.js，开发/launcher 行为不变
+        main         = 'control-entry.cjs'
         scripts      = $pkg.scripts
         dependencies = $deps
         devDependencies = $dev
@@ -235,6 +250,117 @@ function Prepare-AppStage {
 }
 
 Prepare-AppStage
+
+# ── 2.5 安装版默认配置（公开包）──────────────────────────────────────
+# 她的 config-loader 缺 config.json 会直接抛错（main.js loadConfigData），
+# 所以安装包必须带一份「干净、无个人路径、无真实 key」的默认配置。
+# 首启由宿主检测空 key → 自动打开控制中心「模型」页（js/core/first-run.js）。
+function Write-PublicDefaults {
+    Write-Step '生成安装版默认配置（空 key，首启引导填写）'
+    $exCfg = Join-Path $appStageDir 'config.example.json'
+    if (-not (Test-Path -LiteralPath $exCfg -PathType Leaf)) {
+        Fail "构建副本缺少 config.example.json：$exCfg"
+    }
+    $cfg = [IO.File]::ReadAllText($exCfg, [Text.Encoding]::UTF8) | ConvertFrom-Json
+
+    # 默认云端 provider：OpenAI 兼容空白（任何兼容网关都能改 url/model 直接用）
+    $defaultPersona = '你是大肥鱼，住在用户桌面上的数字伙伴。说话自然、简短、有自己的脾气：会吐槽也会关心人，不端着、不说教。除非用户要求，不要长篇大论。'
+    $cfg.llm.provider_id = 'cloud'
+    $cfg.llm.model_id = 'gpt-4o-mini'
+    $cfg.llm.system_prompt = $defaultPersona
+    $cfg.vision.provider_id = 'cloud'
+    $cfg.vision.model_id = 'gpt-4o-mini'
+
+    # 公开版脱敏：个人工作区路径、屏幕感知同意、需要 Python/外部服务的开关
+    $cfg.dispatch.workspaces = [pscustomobject]@{}
+    $cfg.dispatch.defaultWorkspace = ''
+    $cfg.privacy.PSObject.Properties.Remove('ack_screen_watch')
+    $cfg.privacy.PSObject.Properties.Remove('acked_at')
+    $cfg.asr.enabled = $false          # 薄装不带 ASR 服务；按 V 不再撞一个不存在的端口
+    $cfg.rag.enabled = $false          # 8002 不在薄装里
+    $cfg.cost.local_memory = $false    # 本地 4B 记忆模型按需自装（README 指引）
+    $cfg.browser_ext_ids = @()
+    $cfg | Add-Member -NotePropertyName 'memos' -NotePropertyValue ([pscustomobject]@{ enabled = $false }) -Force
+    $cfg | Add-Member -NotePropertyName '_install' -NotePropertyValue ([pscustomobject]@{
+        at = (Get-Date).ToString('o'); by = 'installer'; version = $Version
+    }) -Force
+    [IO.File]::WriteAllText((Join-Path $appStageDir 'config.json'), ($cfg | ConvertTo-Json -Depth 32), $utf8NoBom)
+
+    $providers = [ordered]@{
+        providers = @(
+            [ordered]@{
+                id = 'cloud'; name = '云端 API（OpenAI 兼容）'; api_key = ''
+                api_url = 'https://api.openai.com/v1'; enabled = $true
+                models = @([ordered]@{
+                    model_id = 'gpt-4o-mini'; name = 'gpt-4o-mini'; enabled = $true
+                    temperature = 0.85; temperature_enabled = $true
+                })
+            },
+            [ordered]@{
+                id = 'ollama'; name = '本地 Ollama（可选，免费离线）'; api_key = 'ollama'
+                api_url = 'http://127.0.0.1:11434/v1'; enabled = $false
+                models = @([ordered]@{ model_id = 'qwen3-vl:8b-instruct'; name = 'qwen3-vl:8b-instruct'; enabled = $true })
+            }
+        )
+    }
+    [IO.File]::WriteAllText((Join-Path $appStageDir 'llm_providers.json'), ($providers | ConvertTo-Json -Depth 16), $utf8NoBom)
+
+    # 兜底自检：安装包默认配置里绝不能出现真实 key 形状
+    foreach ($f in @('config.json', 'llm_providers.json')) {
+        $p = Join-Path $appStageDir $f
+        $txt = [IO.File]::ReadAllText($p, [Text.Encoding]::UTF8)
+        if ($txt -match 'sk-[A-Za-z0-9]{20,}') {
+            Fail "安装版默认配置疑似含真实 key：$p（构建中止）"
+        }
+    }
+    Write-Host "默认配置已写入：config.json（人设占位 + provider=cloud）/ llm_providers.json（空 key + ollama 停用）"
+}
+
+# ── 2.6 随包运行时（pet-core / edge-tts）────────────────────────────
+# extraResources 会被 electron-builder 放到 resources/ 下：
+#   resources/pet-core/target/release/pet-core.exe  ← main.js resolvePetCore() 的打包后分支
+#   resources/tts/dafeiyu-tts.exe                   ← 宿主启动时拉起（js/services/local-tts.js）
+function Prepare-ExtraResources {
+    Write-Step '准备随包运行时（pet-core / edge-tts）'
+    $extraRoot = Join-Path $here 'out\extra'
+    $petCoreDir = Join-Path $extraRoot 'pet-core\target\release'
+    New-Item -ItemType Directory -Force -Path $petCoreDir | Out-Null
+    $petCoreExe = [IO.Path]::GetFullPath((Join-Path $here '..\pet-core\target\release\pet-core.exe'))
+    if (Test-Path -LiteralPath $petCoreExe -PathType Leaf) {
+        Copy-Item -LiteralPath $petCoreExe -Destination (Join-Path $petCoreDir 'pet-core.exe') -Force
+        $pcMb = [math]::Round((Get-Item -LiteralPath $petCoreExe).Length / 1MB, 2)
+        Write-Host "pet-core：已随包（$pcMb MB，看屏/操控 Rust 快轨）"
+    } else {
+        Write-Host '[提示] 没找到 pet-core\target\release\pet-core.exe：安装版将退回 PowerShell 兜底（慢约 20 倍）' -ForegroundColor Yellow
+    }
+
+    $ttsDir = Join-Path $extraRoot 'tts'
+    New-Item -ItemType Directory -Force -Path $ttsDir | Out-Null
+    $ttsExe = [IO.Path]::GetFullPath((Join-Path $here 'out\tts\dafeiyu-tts.exe'))
+    if (-not $SkipTts -and (Test-Path -LiteralPath $ttsExe -PathType Leaf)) {
+        Copy-Item -LiteralPath $ttsExe -Destination (Join-Path $ttsDir 'dafeiyu-tts.exe') -Force
+        $ttsMb = [math]::Round((Get-Item -LiteralPath $ttsExe).Length / 1MB, 2)
+        Write-Host "edge-tts：已随包（$ttsMb MB，开箱有声；需要联网访问微软语音端点）"
+    } else {
+        Write-Host '[提示] 未随包 edge-tts：安装版首启没有语音。' -ForegroundColor Yellow
+        Write-Host '       先跑 `powershell -NoProfile -ExecutionPolicy Bypass -File .\build-tts.ps1` 生成 out\tts\dafeiyu-tts.exe，再重跑 -Nsis。'
+        Write-Host '       或保持 -SkipTts（用户可后配 OpenAI 兼容 TTS / 自装 Python 完整服务）。'
+    }
+}
+
+Write-PublicDefaults
+Prepare-ExtraResources
+
+# 入口语法闸：2026-11-26 实测漏过一次重复声明（panelArgs），打包不报、启动才在
+# Electron 错误框里炸。这里在构建期用 node --check 把入口文件先过一遍。
+Write-Step '入口语法检查（node --check）'
+foreach ($rel in @('main.js', 'control-entry.cjs', 'control-main.js')) {
+    $p = Join-Path $appStageDir $rel
+    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { Fail "构建副本缺少入口文件：$p" }
+    & $nodeExe --check $p
+    if ($LASTEXITCODE -ne 0) { Fail "入口语法错误：$rel（node --check 退出码 $LASTEXITCODE）" }
+    Write-Host "  ✓ $rel"
+}
 
 if ($BinariesMirror) {
     $env:ELECTRON_BUILDER_BINARIES_MIRROR = $BinariesMirror
@@ -271,9 +397,22 @@ switch ($modes[0]) {
             Measure-Object -Property Length -Sum).Sum / 1MB), 1)
         Write-Host ''
         Write-Host "[成功] 可运行目录已生成：$unpackedDir（约 $sizeMb MB）" -ForegroundColor Green
-        Write-Host '验证方法（注意：配置被有意排除，必须用 MY_NEURO_CONFIG_PATH 指向可写副本）：'
-        Write-Host "  `$env:MY_NEURO_CONFIG_PATH = '<你的 config 副本路径>'; & '$exe'"
-        Write-Host '已知限制：main.js 里引用项目根的相对路径（pet-core 等）在打包目录中会失效，详见 docs 文档第 5 节。'
+        # 安装版三件套：配置在、pet-core 在、TTS 在（后两者可缺，缺了要明说）
+        foreach ($item in @(
+            @{ rel = 'resources\app\config.json'; what = '默认配置 config.json' },
+            @{ rel = 'resources\app\llm_providers.json'; what = 'provider 通讯录' },
+            @{ rel = 'resources\pet-core\target\release\pet-core.exe'; what = 'pet-core Rust 快轨' },
+            @{ rel = 'resources\tts\dafeiyu-tts.exe'; what = '随包 edge-tts' }
+        )) {
+            $p = Join-Path $unpackedDir $item.rel
+            if (Test-Path -LiteralPath $p -PathType Leaf) {
+                Write-Host "  ✓ $($item.what)"
+            } else {
+                Write-Host "  ! 缺 $($item.what)（$($item.rel)）" -ForegroundColor Yellow
+            }
+        }
+        Write-Host '验证方法（把 MY_NEURO_CONFIG_PATH 指向这份打包配置的可写副本）：'
+        Write-Host "  `$env:MY_NEURO_CONFIG_PATH = '<config 副本路径>'; & '$exe'"
     }
 
     '-Nsis' {

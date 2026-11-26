@@ -1,0 +1,36 @@
+大肥鱼 · 安装说明（Windows 10/11 x64）
+
+1) 启动
+   双击桌面「大肥鱼」。第一次启动约 5–15 秒（皮套 16MB 模型要加载）。
+
+2) 第一次用：填 API Key
+   启动后会自动弹出设置窗的「模型」页：
+     · 接口地址：默认 https://api.openai.com/v1
+     · API 密钥：填你自己的 key
+     · 模型：默认 gpt-4o-mini
+   填好点右下角「保存」，立刻生效，不用重启。
+   支持任意 OpenAI 兼容网关（OpenAI、DeepSeek、硅基流动、本地 Ollama…），
+   把接口地址和模型名改成对应值即可。
+
+3) 语音
+   本安装包已带 edge-tts（联网访问微软免费语音端点，不需要密钥）。
+   想换音色/引擎：设置窗「模型 → 语音」；也支持 OpenAI 兼容 /audio/speech。
+
+4) 想让她主动开口
+   安装版默认「静默模式：开」（只回应、不主动搭话，避免没配 key 时刷报错）。
+   填好 key 后，在托盘右键菜单里把「静默模式」关掉即可。
+
+4) 本地记忆模型（可选，省钱用；不装不影响聊天）
+   需要完整源码部署，并按 README 运行：
+     live-2d/scripts/start-local-memory-llm.ps1 -Daily
+   前提是自备 MemOperator-4B GGUF。完整源码与文档：
+     https://github.com/rui08984-dot/dafeiyu-open
+
+5) 数据与卸载
+   配置与记忆都在本安装目录（卸载不会删除）。
+   卸载：Windows 设置 → 应用 → 大肥鱼。
+
+6) 已知限制（薄装版）
+   · 不含 Python 侧的 ASR / MemOS / 一起看 / OCR 工具；按住 V 说话、长期记忆、一起看不可用。
+   · 看屏、窗口操控、UIA 走随包的 Rust 内核（pet-core），可用。
+   · 安装包未代码签名，Windows SmartScreen 可能提示「未知发布者」，选择「仍要运行」。
