@@ -1,5 +1,7 @@
 # 大肥鱼 · 桌面 AI 伴侣
 
+> English: [README.en.md](README.en.md)
+
 ## 一键安装（Windows 10/11 x64）
 
 从 [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) 下载 **`DaFeiyu-Setup-0.3.1.exe`**（约 117MB），双击安装。
