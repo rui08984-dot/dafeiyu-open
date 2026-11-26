@@ -2,6 +2,8 @@
 
 > 这是一份**可公开、可部署的完整代码树**，不是免配置一键包。
 > **只需自备 LLM API key**；Live2D 模型（经作者授权）、Cubism SDK/Core、MemOS 均已随仓（含许可文件）。
+>
+> **本项目基于 [morettt/my-neuro](https://github.com/morettt/my-neuro)（MIT）二次开发**，保留上游版权与署名；第三方素材许可见 `NOTICE`。不是上游官方版本。
 
 包含：Electron 宿主应用层（`_incoming/my-neuro/`）、桌宠运行时与表演引擎（`pet-runtime/`）、
 Rust 内核（`pet-core/`）、语音/ASR/TTS/一起看服务、插件、门禁测试与安装自检。
