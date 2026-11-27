@@ -4,11 +4,11 @@
 
 ## 一键安装（Windows 10/11 x64）
 
-从 [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) 下载 **`DaFeiyu-Setup-0.3.1.exe`**（约 117MB），双击安装。
+从 [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) 下载 **`DaFeiyu-Setup-0.4.0.exe`**（约 120MB），双击安装。
 
 - 第一次启动会自动打开设置窗的「模型」页：填 **API Key**（支持任意 OpenAI 兼容网关），点保存即可对话。
-- 安装版已含：皮套与模型、Cubism Core、Rust 内核 `pet-core`、edge-tts 语音（联网，无需 key）。
-- 安装版不含：本地 4B 记忆模型、ASR / MemOS / 一起看等 Python 服务；需要时按下面「从源码运行」部署完整树。
+- 底座已含：皮套与模型、Cubism Core、Rust 内核 `pet-core`、edge-tts 语音（联网，无需 key）、我们现在的人格。
+- 完整能力（长期记忆 / 按住说话 / 一起看 / 语义表演）在「设置 → 组件」里一键安装（约 1.8GB）：模型走 ModelScope / hf-mirror，Python 运行时与依赖随组件包，装完自动写配置。
 - 安装包未代码签名，Windows SmartScreen 可能提示「未知发布者」，选择「仍要运行」。
 
 > 本仓库同时是一份**可公开、可部署的完整代码树**（安装包就是用它构建的），不是免配置一键包。

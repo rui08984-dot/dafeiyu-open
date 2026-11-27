@@ -24,6 +24,8 @@ const { loadProvidersFromStore, saveProviders, normalizeProvidersData } = requir
 const { CAPABILITIES, getPath: getConfigPath, resolveCapabilityValue } = require('./js/core/capabilities');
 // 2026-11-17 六十三轮：配置写盘/热重载/读回的唯一入口（详见模块头部注释）
 const { saveAndApply, notifyHostReload, writeJsonVerified } = require('./js/core/config-persist');
+// 2026-11-27 v0.4.0：组件管理器（下载/校验/解压/写配置）；控制中心「组件」页的 IPC 后端
+const componentsManager = require('./js/components/manager');
 // 插件配置凭据掩码/回填（与 webui/plugin_manager.py 同一套规则，唯一实现）
 const { maskSecrets, restoreSecrets } = require('./js/core/secret-mask');
 const aliyunVoiceClone = require('./js/voice/aliyun-voice-clone');
@@ -2959,6 +2961,57 @@ ipcMain.handle('control:dispatch-followup', async (_event, payload) => {
       req.end();
     } catch (e) { done({ ok: false, error: String((e && e.message) || e) }); }
   });
+});
+
+// ── 组件（v0.4.0）：下载 → SHA256 校验 → 解压 → 写配置 ──────────────────
+ipcMain.handle('control:components-status', () => {
+  try { return componentsManager.status(componentsManager.installRoot()); } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+ipcMain.handle('control:components-install', async (event, ids) => {
+  try {
+    const root = componentsManager.installRoot();
+    let wanted = Array.isArray(ids) ? ids.filter(Boolean) : [];
+    if (!wanted.length) {
+      const st = componentsManager.status(root);
+      if (!st.ok) return st;
+      wanted = st.components.map((c) => c.id);
+    }
+    const sender = event.sender;
+    const result = await componentsManager.install(root, wanted, {
+      onStatus: (s) => { try { if (!sender.isDestroyed()) sender.send('components:progress', Object.assign({ kind: 'status' }, s)); } catch (e) { /* ignore */ } },
+      onProgress: (p) => {
+        const now = Date.now();
+        if (now - (global.__componentsLastProgressAt || 0) < 250) return;
+        global.__componentsLastProgressAt = now;
+        try { if (!sender.isDestroyed()) sender.send('components:progress', Object.assign({ kind: 'progress' }, p)); } catch (e) { /* ignore */ }
+      },
+    });
+    if (result && result.ok) {
+      // 配置里的 asr/memos 开关要让宿主重新读一遍；服务由宿主 supervisor 的 services.json 监听自起
+      try { await notifyHostReload({ payload: { reason: 'components-installed' } }); } catch (e) { /* 宿主没起也不影响 */ }
+    }
+    return result;
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+ipcMain.handle('control:components-remove', async (_event, ids) => {
+  try {
+    return await componentsManager.remove(componentsManager.installRoot(), Array.isArray(ids) ? ids : []);
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+ipcMain.handle('control:components-open-dir', async () => {
+  try {
+    const dir = componentsManager.componentsDir(componentsManager.installRoot());
+    fs.mkdirSync(dir, { recursive: true });
+    return await shell.openPath(dir);
+  } catch (e) {
+    return String((e && e.message) || e);
+  }
 });
 
 app.whenReady().then(createControlWindow);

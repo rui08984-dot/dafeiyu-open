@@ -38,6 +38,12 @@ contextBridge.exposeInMainWorld('controlApi', {
   startService: id => ipcRenderer.invoke('control:start-service', id),
   stopService: id => ipcRenderer.invoke('control:stop-service', id),
   downloadService: id => ipcRenderer.invoke('control:download-service', id),
+  // v0.4.0 组件（记忆/ASR/一起看/LumenAct）：下载/校验/解压/写配置
+  componentsStatus: () => ipcRenderer.invoke('control:components-status'),
+  componentsInstall: ids => ipcRenderer.invoke('control:components-install', ids),
+  componentsRemove: ids => ipcRenderer.invoke('control:components-remove', ids),
+  componentsOpenDir: () => ipcRenderer.invoke('control:components-open-dir'),
+  onComponentsProgress: callback => ipcRenderer.on('components:progress', (_event, payload) => callback(payload)),
   onServiceLog: callback => ipcRenderer.on('control:service-log', (_event, payload) => callback(payload)),
   onServiceState: callback => ipcRenderer.on('control:service-state', () => callback()),
   openExternal: url => ipcRenderer.invoke('control:open-external', url),

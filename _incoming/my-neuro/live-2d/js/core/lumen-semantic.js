@@ -18,11 +18,13 @@ const REL = path.join('pet-runtime', 'desktop', 'perf', 'lumen-semantic-client.c
 const CANDIDATES = [
   // 开发树：live-2d/js/core → 上五级 = 项目根
   path.resolve(__dirname, '..', '..', '..', '..', '..', REL),
+  // 安装版 v0.4.0：运行时树随应用进 resources/app/pet-runtime（见 build-installer.ps1）
+  path.resolve(__dirname, '..', '..', REL),
   // 兼容旧布局（live-2d 上三级）
   path.resolve(__dirname, '..', '..', '..', REL),
 ];
-// 安装版：extraResources 落到 resources/pet-runtime/...
-if (process.resourcesPath) CANDIDATES.splice(1, 0, path.resolve(process.resourcesPath, REL));
+// 兼容旧安装布局（client 单独放 resources/pet-runtime）
+if (process.resourcesPath) CANDIDATES.splice(2, 0, path.resolve(process.resourcesPath, REL));
 
 let impl = null;
 for (const file of CANDIDATES) {

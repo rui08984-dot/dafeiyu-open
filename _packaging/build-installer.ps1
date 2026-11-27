@@ -79,7 +79,7 @@ param(
     [switch]$SkipNpmInstall,
     # 产品版本号（安装包文件名/程序版本）。应用自身的 package.json 版本与产品线无关，
     # 公开版按 release tag 走：v0.3.1 → DaFeiyu-Setup-0.3.1.exe。
-    [string]$Version = '0.3.1',
+    [string]$Version = '0.4.0',
     # 不随包 edge-tts 单文件 exe（体积敏感时用；默认随包，开箱有语音）
     [switch]$SkipTts
 )
@@ -228,7 +228,8 @@ function Prepare-AppStage {
     Copy-Item -LiteralPath $entrySrc -Destination (Join-Path $appStageDir 'control-entry.cjs') -Force
 
     $stagePkg = [ordered]@{
-        name         = $pkg.name
+        # 安装版独立 app identity：userData/单实例锁与开发宿主（combined-project）分开
+        name         = 'dafeiyu'
         # 产品版本走 -Version（公开版按 release tag）；应用自身版本 1.0.0 与产品线无关
         version      = $Version
         description  = $pkg.description
@@ -251,23 +252,75 @@ function Prepare-AppStage {
 
 Prepare-AppStage
 
+# ── 2.4 运行时树进应用（v0.4.0）──────────────────────────────────────
+# 装进 resources/app/pet-runtime，让「应用相对路径」成立：
+#   · main.js findProjectRoot 找 app/pet-runtime/tools（game-watch / idle-detect / autostart）
+#   · capabilities.js 检查 app/pet-runtime/desktop/<impl> 是否存在
+#   · 表演引擎找 app/pet-runtime/data/{facs-clips,perf-sync.json,programs}
+# 只带源码/数据，不带 22MB 模型、build/、Cubism SDK。
+function Prepare-RuntimeTree {
+    Write-Step '复制运行时树进应用（pet-runtime/tools|desktop|data）'
+    $rt = Join-Path $appStageDir 'pet-runtime'
+    New-Item -ItemType Directory -Force -Path $rt | Out-Null
+
+    & robocopy.exe (Join-Path $here '..\pet-runtime\tools') (Join-Path $rt 'tools') `
+        /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 /XD __pycache__ _archive /XF *.pyc memos-consistency.mjs nightly-deep-eval.ps1 | Out-Null
+    if ($LASTEXITCODE -ge 8) { Fail "robocopy pet-runtime/tools 失败：$LASTEXITCODE" }
+
+    & robocopy.exe (Join-Path $here '..\pet-runtime\desktop') (Join-Path $rt 'desktop') `
+        /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 /XD assets build vendor vendor2 /XF *.test.* test-*.mjs probe* scan* | Out-Null
+    if ($LASTEXITCODE -ge 8) { Fail "robocopy pet-runtime/desktop 失败：$LASTEXITCODE" }
+
+    & robocopy.exe (Join-Path $here '..\pet-runtime\data') (Join-Path $rt 'data') `
+        /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 /XF performance-log.jsonl dispatch-history.jsonl *.log* | Out-Null
+    if ($LASTEXITCODE -ge 8) { Fail "robocopy pet-runtime/data 失败：$LASTEXITCODE" }
+
+    Copy-Item -LiteralPath (Join-Path $here '..\pet-runtime\model-info.mjs') -Destination (Join-Path $rt 'model-info.mjs') -Force
+    $mb = [math]::Round(((Get-ChildItem -LiteralPath $rt -Recurse -File -ErrorAction SilentlyContinue |
+        Measure-Object -Property Length -Sum).Sum / 1MB), 1)
+    Write-Host "运行时树已进应用：$rt（约 $mb MB）"
+}
+Prepare-RuntimeTree
+
 # ── 2.5 安装版默认配置（公开包）──────────────────────────────────────
 # 她的 config-loader 缺 config.json 会直接抛错（main.js loadConfigData），
 # 所以安装包必须带一份「干净、无个人路径、无真实 key」的默认配置。
 # 首启由宿主检测空 key → 自动打开控制中心「模型」页（js/core/first-run.js）。
 function Write-PublicDefaults {
-    Write-Step '生成安装版默认配置（空 key，首启引导填写）'
+    Write-Step '生成安装版默认配置（我们的人格 + 无 key/无个人路径）'
     $exCfg = Join-Path $appStageDir 'config.example.json'
     if (-not (Test-Path -LiteralPath $exCfg -PathType Leaf)) {
         Fail "构建副本缺少 config.example.json：$exCfg"
     }
     $cfg = [IO.File]::ReadAllText($exCfg, [Text.Encoding]::UTF8) | ConvertFrom-Json
 
+    # 2026-11-27 v0.4.0：人格/表演/语音默认值取「本机正在用的那一份」，
+    # 但机器相关的窗口坐标、工作区路径、隐私同意、key 一律不随包。
+    $livePath = Join-Path $herDir 'config.json'
+    if (-not (Test-Path -LiteralPath $livePath -PathType Leaf)) {
+        Fail "找不到本机 config.json（人格来源）：$livePath。安装版要求用当前人格打包。"
+    }
+    $live = [IO.File]::ReadAllText($livePath, [Text.Encoding]::UTF8) | ConvertFrom-Json
+    $persona = [string]$live.llm.system_prompt
+    if ([string]::IsNullOrWhiteSpace($persona) -or $persona.Length -lt 200) {
+        Fail "本机 config.json 的 llm.system_prompt 太短（$($persona.Length) 字符），拒绝用它当默认人格。"
+    }
+    $cfg.llm.system_prompt = $persona
+    if ($live.PSObject.Properties['performance']) { $cfg.performance = $live.performance }
+    if ($live.PSObject.Properties['tts']) { $cfg.tts = $live.tts }
+    if ($live.PSObject.Properties['voice']) { $cfg.voice = $live.voice }
+    # ui：以示例为底，覆盖本机非机器相关键（坐标/副屏/字幕位置/窗口位置保持示例默认）
+    $machineUiKeys = @('model_position', 'screen_extend', 'subtitle_position', 'pet_window')
+    if ($live.PSObject.Properties['ui'] -and $live.ui) {
+        foreach ($p in $live.ui.PSObject.Properties) {
+            if ($machineUiKeys -contains $p.Name) { continue }
+            $cfg.ui | Add-Member -NotePropertyName $p.Name -NotePropertyValue $p.Value -Force
+        }
+    }
+
     # 默认云端 provider：OpenAI 兼容空白（任何兼容网关都能改 url/model 直接用）
-    $defaultPersona = '你是大肥鱼，住在用户桌面上的数字伙伴。说话自然、简短、有自己的脾气：会吐槽也会关心人，不端着、不说教。除非用户要求，不要长篇大论。'
     $cfg.llm.provider_id = 'cloud'
     $cfg.llm.model_id = 'gpt-4o-mini'
-    $cfg.llm.system_prompt = $defaultPersona
     $cfg.vision.provider_id = 'cloud'
     $cfg.vision.model_id = 'gpt-4o-mini'
 
@@ -276,13 +329,14 @@ function Write-PublicDefaults {
     $cfg.dispatch.defaultWorkspace = ''
     $cfg.privacy.PSObject.Properties.Remove('ack_screen_watch')
     $cfg.privacy.PSObject.Properties.Remove('acked_at')
-    $cfg.asr.enabled = $false          # 薄装不带 ASR 服务；按 V 不再撞一个不存在的端口
-    $cfg.rag.enabled = $false          # 8002 不在薄装里
-    $cfg.cost.local_memory = $false    # 本地 4B 记忆模型按需自装（README 指引）
+    $cfg.asr.enabled = $false          # 底座不带 ASR；装 voice-asr 组件时由组件写回 true
+    $cfg.rag.enabled = $false          # 8002 不在底座里
+    $cfg.cost.local_memory = $false    # 本地 4B 模型不随包（可自备）
     $cfg.browser_ext_ids = @()
-    $cfg | Add-Member -NotePropertyName 'memos' -NotePropertyValue ([pscustomobject]@{ enabled = $false }) -Force
+    $cfg | Add-Member -NotePropertyName 'memos' -NotePropertyValue ([pscustomobject]@{ enabled = $false; api_url = 'http://127.0.0.1:8003' }) -Force
+    $cfg | Add-Member -NotePropertyName 'components' -NotePropertyValue ([pscustomobject]@{ auto_start = $true }) -Force
     $cfg | Add-Member -NotePropertyName '_install' -NotePropertyValue ([pscustomobject]@{
-        at = (Get-Date).ToString('o'); by = 'installer'; version = $Version
+        at = (Get-Date).ToString('o'); by = 'installer'; version = $Version; persona = 'live-config'
     }) -Force
     [IO.File]::WriteAllText((Join-Path $appStageDir 'config.json'), ($cfg | ConvertTo-Json -Depth 32), $utf8NoBom)
 
@@ -313,7 +367,7 @@ function Write-PublicDefaults {
             Fail "安装版默认配置疑似含真实 key：$p（构建中止）"
         }
     }
-    Write-Host "默认配置已写入：config.json（人设占位 + provider=cloud）/ llm_providers.json（空 key + ollama 停用）"
+    Write-Host "默认配置已写入：人格来自本机（$($persona.Length) 字符）+ provider=cloud（空 key）+ memos/asr 先关（组件启用）"
 }
 
 # ── 2.6 随包运行时（pet-core / edge-tts）────────────────────────────
@@ -350,6 +404,26 @@ function Prepare-ExtraResources {
 
 Write-PublicDefaults
 Prepare-ExtraResources
+
+# ── 2.7 人格内核 + 组件清单（v0.4.0）──────────────────────────────────
+function Prepare-PersonaAndManifest {
+    Write-Step '准备人格内核 + 组件清单'
+    $personaOut = Join-Path $here 'out\persona'
+    New-Item -ItemType Directory -Force -Path $personaOut | Out-Null
+    $kernel = [IO.Path]::GetFullPath((Join-Path $herDir '..\data\人格内核.json'))
+    if (-not (Test-Path -LiteralPath $kernel -PathType Leaf)) {
+        Fail "找不到人格内核（persona-layers）：$kernel"
+    }
+    Copy-Item -LiteralPath $kernel -Destination (Join-Path $personaOut '人格内核.json') -Force
+    Write-Host "人格内核：已随包（$((Get-Item -LiteralPath $kernel).Length) B）"
+
+    $manifestOut = Join-Path $here 'out\components\manifest.json'
+    $frag = Join-Path $here 'out\packs\manifest.fragments.json'
+    $manifestScript = Join-Path $here 'build-components-manifest.cjs'
+    & $nodeExe $manifestScript --fragments $frag --out $manifestOut --version $Version
+    if ($LASTEXITCODE -ne 0) { Fail "组件清单生成失败（退出码 $LASTEXITCODE）" }
+}
+Prepare-PersonaAndManifest
 
 # 入口语法闸：2026-11-26 实测漏过一次重复声明（panelArgs），打包不报、启动才在
 # Electron 错误框里炸。这里在构建期用 node --check 把入口文件先过一遍。
@@ -397,12 +471,16 @@ switch ($modes[0]) {
             Measure-Object -Property Length -Sum).Sum / 1MB), 1)
         Write-Host ''
         Write-Host "[成功] 可运行目录已生成：$unpackedDir（约 $sizeMb MB）" -ForegroundColor Green
-        # 安装版三件套：配置在、pet-core 在、TTS 在（后两者可缺，缺了要明说）
+        # 安装版核心件：配置在、pet-core 在、TTS 在、运行时树在、组件清单/人格在
         foreach ($item in @(
-            @{ rel = 'resources\app\config.json'; what = '默认配置 config.json' },
+            @{ rel = 'resources\app\config.json'; what = '默认配置 config.json（含本机人格）' },
             @{ rel = 'resources\app\llm_providers.json'; what = 'provider 通讯录' },
             @{ rel = 'resources\pet-core\target\release\pet-core.exe'; what = 'pet-core Rust 快轨' },
-            @{ rel = 'resources\tts\dafeiyu-tts.exe'; what = '随包 edge-tts' }
+            @{ rel = 'resources\tts\dafeiyu-tts.exe'; what = '随包 edge-tts' },
+            @{ rel = 'resources\app\pet-runtime\tools\pinyin_mouth.py'; what = '运行时树 tools（口型/autostart 等）' },
+            @{ rel = 'resources\app\pet-runtime\data\facs-clips\index.json'; what = '表演数据 facs-clips' },
+            @{ rel = 'components\manifest.json'; what = '组件清单' },
+            @{ rel = 'resources\data\人格内核.json'; what = '人格内核（persona-layers）' }
         )) {
             $p = Join-Path $unpackedDir $item.rel
             if (Test-Path -LiteralPath $p -PathType Leaf) {

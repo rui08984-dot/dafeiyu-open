@@ -74,14 +74,20 @@ extraResources:
     to: pet-core
   - from: out/extra/tts
     to: tts
-  # 渲染层 js/core/lumen-semantic.js 的可选依赖（唯一实现在 pet-runtime，别复制第二份）
-  - from: ../pet-runtime/desktop/perf/lumen-semantic-client.cjs
-    to: pet-runtime/desktop/perf/lumen-semantic-client.cjs
 
-# 安装根目录放一份给人看的说明（和 DaFeiyu.exe 同级）
+# 运行时树（v0.4.0）随应用进 resources/app/pet-runtime（由 build-installer.ps1 的
+# Prepare-RuntimeTree 复制进 appstage）：这样 findProjectRoot、能力页 impl 检查、
+# 表演引擎 data 查找都按「应用相对路径」成立，不依赖 resources 的上一级。
+# 安装根目录放给人看的说明 / 组件入口 / 组件清单 / 人格内核
 extraFiles:
   - from: build-resources/安装说明.txt
     to: 安装说明.txt
+  - from: build-resources/安装组件.cmd
+    to: 安装组件.cmd
+  - from: out/components/manifest.json
+    to: components/manifest.json
+  - from: out/persona/人格内核.json
+    to: resources/data/人格内核.json
 
 # 打包后硬校验：删运行日志、校验默认配置无真实 key（见 build-resources/after-pack.cjs）
 afterPack: build-resources/after-pack.cjs

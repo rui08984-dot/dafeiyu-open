@@ -7157,7 +7157,7 @@ async function _runGameAction(action, arg, focus, semanticProfiles, extraCfg) {
                 // 区分「没装」「装了没启用」「启用了但游戏没开」三种情况（2026-11-10 三十八轮）：
                 // ModManager 的启用状态持久化在 Mods/mod_last_good.json 的 selection.enabledIds，
                 // 直读它就能给出准确下一步，而不是永远说「去 GUI 装」。
-                const userDir = '<user-home>/AppData/Roaming/Godot/app_userdata/植物大战僵尸杂交版';
+                const userDir = require('path').join(process.env.APPDATA || require('os').homedir(), 'Godot', 'app_userdata', '植物大战僵尸杂交版');
                 const lg = userDir + '/Mods/mod_last_good.json';
                 let enabled = null;
                 try { enabled = (JSON.parse(fs.readFileSync(lg, 'utf8')).selection || {}).enabledIds || []; } catch (e) { enabled = null; }

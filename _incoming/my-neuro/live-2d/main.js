@@ -20,6 +20,12 @@ try {
   if (typeof net.setDefaultAutoSelectFamilyAttemptTimeout === 'function') net.setDefaultAutoSelectFamilyAttemptTimeout(300);
 } catch (e) { /* 老运行时没有这些 API：保持默认，不阻断启动 */ }
 const { app, BrowserWindow, ipcMain, screen, globalShortcut, desktopCapturer, dialog, nativeImage, Tray, Menu, contentTracing, session } = require('electron')
+
+// 2026-11-27 安装包 A：测试/并行运行隔离。安装版与开发宿主默认已用不同 app name，
+// 但验收时仍可用 PET_USER_DATA 指定独立 userData（单实例锁随之独立）。
+try {
+  if (process.env.PET_USER_DATA) app.setPath('userData', require('path').resolve(process.env.PET_USER_DATA));
+} catch (e) { /* 设置失败沿用默认 */ }
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -75,6 +81,8 @@ const { logToTerminal } = require('./js/api-utils');
 // 首启判定 / 随包语音（2026-11-26 安装包 A）：纯函数在 first-run.js，生命周期在 local-tts.js
 const { needsApiKey } = require('./js/core/first-run');
 const { startBundledTts, stopBundledTts } = require('./js/services/local-tts');
+// 组件化本地服务（记忆/嵌入/ASR/一起看/LumenAct）：components/services.json 存在才动作
+const { startAll: startLocalServices, stopAll: stopLocalServices } = require('./js/components/services');
 // 配置写盘唯一入口（原子写 + 回读校验）：别再在别处写第二份 JSON.stringify+writeFileSync
 const { writeJsonVerified, patchVerified } = require('./js/core/config-persist');
 
@@ -1800,9 +1808,20 @@ function autostartLauncherPath() {
 }
 
 // 注册表助手：electron.exe 本体写不了注册表/Startup（实测 EPERM 且原生 API 静默失败），
-// 但它的**子 node 进程**可以 —— 所以让 node 去写 HKCU Run。
+// 但它的**子进程（ELECTRON_RUN_AS_NODE）**可以 —— 让 Electron 自己以 Node 模式去写 HKCU Run。
+// 2026-11-27 安装包 A：原来是「spawnSync + 裸 node」+ 写死三级相对路径，安装版没 node、
+// 路径也落到 _incoming/pet-runtime（不存在）→ 开机自启一直静默失败。现在按目录找、用自身 exe。
 function autostartHelperPath() {
-  return path.join(app.getAppPath(), '..', '..', '..', 'pet-runtime', 'tools', 'autostart.cjs');
+  const appPath = app.getAppPath();
+  const candidates = [
+    path.join(appPath, '..', 'pet-runtime', 'tools', 'autostart.cjs'),        // 安装版：resources/app → resources/pet-runtime
+    path.join(appPath, '..', '..', '..', 'pet-runtime', 'tools', 'autostart.cjs'), // 开发树
+    path.join(appPath, '..', '..', '..', '..', 'pet-runtime', 'tools', 'autostart.cjs'),
+  ];
+  for (const p of candidates) {
+    try { if (fs.existsSync(p)) return p; } catch (e) { /* 继续找 */ }
+  }
+  return candidates[0];
 }
 
 let _autostartCache = { at: 0, on: false };
@@ -1810,7 +1829,13 @@ let _autostartCache = { at: 0, on: false };
 function runAutostartHelper(cmd) {
   try {
     const { spawnSync } = require('child_process');
-    const r = spawnSync('node', [autostartHelperPath(), cmd], { windowsHide: true, encoding: 'utf8', timeout: 8000 });
+    const helper = autostartHelperPath();
+    if (!fs.existsSync(helper)) return { ok: false, err: '找不到 autostart.cjs：' + helper };
+    // 用 app 自己的 exe 以 Node 模式跑：安装版机器上没有 node。
+    const r = spawnSync(process.execPath, [helper, cmd], {
+      windowsHide: true, encoding: 'utf8', timeout: 8000,
+      env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' }),
+    });
     if (r.status !== 0) return { ok: false, err: String(r.stderr || '').slice(0, 200) || ('status ' + r.status) };
     const j = JSON.parse(String(r.stdout || '{}'));
     return Object.assign({ ok: true }, j);
@@ -2674,6 +2699,22 @@ app.whenReady().then(async () => {
         }).catch((e) => logToTerminal('warn', '[tts] 随包语音启动异常: ' + (e && e.message || e)));
     } catch (e) { /* 不能因为语音拖垮宿主 */ }
 
+    // 组件化本地服务（v0.4.0）：components/services.json 存在才动作（开发树无 → 静默）。
+    // 顺带把随包 Python 暴露成 PET_PYTHON + PATH 前插：viseme/插件等走 runtime-paths 的地方自动用它。
+    try {
+        const comp = require('./js/components/manager');
+        const cdir = comp.componentsDir();
+        const pyExe = path.join(cdir, 'python', 'python.exe');
+        if (fs.existsSync(pyExe)) {
+            process.env.PET_PYTHON = pyExe;
+            process.env.PATH = path.dirname(pyExe) + ';' + String(process.env.PATH || '');
+            logToTerminal('info', '[components] 随包 Python 已启用：' + pyExe);
+        }
+        startLocalServices({ log: (m) => logToTerminal('info', m) })
+            .then((r) => { if (r && r.services) logToTerminal('info', `[components] 本地服务清单 ${r.services} 个`); })
+            .catch((e) => logToTerminal('warn', '[components] 本地服务启动失败: ' + (e && e.message || e)));
+    } catch (e) { /* 组件子系统不可用不影响宿主 */ }
+
     // 隐私知情确认（一次性，商业合规：屏幕感知=高敏感能力，须显式披露——docs/隐私说明.md §3）。
     // 只在「一起看/主播陪玩启用且未确认过」时弹一次；确认写进 config.privacy.ack_screen_watch。
     try {
@@ -2738,6 +2779,8 @@ app.on('will-quit', () => {
     try { stopPassthroughWatcher(); } catch (e) { /* 退出时清理失败不影响关闭 */ }
     // 随包语音是宿主拉起的子进程：连 bootloader 一起收掉，别留下孤儿占 9883
     try { stopBundledTts(); } catch (e) { /* 退出时清理失败不影响关闭 */ }
+    // 组件服务（MemOS/ASR/一起看/LumenAct…）同样由宿主拉起：退出时整棵树收掉
+    try { stopLocalServices(); } catch (e) { /* 退出时清理失败不影响关闭 */ }
     avatarSwitchTransaction?.dispose();
     avatarSwitchTransaction = null;
     if (shortcutManager) {

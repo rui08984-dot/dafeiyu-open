@@ -40,11 +40,15 @@ const KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 const NAME = 'DaFeiYu';
 const ROOT = path.resolve(__dirname, '..', '..');
 const LAUNCHER = path.join(ROOT, 'pet-runtime', 'tools', 'launch-my-neuro.mjs');
+// 安装版：tools 在 <install>/resources/pet-runtime/tools，ROOT=<install>/resources，
+// 真正入口是 <install>/DaFeiyu.exe（机器上没有 node，也没有 launcher）。
+const INSTALL_EXE = path.resolve(ROOT, '..', 'DaFeiyu.exe');
 
 // 旧实现写过的启动文件夹文件名（仅此两个，且都是本项目专属名字）。
 const LEGACY_STARTUP_NAMES = ['dafeiyu-autostart.cmd', '大肥鱼桌宠.cmd'];
 
 function desiredValue() {
+    if (fs.existsSync(INSTALL_EXE)) return '"' + INSTALL_EXE + '"';
     return '"C:\\Windows\\System32\\cmd.exe" /c start "" /min node "' + LAUNCHER + '"';
 }
 

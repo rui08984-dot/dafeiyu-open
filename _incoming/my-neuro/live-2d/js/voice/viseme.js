@@ -9,10 +9,24 @@
 'use strict';
 const __silentAudit = require('../core/silent-audit.js');
 const { spawn } = require('child_process');
-
+const fs = require('fs');
 const path = require('path');
-const { resolvePython } = require('../core/runtime-paths.js');
-const PY_SCRIPT = path.resolve(__dirname, '../../../../..', 'pet-runtime', 'tools', 'pinyin_mouth.py');
+const { resolvePython } = require('../core/runtime-paths');
+
+// 2026-11-27 安装包 A：原来写死 <user-home>/.../python.exe 与 <project-root>/...py，
+// 换机器必失效（嘴形静默退回正弦）。现在按「项目根/pet-runtime/tools」找脚本，
+// 解释器走 runtime-paths（PET_PYTHON → 配置 → PATH）。
+function findProjectRoot(start) {
+    let dir = path.resolve(start);
+    for (let i = 0; i < 10; i += 1) {
+        try { if (fs.existsSync(path.join(dir, 'pet-runtime', 'tools'))) return dir; } catch (e) { /* 继续向上 */ }
+        const up = path.dirname(dir);
+        if (up === dir) break;
+        dir = up;
+    }
+    return path.resolve(start);
+}
+const PY_SCRIPT = path.join(findProjectRoot(__dirname), 'pet-runtime', 'tools', 'pinyin_mouth.py');
 
 // 缩写韵母的真实主元音 + 单元音开口度（a 最大，u 最小，ü 介于 i/u 之间）
 const VOWEL_OPENNESS = { a: 1.0, o: 0.72, e: 0.5, i: 0.28, u: 0.16, v: 0.2 };
@@ -56,8 +70,13 @@ function flushPrefetch() {
     // 已全缓存的文本不重复跑
     const chars = [...new Set([...text].filter((c) => c >= '\u4e00' && c <= '\u9fff'))];
     if (chars.length && chars.every((c) => cache.has(c))) return;
+    // 脚本/解释器缺失（薄装未装 python 组件）→ 静默退回正弦口型，不刷错误、不 spawn。
+    let py = '';
+    try { py = resolvePython(); } catch (e) { py = ''; }
+    try { if (!fs.existsSync(PY_SCRIPT)) py = ''; } catch (e) { py = ''; }
+    if (!py) return;
     busy = true;
-    const child = spawn(resolvePython(), [PY_SCRIPT, text], { windowsHide: true });
+    const child = spawn(py, [PY_SCRIPT, text], { windowsHide: true });
     let out = '';
     child.stdout.on('data', (c) => { out += c; });
     child.on('error', (err) => {

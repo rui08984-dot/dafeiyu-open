@@ -35,8 +35,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))   # pet-runtime/tools -> 仓库根
-MODELS = os.path.join(ROOT, "_research", "lumenact", "models")
-CFG = os.path.join(ROOT, "_research", "lumenact", "assets", "semantic-config.json")
+# 2026-11-27 组件化：安装版没有 _research/，由组件包通过环境变量指到 components 下的模型
+MODELS = os.environ.get("LUMENACT_MODELS") or os.path.join(ROOT, "_research", "lumenact", "models")
+CFG = os.environ.get("LUMENACT_CFG") or os.path.join(ROOT, "_research", "lumenact", "assets", "semantic-config.json")
 
 DEFAULT_PORT = 8120
 MAX_BODY = 64 * 1024

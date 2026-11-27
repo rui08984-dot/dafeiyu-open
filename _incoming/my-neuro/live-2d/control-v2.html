@@ -214,6 +214,13 @@
         </span>
         <span class="nav-text">插件</span>
       </button>
+      <!-- v0.4.0 组件：底座不含的 Python 侧能力（记忆/ASR/一起看/LumenAct） -->
+      <button class="nav" data-page="components" type="button">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 L20 7.5 V16.5 L12 21 L4 16.5 V7.5 Z"/><path d="M4 7.5 L12 12 L20 7.5"/><path d="M12 12 V21"/><circle cx="12" cy="12" r="1.2" fill="#38bdf8"/></svg>
+        </span>
+        <span class="nav-text">组件</span>
+      </button>
       <button class="nav" data-page="petbody" type="button">
         <span class="nav-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="3.5"/><path d="M5 19.5 C5 15.5 8 13 12 13 C16 13 19 15.5 19 19.5"/><line x1="12" y1="13" x2="12" y2="21"/><path d="M7.5 17 C6 18.5 5 20 4.5 21"/><path d="M16.5 17 C18 18.5 19 20 19.5 21"/><circle cx="12" cy="7" r="1.2" fill="#38bdf8"/></svg>
@@ -551,6 +558,27 @@
             </div>
             <div id="plugin-detail-content"></div>
           </div>
+        </section>
+
+        <!-- v0.4.0 组件：底座之外的能力，按需下载（模型走国内镜像 + SHA256 校验） -->
+        <section class="page" id="components">
+          <div class="page-head">
+            <h1 style="white-space:nowrap;flex-shrink:0">组件</h1>
+            <p class="page-sub">记忆 / 语音输入 / 一起看 / 语义表演</p>
+          </div>
+          <p class="hint">底座只带「她本人」。组件从国内镜像下载并做 SHA256 校验，装完自动写配置；<strong>安装后请重启大肥鱼生效</strong>。</p>
+          <div class="page-head">
+            <span class="head-actions">
+              <button class="btn small" id="components-install-all" type="button">全部安装</button>
+              <button class="btn small" id="components-refresh" type="button">刷新</button>
+              <button class="btn small" id="components-open-dir" type="button">打开组件目录</button>
+            </span>
+          </div>
+          <div id="components-progress" hidden>
+            <p class="hint" id="components-progress-text">准备中…</p>
+            <progress id="components-progress-bar" max="100" value="0" style="width:100%;height:10px"></progress>
+          </div>
+          <div id="components-list" class="rows"></div>
         </section>
 
         <!-- 6 皮套 -->

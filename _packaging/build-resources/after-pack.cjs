@@ -38,5 +38,20 @@ module.exports = async function afterPack(context) {
     }
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     if (!cfg.llm || !cfg.llm.provider_id) throw new Error('[afterPack] config.json 缺少 llm.provider_id');
-    console.log('[afterPack] 安装版配置校验通过（provider=' + cfg.llm.provider_id + '）');
+    if (String(cfg.llm.system_prompt || '').length < 200) throw new Error('[afterPack] 默认人格太短（应来自本机 config.json）');
+
+    // v0.4.0 底座完整性：少了这些，安装版会「能开但能力悄悄消失」
+    const must = [
+        path.join(root, 'components', 'manifest.json'),
+        path.join(root, 'resources', 'data', '人格内核.json'),
+        path.join(root, 'resources', 'app', 'pet-runtime', 'tools', 'pinyin_mouth.py'),
+        path.join(root, 'resources', 'app', 'pet-runtime', 'desktop', 'perf', 'lumen-semantic-client.cjs'),
+        path.join(root, 'resources', 'app', 'pet-runtime', 'data', 'facs-clips', 'index.json'),
+        path.join(root, 'resources', 'app', 'pet-runtime', 'data', 'perf-sync.json'),
+        path.join(root, 'resources', 'app', 'js', 'components', 'manager.js'),
+    ];
+    for (const p of must) {
+        if (!fs.existsSync(p)) throw new Error('[afterPack] 底座缺文件：' + p);
+    }
+    console.log('[afterPack] 安装版配置校验通过（provider=' + cfg.llm.provider_id + '，人格 ' + String(cfg.llm.system_prompt).length + ' 字符）');
 };

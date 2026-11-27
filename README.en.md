@@ -6,7 +6,7 @@
 
 ## Install (Windows 10/11 x64)
 
-Download **`DaFeiyu-Setup-0.3.1.exe`** (~117 MB) from [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) and run it.
+Download **`DaFeiyu-Setup-0.4.0.exe`** (~120 MB) from [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) and run it.
 
 On first launch the settings window opens on the **Model** page: paste an API key for any OpenAI-compatible endpoint, press Save, and start chatting. No restart needed.
 

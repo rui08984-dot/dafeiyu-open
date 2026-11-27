@@ -707,16 +707,8 @@ const PATCHERS = {
   },
 
   'live-2d/js/voice/viseme.js': (s) => {
-    s = mustReplace(s,
-      "const PY = '" + HOME_WIN + "/AppData/Local/Programs/Python/Python313/python.exe';\n"
-        + "const PY_SCRIPT = '" + ROOT_WIN + "/pet-runtime/tools/pinyin_mouth.py';",
-      [
-        "const path = require('path');",
-        "const { resolvePython } = require('../core/runtime-paths.js');",
-        'const PY_SCRIPT = path.resolve(__dirname, \'../../../../..\', \'pet-runtime\', \'tools\', \'pinyin_mouth.py\');',
-      ].join('\n'), 'viseme paths');
-    s = mustReplace(s, 'const child = spawn(PY, [PY_SCRIPT, text], { windowsHide: true });',
-      'const child = spawn(resolvePython(), [PY_SCRIPT, text], { windowsHide: true });', 'viseme spawn');
+    // 2026-11-27：源码已去掉硬编码解释器/脚本路径（runtime-paths + 项目根查找），
+    // 不再需要导出时改写；只保留错误可观测补丁。
     s = mustReplace(s, "    child.on('error', () => { busy = false; });",
       [
         "    child.on('error', (err) => {",
@@ -1153,11 +1145,11 @@ ROOT_DOCS['README.md'] = [
   '',
   '## 一键安装（Windows 10/11 x64）',
   '',
-  '从 [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) 下载 **`DaFeiyu-Setup-0.3.1.exe`**（约 117MB），双击安装。',
+  '从 [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) 下载 **`DaFeiyu-Setup-0.4.0.exe`**（约 120MB），双击安装。',
   '',
   '- 第一次启动会自动打开设置窗的「模型」页：填 **API Key**（支持任意 OpenAI 兼容网关），点保存即可对话。',
-  '- 安装版已含：皮套与模型、Cubism Core、Rust 内核 `pet-core`、edge-tts 语音（联网，无需 key）。',
-  '- 安装版不含：本地 4B 记忆模型、ASR / MemOS / 一起看等 Python 服务；需要时按下面「从源码运行」部署完整树。',
+  '- 底座已含：皮套与模型、Cubism Core、Rust 内核 `pet-core`、edge-tts 语音（联网，无需 key）、我们现在的人格。',
+  '- 完整能力（长期记忆 / 按住说话 / 一起看 / 语义表演）在「设置 → 组件」里一键安装（约 1.8GB）：模型走 ModelScope / hf-mirror，Python 运行时与依赖随组件包，装完自动写配置。',
   '- 安装包未代码签名，Windows SmartScreen 可能提示「未知发布者」，选择「仍要运行」。',
   '',
   '> 本仓库同时是一份**可公开、可部署的完整代码树**（安装包就是用它构建的），不是免配置一键包。',
@@ -1302,7 +1294,7 @@ ROOT_DOCS['README.en.md'] = [
   '',
   '## Install (Windows 10/11 x64)',
   '',
-  'Download **`DaFeiyu-Setup-0.3.1.exe`** (~117 MB) from [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) and run it.',
+  'Download **`DaFeiyu-Setup-0.4.0.exe`** (~120 MB) from [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) and run it.',
   '',
   'On first launch the settings window opens on the **Model** page: paste an API key for any OpenAI-compatible endpoint, press Save, and start chatting. No restart needed.',
   '',
@@ -1363,6 +1355,13 @@ ROOT_DOCS['RELEASE-NOTES.md'] = [
   '',
   '生成方式：`node scripts/export-public-tree.mjs`（源：主仓 + 应用仓的 tracked 文件）。',
   '状态：**纯本地树**，未配置 remote、未 push。',
+  '',
+  '## v0.4.0 组件化安装（2026-11-27）',
+  '',
+  '- 底座：`DaFeiyu-Setup-0.4.0.exe`（约 120MB）——应用 + 皮套/模型 + Cubism Core + pet-core + edge-tts + 表演数据 + 我们现在的人格。',
+  '- 组件（设置 → 组件，一键安装，约 1.8GB）：`memory`（MemOS+Qdrant+嵌入 784MB/ModelScope）、`voice-asr`（SenseVoice 239MB/hf-mirror）、`cowatch`、`lumen`（153MB/hf-mirror）。',
+  '- 组件包由 `_packaging/build-component-packs.ps1` 构建；清单 `components/manifest.json` 带 SHA256 与多源。',
+  '- 不含：本地 4B 记忆模型（自备 GGUF）、Ollama 本地视觉（走云）。',
   '',
   '## v0.3.1 一键安装包（2026-11-26）',
   '',

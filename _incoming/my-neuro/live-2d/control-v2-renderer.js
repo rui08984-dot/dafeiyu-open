@@ -310,8 +310,119 @@ if (typeof module !== 'undefined' && module.exports) {
     if (pageId === 'knowledge') loadKnowledge();
     if (pageId === 'skills') loadSkills();
     if (pageId === 'actions') { loadActions(); loadDispatchTasks(); }
+    if (pageId === 'components') loadComponents();
   }
   document.querySelectorAll('.nav').forEach(button => button.addEventListener('click', () => switchPage(button.dataset.page, button)));
+
+  // ── 组件（v0.4.0）：底座之外的能力，按需下载 ──────────────────────────
+  let componentsWired = false;
+  function setComponentsProgress(text, pct) {
+    const wrap = $('components-progress');
+    const bar = $('components-progress-bar');
+    const label = $('components-progress-text');
+    if (!wrap || !bar || !label) return;
+    wrap.hidden = false;
+    if (text) label.textContent = text;
+    if (typeof pct === 'number' && Number.isFinite(pct)) bar.value = Math.max(0, Math.min(100, pct));
+  }
+  async function loadComponents() {
+    const list = $('components-list');
+    if (!list) return;
+    try {
+      const st = await api.componentsStatus();
+      if (!st || !st.ok) {
+        list.innerHTML = '<p class="hint">组件清单不可用：' + escapeHtml((st && st.error) || '未知错误') + '</p>';
+        return;
+      }
+      if (!st.components.length) {
+        list.innerHTML = '<p class="hint">这个安装包没有附带组件清单（components/manifest.json）。</p>';
+        return;
+      }
+      list.innerHTML = st.components.map((c) => {
+        const size = Math.round((Number(c.sizeBytes) || 0) / 1048576) + 'MB';
+        const state = c.installed ? ('已装 ' + escapeHtml(c.installedVersion || '')) : '未装';
+        const action = c.installed
+          ? '<button class="btn small" data-component-remove="' + escapeHtml(c.id) + '" type="button" style="white-space:nowrap">卸载</button>'
+          : '<button class="btn small" data-component-install="' + escapeHtml(c.id) + '" type="button" style="white-space:nowrap">安装</button>';
+        return '<div class="row"><span class="row-label">' + escapeHtml(c.name)
+          + '<br><small class="hint">' + size + ' · ' + state + '</small></span>' + action + '</div>';
+      }).join('');
+      list.querySelectorAll('[data-component-install]').forEach((btn) => {
+        btn.addEventListener('click', () => installComponents([btn.dataset.componentInstall]));
+      });
+      list.querySelectorAll('[data-component-remove]').forEach((btn) => {
+        btn.addEventListener('click', () => removeComponents([btn.dataset.componentRemove]));
+      });
+    } catch (e) {
+      list.innerHTML = '<p class="hint">读取组件清单失败：' + escapeHtml(e && e.message || e) + '</p>';
+    }
+  }
+  async function installComponents(ids) {
+    if (!api || !api.componentsInstall) return;
+    setComponentsProgress('开始下载…', 0);
+    setComponentButtonsDisabled(true);
+    try {
+      const r = await api.componentsInstall(ids);
+      if (r && r.ok) {
+        setComponentsProgress('安装完成。请重启大肥鱼后生效。', 100);
+        toast('组件安装完成；重启大肥鱼后生效');
+      } else {
+        setComponentsProgress('安装失败：' + ((r && r.error) || '未知错误'), 0);
+        toast('组件安装失败：' + ((r && r.error) || '未知错误'));
+      }
+    } catch (e) {
+      setComponentsProgress('安装失败：' + (e && e.message || e), 0);
+    } finally {
+      setComponentButtonsDisabled(false);
+      await loadComponents();
+    }
+  }
+  async function removeComponents(ids) {
+    if (!api || !api.componentsRemove) return;
+    setComponentButtonsDisabled(true);
+    try {
+      const r = await api.componentsRemove(ids);
+      if (r && r.ok) toast('已卸载；重启大肥鱼后生效');
+      else toast('卸载失败：' + ((r && r.error) || '未知错误'));
+    } finally {
+      setComponentButtonsDisabled(false);
+      await loadComponents();
+    }
+  }
+  function setComponentButtonsDisabled(disabled) {
+    ['components-install-all', 'components-refresh'].forEach((id) => {
+      const b = $(id);
+      if (b) b.disabled = !!disabled;
+    });
+  }
+  function wireComponents() {
+    if (componentsWired) return;
+    componentsWired = true;
+    const all = $('components-install-all');
+    if (all) all.addEventListener('click', () => installComponents(null));
+    const refresh = $('components-refresh');
+    if (refresh) refresh.addEventListener('click', () => loadComponents());
+    const open = $('components-open-dir');
+    if (open) open.addEventListener('click', () => api.componentsOpenDir());
+    if (api && api.onComponentsProgress) {
+      api.onComponentsProgress((p) => {
+        if (!p) return;
+        if (p.kind === 'progress') {
+          if (p.total) setComponentsProgress(null, Math.round(p.received / p.total * 100));
+          return;
+        }
+        const name = p.name || p.id || '';
+        const map = {
+          component: '正在安装 ' + name,
+          file: p.skipped ? ('已存在，跳过 ' + name) : ('下载/解压 ' + name),
+          config: '写入配置…',
+          setup: '写入组件配置…',
+          done: '完成',
+        };
+        setComponentsProgress(map[p.phase] || (p.phase || '处理中…'), p.phase === 'done' ? 100 : undefined);
+      });
+    }
+  }
 
   // ── 总览 ─────────────────────────────────────────────────────────────
   async function loadOverview(silent = false) {
@@ -3497,6 +3608,7 @@ function renderAll() {
       // 静默初始值由总览轮询（control:overview ← 8103 /state）回填，不再在设置页写第二份。
       wireKnowledgeModals();
       wireActionsFilters();
+      wireComponents();
       bindWheelFallback();   // 滚轮兜底（CSS 已修好，这层只处理边缘情况）
       // 皮套右键「换装」进来时带 page 参数直接落页；page 支持 "<id>+dirty"（快照取证的脏态）
       let dirtyParam = false;
