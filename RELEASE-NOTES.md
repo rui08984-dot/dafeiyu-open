@@ -6,7 +6,7 @@
 ## v0.4.0 组件化安装（2026-11-27）
 
 - 底座：`DaFeiyu-Setup-0.4.0.exe`（约 120MB）——应用 + 皮套/模型 + Cubism Core + pet-core + edge-tts + 表演数据 + 我们现在的人格。
-- 组件（设置 → 组件，一键安装，约 1.8GB）：`memory`（MemOS+Qdrant+嵌入 784MB/ModelScope）、`voice-asr`（SenseVoice 239MB/hf-mirror）、`cowatch`、`lumen`（153MB/hf-mirror）。
+- 组件（设置 → 组件，一键安装，约 1.3GB）：`memory`（MemOS+Qdrant+嵌入 784MB/ModelScope）、`voice-asr`（SenseVoice 239MB/hf-mirror）、`cowatch`、`lumen`（153MB/hf-mirror）。
 - 组件包由 `_packaging/build-component-packs.ps1` 构建；清单 `components/manifest.json` 带 SHA256 与多源。
 - 不含：本地 4B 记忆模型（自备 GGUF）、Ollama 本地视觉（走云）。
 
