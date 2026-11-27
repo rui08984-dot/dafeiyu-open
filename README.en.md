@@ -6,12 +6,13 @@
 
 ## Install (Windows 10/11 x64)
 
-Download **`DaFeiyu-Setup-0.4.0.exe`** (~120 MB) from [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) and run it.
+Download **`DaFeiyu-Setup-0.5.0.exe`** (~120 MB) from [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) and run it.
 
 On first launch the settings window opens on the **Model** page: paste an API key for any OpenAI-compatible endpoint, press Save, and start chatting. No restart needed.
 
-- Included: Live2D model + Cubism Core, Rust core (`pet-core`: screen capture / window control fast path), edge-tts voice (free, online, no key).
-- Not included: local 4B memory model, ASR / MemOS / co-watch / OCR Python services. Deploy the full source tree for those.
+- Included: Live2D model + Cubism Core, Rust core (`pet-core`: screen capture / window control fast path), edge-tts voice (free, online, no key), performance data and the current persona.
+- Full capability is installed on demand under **Settings → Components** (8 components, 5,539.3 MB / ~5.5 GB total; install only what you need): long-term memory, push-to-talk ASR, co-watch, semantic motion, voiceprint, local 4B memory model, local vision/OCR. Models come from ModelScope / hf-mirror; restart DaFeiyu after installing.
+- New in v0.5.0: `voiceprint` (263.5 MB, resemblyzer + CPU torch), `local-memory` (2,381.6 MB, MemOperator-4B, CPU inference, hf-mirror), `ollama` (1,637.8 MB portable Ollama v0.40.18; its three models ~9.3 GB are pulled on demand; `paddleocr-vl` is not in the official registry and is optional).
 - The installer is unsigned; Windows SmartScreen may warn about an unknown publisher. Choose "Run anyway".
 
 ## What she can do

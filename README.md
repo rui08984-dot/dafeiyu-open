@@ -4,11 +4,12 @@
 
 ## 一键安装（Windows 10/11 x64）
 
-从 [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) 下载 **`DaFeiyu-Setup-0.4.0.exe`**（约 120MB），双击安装。
+从 [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) 下载 **`DaFeiyu-Setup-0.5.0.exe`**（约 120MB），双击安装。
 
 - 第一次启动会自动打开设置窗的「模型」页：填 **API Key**（支持任意 OpenAI 兼容网关），点保存即可对话。
-- 底座已含：皮套与模型、Cubism Core、Rust 内核 `pet-core`、edge-tts 语音（联网，无需 key）、我们现在的人格。
-- 完整能力（长期记忆 / 按住说话 / 一起看 / 语义表演）在「设置 → 组件」里一键安装（约 1.3GB）：模型走 ModelScope / hf-mirror，Python 运行时与依赖随组件包，装完自动写配置。
+- 底座已含：皮套与模型、Cubism Core、Rust 内核 `pet-core`、edge-tts 语音（联网，无需 key）、完整表演数据、我们现在的人格。
+- 完整能力在「设置 → 组件」里**按需安装**（8 个组件合计 5,539.3MB，约 5.5GB，可只装需要的）：长期记忆 / 按住说话 / 一起看 / 语义表演 / 声纹 / 本地 4B 记忆模型 / 本地视觉 OCR。模型走 ModelScope / hf-mirror，Python 运行时与依赖随组件包，装完重启大肥鱼。
+- 本版新增组件：`voiceprint` 263.5MB（声纹，resemblyzer + CPU torch）、`local-memory` 2,381.6MB（MemOperator-4B，CPU 推理，hf-mirror）、`ollama` 1,637.8MB（便携 Ollama v0.40.18；三个模型约 9.3GB 装时按需拉取；`paddleocr-vl` 不在官方 registry，为可选档）。
 - 安装包未代码签名，Windows SmartScreen 可能提示「未知发布者」，选择「仍要运行」。
 
 > 本仓库同时是一份**可公开、可部署的完整代码树**（安装包就是用它构建的），不是免配置一键包。

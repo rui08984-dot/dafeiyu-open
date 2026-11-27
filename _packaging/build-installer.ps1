@@ -79,7 +79,7 @@ param(
     [switch]$SkipNpmInstall,
     # 产品版本号（安装包文件名/程序版本）。应用自身的 package.json 版本与产品线无关，
     # 公开版按 release tag 走：v0.3.1 → DaFeiyu-Setup-0.3.1.exe。
-    [string]$Version = '0.4.0',
+    [string]$Version = '0.5.0',
     # 不随包 edge-tts 单文件 exe（体积敏感时用；默认随包，开箱有语音）
     [switch]$SkipTts
 )

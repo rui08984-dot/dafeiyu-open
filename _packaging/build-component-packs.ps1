@@ -240,7 +240,9 @@ $components = @(
     [ordered]@{
         id = 'memory'; name = '长期记忆（MemOS + Qdrant + 嵌入）'; version = '0.4.0'; extractTo = 'memory'; requires = @('python')
         files = @($memEntry, $mEmbed)
-        config = [ordered]@{ 'memos.enabled' = $true; 'memos.api_url' = 'http://127.0.0.1:8003'; 'cost.local_memory' = $false }
+        # 不再写 cost.local_memory：基础 config 默认 false，local-memory 组件装后写 true。
+        # 这里再写 false 会和 local-memory 的 true 按安装顺序打架（后写的赢）。
+        config = [ordered]@{ 'memos.enabled' = $true; 'memos.api_url' = 'http://127.0.0.1:8003' }
         services = @(
             [ordered]@{
                 id = 'embed'; name = '嵌入服务（llama.cpp）'; port = 8090; order = 10; startTimeoutMs = 120000; autoRestart = $true

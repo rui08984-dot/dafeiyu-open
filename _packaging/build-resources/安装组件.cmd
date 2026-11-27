@@ -1,12 +1,12 @@
 @echo off
+rem Keep this file ASCII-only + CRLF. cmd.exe parses batch files with the OEM code page;
+rem UTF-8 Chinese echo lines merge with the next line and break the launcher (v0.4.0 bug,
+rem found in 0.5.0 acceptance: 'RUn_AS_nODE' / '"DaFeiyu.exe"' are not recognized).
+rem The node CLI prints its own Chinese banner/usage, so no banner is needed here.
 chcp 65001 >nul
 setlocal
 set "ROOT=%~dp0"
-set "ELECTRON_RUN_AS_NODE=1"
-echo 大肥鱼 · 组件管理（命令行）
-echo 用法：安装组件.cmd status ^| install --all ^| install --id=voice-asr ^| remove --id=...
-echo 图形入口：控制中心 → 组件（推荐）
-echo.
+set "ELECTROn_RUn_AS_nODE=1"
 "%ROOT%DaFeiyu.exe" "%ROOT%resources\app\js\components\cli.cjs" %*
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" pause

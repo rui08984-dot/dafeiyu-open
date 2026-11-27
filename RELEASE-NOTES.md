@@ -3,6 +3,16 @@
 生成方式：`node scripts/export-public-tree.mjs`（源：主仓 + 应用仓的 tracked 文件）。
 状态：**纯本地树**，未配置 remote、未 push。
 
+## v0.5.0 组件化安装 · 完整能力（2026-11-27）
+
+- 底座：`DaFeiyu-Setup-0.5.0.exe`（124,078,808B，约 120MB）——应用 + 皮套/模型 + Cubism Core + pet-core + edge-tts + 完整表演数据 + 我们现在的人格；不含记忆/日记/用户数据。
+- 组件从 5 个扩到 **8 个**，合计 **5,539.3MB（约 5.5GB）**，设置 → 组件按需安装（可只装一部分），装完重启大肥鱼。
+- 新增：`voiceprint` 263.5MB（声纹嵌入，resemblyzer + CPU torch，256 维，8020；GitHub 组件包 + gh-proxy 备用）；`local-memory` 2,381.6MB（MemOperator-4B Q4_K_M，复用 memory 组件的 CPU llama.cpp，28K ctx，11435；hf-mirror 主源 / HF 备用）；`ollama` 1,637.8MB（便携 Ollama v0.40.18 官方 portable zip 原样，11434；GitHub 组件包 / 官方源字节相同）。
+- Ollama 三个模型（qwen3-vl:8b-instruct / glm-ocr / paddleocr-vl）约 **9.3GB**，不在包内，由 setup 装组件时按需拉取或复用已有 11434。`paddleocr-vl` **不在 Ollama 官方 registry**（本机为本地 `ollama create`），组件里降为可选档，失败只告警。
+- 修复：`memory` 组件不再写 `cost.local_memory=false`（避免按安装顺序把 `local-memory` 的开关翻回去）；`安装组件.cmd` 改纯 ASCII + CRLF（修 v0.4.0 的 `RUN_AS_NODE` 启动失败）。
+- 已知限制：`local-memory` 为 CPU-only（decode 约 12 t/s 量级）；`voiceprint` 为 CPU torch；组件装完需重启；卸载组件不撤销 setup 写入的 provider/MemOS 指向；安装包未签名（SmartScreen 提示未知发布者）。
+- 校验：安装包 sha256 `ea19fd4f…b2310e32ac`；`voiceprint-0.5.0.zip` sha256 `1d68df60…deef78c7`；`ollama-0.5.0.zip` sha256 `ca97292a…b7cc4c16`；GGUF sha256 `255580fb…e9d44a6f`（详见 release notes）。
+
 ## v0.4.0 组件化安装（2026-11-27）
 
 - 底座：`DaFeiyu-Setup-0.4.0.exe`（约 120MB）——应用 + 皮套/模型 + Cubism Core + pet-core + edge-tts + 表演数据 + 我们现在的人格。
