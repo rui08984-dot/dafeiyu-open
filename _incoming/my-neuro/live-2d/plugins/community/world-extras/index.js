@@ -130,9 +130,13 @@ class WorldExtrasPlugin extends Plugin {
         try {
             const st = fs.statSync(file);
             const c = this._cache[key];
-            if (c.mtime === st.mtimeMs) return c.data;
+            // 2026-11-28：只比 mtimeMs 会在「同一毫秒内被重写」时读到旧内容
+            //（rss markDelivered 紧接着下一轮注入，实测 6/10 概率触发，
+            //  world-integrity 的第三轮投递因此偶发漏投）。体积也一起比，写完必变。
+            if (c.mtime === st.mtimeMs && c.size === st.size) return c.data;
             const data = jsonStore.readJson(file, null);
             c.mtime = st.mtimeMs;
+            c.size = st.size;
             c.data = data;
             return data;
         } catch (e) {
