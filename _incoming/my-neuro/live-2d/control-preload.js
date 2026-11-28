@@ -43,6 +43,9 @@ contextBridge.exposeInMainWorld('controlApi', {
   componentsInstall: ids => ipcRenderer.invoke('control:components-install', ids),
   componentsRemove: ids => ipcRenderer.invoke('control:components-remove', ids),
   componentsOpenDir: () => ipcRenderer.invoke('control:components-open-dir'),
+  // v0.5.2 首启引导：安装版第一次打开设置时，提示把 8 个组件全部装好
+  onboardingState: () => ipcRenderer.invoke('control:onboarding-state'),
+  onboardingPrompted: () => ipcRenderer.invoke('control:onboarding-prompted'),
   onComponentsProgress: callback => ipcRenderer.on('components:progress', (_event, payload) => callback(payload)),
   onServiceLog: callback => ipcRenderer.on('control:service-log', (_event, payload) => callback(payload)),
   onServiceState: callback => ipcRenderer.on('control:service-state', () => callback()),

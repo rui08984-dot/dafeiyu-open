@@ -26,6 +26,8 @@ const { CAPABILITIES, getPath: getConfigPath, resolveCapabilityValue } = require
 const { saveAndApply, notifyHostReload, writeJsonVerified } = require('./js/core/config-persist');
 // 2026-11-27 v0.4.0：组件管理器（下载/校验/解压/写配置）；控制中心「组件」页的 IPC 后端
 const componentsManager = require('./js/components/manager');
+// 2026-11-28 v0.5.2：首启引导与宿主共用同一份「有没有可用 key」判定
+const { needsApiKey } = require('./js/core/first-run');
 // 插件配置凭据掩码/回填（与 webui/plugin_manager.py 同一套规则，唯一实现）
 const { maskSecrets, restoreSecrets } = require('./js/core/secret-mask');
 const aliyunVoiceClone = require('./js/voice/aliyun-voice-clone');
@@ -2985,6 +2987,39 @@ ipcMain.handle('control:dispatch-followup', async (_event, payload) => {
 // ── 组件（v0.4.0）：下载 → SHA256 校验 → 解压 → 写配置 ──────────────────
 ipcMain.handle('control:components-status', () => {
   try { return componentsManager.status(componentsManager.installRoot()); } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
+// ── 首启引导（v0.5.2）：第一次打开设置时提示「8 个组件全部装好」 ──────────
+// 只在安装版生效（开发树本来就不用 components/ 这套器官）；PET_INSTALL_ROOT 是测试钩子。
+// 判定与宿主首启共用 js/core/first-run.needsApiKey，避免两套「有没有 key」口径。
+function onboardingFlagPath() { return path.join(app.getPath('userData'), 'onboarding.json'); }
+ipcMain.handle('control:onboarding-state', () => {
+  try {
+    const packaged = app.isPackaged || !!process.env.PET_INSTALL_ROOT;
+    if (!packaged) return { ok: true, skip: true, reason: 'dev' };
+    const cfg = readJson(configPath, null);
+    let providers = null;
+    try { providers = JSON.parse(fs.readFileSync(path.join(__dirname, 'llm_providers.json'), 'utf8')); } catch (e) { providers = null; }
+    const needsKey = needsApiKey(cfg, providers);
+    const st = componentsManager.status(componentsManager.installRoot());
+    const missing = (st && st.ok)
+      ? st.components.filter((c) => !c.installed).map((c) => ({ id: c.id, name: c.name, sizeBytes: c.sizeBytes }))
+      : [];
+    const flag = readJson(onboardingFlagPath(), {});
+    return { ok: true, needsKey, missing, prompted: !!flag.componentsPromptedAt };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+ipcMain.handle('control:onboarding-prompted', () => {
+  try {
+    const file = onboardingFlagPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ componentsPromptedAt: Date.now() }, null, 2), 'utf8');
+    return { ok: true };
+  } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }
 });

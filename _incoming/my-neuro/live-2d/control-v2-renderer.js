@@ -215,7 +215,7 @@ if (typeof module !== 'undefined' && module.exports) {
     if (!event.target.closest('.dd')) closeAllMenus();
   });
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape') { closeAllMenus(); if (!$('history-image-modal').hidden) closeHistoryPreview(); if ($('memory-graph-modal').classList.contains('open')) closeGraphDetail(); }
+    if (event.key === 'Escape') { closeAllMenus(); if (!$('history-image-modal').hidden) closeHistoryPreview(); if ($('memory-graph-modal').classList.contains('open')) closeGraphDetail(); $('onboarding-components-modal')?.classList.remove('open'); }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); saveConfig(); }
   });
 
@@ -414,6 +414,7 @@ if (typeof module !== 'undefined' && module.exports) {
         const name = p.name || p.id || '';
         const map = {
           component: '正在安装 ' + name,
+          download: '下载 ' + name,
           file: p.skipped ? ('已存在，跳过 ' + name) : ('下载/解压 ' + name),
           config: '写入配置…',
           setup: '写入组件配置…',
@@ -422,6 +423,51 @@ if (typeof module !== 'undefined' && module.exports) {
         setComponentsProgress(map[p.phase] || (p.phase || '处理中…'), p.phase === 'done' ? 100 : undefined);
       });
     }
+  }
+
+  // ── 首启引导（v0.5.2，安装版）：第一次打开设置就提示「8 个组件全部装好」 ──
+  // 不做档位/推荐勾选：全部默认选中（用户 2026-11-28 拍板「全亮最好」）。
+  // 只在安装版生效；显示一次即记 prompted，点「稍后」也不反复弹，组件页随时可装。
+  let onboardingChecked = false;
+  async function maybeShowComponentsOnboarding() {
+    if (onboardingChecked) return;
+    onboardingChecked = true;
+    try {
+      if (!api || !api.onboardingState) return;
+      const st = await api.onboardingState();
+      if (!st || !st.ok || st.skip || st.prompted) return;
+      if (!Array.isArray(st.missing) || !st.missing.length) return;
+      const modal = $('onboarding-components-modal');
+      const list = $('onboarding-components-list');
+      if (!modal || !list) return;
+      const totalMb = st.missing.reduce((sum, c) => sum + (Number(c.sizeBytes) || 0), 0) / 1048576;
+      list.innerHTML = st.missing.map((c) => {
+        const size = Math.round((Number(c.sizeBytes) || 0) / 1048576) + 'MB';
+        return '<div class="row"><span class="row-label">' + escapeHtml(c.name)
+          + '<br><small class="hint">' + size + '</small></span>'
+          + '<span class="cap-badge hot">已选中</span></div>';
+      }).join('');
+      const foot = $('onboarding-components-foot');
+      if (foot) {
+        foot.textContent = '以上 ' + st.missing.length + ' 个组件合计约 ' + Math.round(totalMb)
+          + 'MB；本地视觉（ollama）的三个模型另需约 9.3GB，请确保磁盘 ≥ 16GB 空闲；'
+          + '8B 视觉模型在 8GB 以上显存更流畅，显存不足会自动走 CPU（较慢）。装完需要重启大肥鱼才生效。';
+      }
+      modal.classList.add('open');
+      try { await api.onboardingPrompted(); } catch (e) { /* 标记失败只影响下次是否再弹 */ }
+    } catch (e) { /* 首启引导失败不阻塞主流程 */ }
+  }
+  function wireOnboarding() {
+    const modal = $('onboarding-components-modal');
+    const later = $('onboarding-components-later');
+    const install = $('onboarding-components-install');
+    if (later) later.addEventListener('click', () => { if (modal) modal.classList.remove('open'); });
+    if (install) install.addEventListener('click', () => {
+      if (modal) modal.classList.remove('open');
+      // 全部组件：installComponents(null) 会按清单全装（与组件页「全部安装」同一条链路）
+      switchPage('components');
+      installComponents(null);
+    });
   }
 
   // ── 总览 ─────────────────────────────────────────────────────────────
@@ -3609,6 +3655,8 @@ function renderAll() {
       wireKnowledgeModals();
       wireActionsFilters();
       wireComponents();
+      wireOnboarding();
+      maybeShowComponentsOnboarding();
       bindWheelFallback();   // 滚轮兜底（CSS 已修好，这层只处理边缘情况）
       // 皮套右键「换装」进来时带 page 参数直接落页；page 支持 "<id>+dirty"（快照取证的脏态）
       let dirtyParam = false;

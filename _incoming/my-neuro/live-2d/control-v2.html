@@ -898,6 +898,21 @@
   </div>
 </main>
 
+<div class="modal" id="onboarding-components-modal" role="dialog" aria-modal="true" aria-label="安装完整能力">
+  <div class="modal-card">
+    <div class="modal-head"><h3>把她的完整能力装上？</h3></div>
+    <div class="modal-body">
+      <p class="hint">检测到这是第一次使用：下面 <b>8 个组件全部默认选中</b>，点一次就能全部装好。下载走国内镜像，支持断点续传，并逐个校验 SHA256。</p>
+      <div id="onboarding-components-list" class="rows"></div>
+      <p class="hint" id="onboarding-components-foot">装完需要重启大肥鱼才生效。也可以先「稍后」，到「组件」页随时再装。</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="onboarding-components-later" type="button">稍后（先填 key）</button>
+      <button class="btn primary" id="onboarding-components-install" type="button">全部安装</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="history-image-modal" role="dialog" aria-modal="true" aria-label="截图大图预览">
   <button class="modal-close" id="history-image-close" type="button" aria-label="关闭大图"><svg viewBox="0 0 20 20" aria-hidden="true" width="14" height="14" fill="none"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
   <div class="modal-viewport" id="history-image-viewport"><img id="history-image-preview" alt="对话截图大图" draggable="false"></div>

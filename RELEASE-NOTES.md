@@ -3,6 +3,14 @@
 生成方式：`node scripts/export-public-tree.mjs`（源：主仓 + 应用仓的 tracked 文件）。
 状态：公开仓 `main` 由 `node scripts/publish-public.mjs` 导出、自检并推送；本文件随每次发布更新。
 
+## v0.5.2 首启引导「全部安装」（2026-11-28）
+
+- 底座：`DaFeiyu-Setup-0.5.2.exe`（**125,168,708B**，约 119.4MB；sha256 `77ab5e4df10986b38d1792123f6e603de082b11e447deb216aae915f4ca8a438`）——应用 + 皮套/模型 + Cubism Core + pet-core + edge-tts + 完整表演数据 + 我们现在的人格；不含记忆/日记/用户数据。
+- **8 个组件资产与 v0.5.0 / v0.5.1 完全一致**（文件 SHA256 逐位相同，合计 5,539.3MB）；本版没有重建组件包。
+- 新增首启引导：第一次打开设置时弹窗「把她的完整能力装上？」，**8 个组件全部默认选中（全亮）**，点「全部安装」一次性一起下；显示合计 5,539MB、本地视觉三模型约 9.3GB、磁盘 ≥16GB、8GB 显存提示；只提示一次，可「稍后」，组件页随时可装。
+- 修复：`world-extras` JSON 缓存只按 mtime 失效，同一毫秒内 `markDelivered` 重写后会读到旧 `picked`，导致 RSS 第三轮投递偶发 0 注入；改为 mtime+size 双键。
+- 门禁：smoke **201/201**、core **234/234**；干净安装实测首启弹窗 8/8 已选、点全部安装跳组件页并开始下载、同 userData 二次启动不再弹。
+
 ## v0.5.1 安装卫生与公开树可重建（2026-11-28）
 
 - 底座：`DaFeiyu-Setup-0.5.1.exe`（**123,964,365B**，约 118.2MB；sha256 `66e89db15fb0e9c9419c278628d51486e8d052ff5d9940994b9aede017f43b41`）——应用 + 皮套/模型 + Cubism Core + pet-core + edge-tts + 完整表演数据 + 我们现在的人格；不含记忆/日记/用户数据。
@@ -71,12 +79,11 @@ cd ..\..\.. && node _probe\check-ci.mjs
 
 期望：向导的「最低可用性」在填 key 后为可用；bootstrap 只有「用户自备」项（key / 8090 / 模型服务）非 ok；无代码级红。
 
-## 验证结果（2026-11-28 · v0.5.1）
+## 验证结果（2026-11-28 · v0.5.2）
 
-- 门禁：`node _probe/check-all.mjs --smoke` **201/201**（43.8s）；`--core` **234/234**（170.1s）。
-- 安装包：干净目录静默安装 → 首启自动落「模型」页（`visible=[model]`）→ 注入真实 key → 真实 LLM 回复 `BANANA`；组件页 8 项齐全，`安装组件.cmd status` 8 行；安装目录 0 个 `*.jsonl*`、默认配置 0 key。
-- G1：控制面板 `memoryConsistency()` → `{ok:true, report:{...}}`；8003 未装时按实报连接失败（不假绿）。
-- G2：组件不在位时只报 asr/cowatch/voiceprint（正确）；模拟 `components/<id>/` 后能力审计 **0 问题**。
-- 公开树复现：`build-components-manifest.cjs` 缺 fragments 退出码 1 / `--allow-empty` 退出码 0；`build-component-packs.ps1 -CheckModelsOnly` 在无本机权重目录的临时 clone 中完成下载与 sha256 校验（结果见交接）。
+- 门禁：`node _probe/check-all.mjs --smoke` **201/201**（37.2s）；`--core` **234/234**（132.6s）。
+- 安装包：干净目录静默安装 → 首启弹窗覆盖「模型」页，**8 行全部「已选中」**（合计 5,539MB；磁盘 ≥16GB / 8GB 显存提示）→ 点「全部安装」跳组件页并开始下载 → 同一 userData 二次启动**不再弹**。
+- 组件：清单版本 0.5.2，8 个组件的文件 SHA256 与 v0.5.1 / v0.5.0 逐位一致；安装目录 0 个 `*.jsonl*`、默认配置 0 key。
+- v0.5.1 复核仍在：G1 控制面板 `memoryConsistency()` → `{ok:true, report:{...}}`；G2 组件在位时能力审计 0 问题；公开树可重建（缺 fragments 退出 1；`-CheckModelsOnly` 真下载校 sha256）。
 
 （v0.5.0 及更早的验证结果保留在各版 release notes。）
