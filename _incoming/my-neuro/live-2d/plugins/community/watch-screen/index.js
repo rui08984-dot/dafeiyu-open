@@ -1108,6 +1108,48 @@ class WatchScreenPlugin extends Plugin {
     // ── 主播陪玩：游戏事件 OCR（像真主播打游戏那样边看边说）────────────────
     // 关键帧 → 临时 PNG → RapidOCR（本机已有，免费）→ 匹配游戏事件词 → 冷却后解说。
     // 静默闸门：静默期只记日志不开口（_commentOn 内部还有第二道闸）。
+    /** 游戏事件 OCR 脚本：dev 用 agent1super 的 RapidOCR；安装版没有脚本时走 Ollama。 */
+    _gameOcrScript() {
+        const path = require('path');
+        const cands = [
+            process.env.PET_GAME_OCR_SCRIPT,
+            'D:/agent1super/scripts/ocr.py',
+            process.env.PET_INSTALL_ROOT ? path.join(process.env.PET_INSTALL_ROOT, 'pet-runtime', 'tools', 'ocr.py') : '',
+        ].filter(Boolean);
+        for (const p of cands) {
+            try { if (fs.existsSync(p)) return p; } catch (e) { /* 继续找 */ }
+        }
+        return '';
+    }
+    /** 安装版兜底：Ollama 的 glm-ocr 直接读 base64 图（装 ollama 组件即可用，无 Python 依赖）。 */
+    _ollamaOcr(b64) {
+        return new Promise((resolve) => {
+            let settled = false;
+            const done = (v) => { if (!settled) { settled = true; resolve(String(v || '')); } };
+            try {
+                const req = require('http').request({
+                    host: '127.0.0.1', port: 11434, path: '/api/generate', method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                }, (res) => {
+                    let body = '';
+                    res.on('data', (c) => { body += c; });
+                    res.on('end', () => {
+                        try { done(JSON.parse(body).response); } catch (e) { done(''); }
+                    });
+                });
+                req.on('error', () => {
+                    this._logOnce('game-ocr-ollama', '游戏事件 OCR 不可用：本机没有 ocr.py，且 11434 不可达（装 ollama 组件后可用）');
+                    done('');
+                });
+                req.setTimeout(20000, () => { try { req.destroy(); } catch (e) { /* 已断 */ } done(''); });
+                req.end(JSON.stringify({
+                    model: process.env.PET_OCR_MODEL || 'glm-ocr:latest',
+                    prompt: 'OCR:', images: [b64], stream: false,
+                    options: { num_predict: 512 },
+                }));
+            } catch (e) { done(''); }
+        });
+    }
     async _gameWatch(info) {
         const now = Date.now();
         // ⚠ 2026-11-10 三十七轮（性能拟真反馈「电脑有点卡」）：这个 OCR 是全核 2.4s 的间歇负载，
@@ -1122,17 +1164,24 @@ class WatchScreenPlugin extends Plugin {
         try {
             const b64 = String(info.base64 || '').replace(/^data:image\/\w+;base64,/, '');
             if (b64.length < 2000) return;
-            tmp = require('os').tmpdir() + '\\gameframe-' + now + '.png';
-            fs.writeFileSync(tmp, Buffer.from(b64, 'base64'));
-            const text = await new Promise((resolve) => {
-                const child = require('child_process').spawn(resolvePython(),
-                    ['D:/agent1super/scripts/ocr.py', tmp], { windowsHide: true });
-                let out = '';
-                child.stdout.on('data', (c) => { out += c; });
-                child.on('error', () => resolve(''));
-                child.on('close', () => resolve(out));
-                setTimeout(() => { try { child.kill(); } catch (e) { try { __silentAudit.audit('index.js:565', e); } catch (e2) {} } resolve(out); }, 15000);
-            });
+            const ocrScript = this._gameOcrScript();
+            let text = '';
+            if (ocrScript) {
+                tmp = require('os').tmpdir() + '\\gameframe-' + now + '.png';
+                fs.writeFileSync(tmp, Buffer.from(b64, 'base64'));
+                text = await new Promise((resolve) => {
+                    const child = require('child_process').spawn(resolvePython(),
+                        [ocrScript, tmp], { windowsHide: true });
+                    let out = '';
+                    child.stdout.on('data', (c) => { out += c; });
+                    child.on('error', () => resolve(''));
+                    child.on('close', () => resolve(out));
+                    setTimeout(() => { try { child.kill(); } catch (e) { try { __silentAudit.audit('index.js:565', e); } catch (e2) {} } resolve(out); }, 15000);
+                });
+            } else {
+                // 安装版没有本机 ocr.py：直接走 Ollama（ollama 组件自带 glm-ocr），不依赖 Python
+                text = await this._ollamaOcr(b64);
+            }
             // OCR 文本缓存：屏幕状态机拿它当「在打游戏」的佐证（不管有没有命中事件词都缓存）
             this._lastOcrText = String(text || '');
             this._lastOcrAt = now;

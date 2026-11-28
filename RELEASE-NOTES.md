@@ -3,9 +3,17 @@
 生成方式：`node scripts/export-public-tree.mjs`（源：主仓 + 应用仓的 tracked 文件）。
 状态：公开仓 `main` 由 `node scripts/publish-public.mjs` 导出、自检并推送；本文件随每次发布更新。
 
+## v0.5.3 安装包卫生修复（2026-11-28）
+
+- 底座：`DaFeiyu-Setup-0.5.3.exe`（**123,165,776B**，约 117.5MB；sha256 `90b8e861cf961e5403045d4284aa52f4d93204eab95d028ff56ff884aa0f6a47`）——应用 + 皮套/模型 + Cubism Core + pet-core + edge-tts + 完整表演数据 + 我们现在的人格；不含记忆/日记/用户数据。
+- **v0.5.2 安装包有卫生问题，请勿使用**：误带测试期 Chromium 用户数据目录（含开发机绝对路径）、未脱敏的火山/百度 appid、个人工作区和 PCL 路径。本版全部修掉，并做成构建期硬断言。
+- 修复：Tempcc-*/Chromium profile 与 dev 杂物（go.bat、AI_set_live2d.py、WebUI/扫描 bat、fake_neuro_audio）不再随包；appid/workspaces/PCL 路径脱敏；补 `pet-runtime/knowledge/{rules,templates,grid-baseline}`（experience/skills 个人数据不随包）；游戏事件 OCR 安装版改走 Ollama；main.js 写 userData 不再写 D 盘；安装说明版本号改为构建注入。
+- 验收：子代理全量安装 v0.5.2 包 8/8 组件成功（5,539MB / 11m33s），6 个服务健康、真实对话 `BANANA`、卸载正常；v0.5.3 包复核 0 Tempcc / 0 dev 杂物 / 0 appid / 0 本机路径 / 知识库在位 / 首启弹窗 8/8；smoke 201/201、core 234/234。
+- 已知限制：坐标级 OCR（ocr_find.py）仍需本机 Python + RapidOCR；组件 python 未带 Pillow/RapidOCR，安装版「按文字点坐标」暂不可用（下一版组件处理）。
+
 ## v0.5.2 首启引导「全部安装」（2026-11-28）
 
-- 底座：`DaFeiyu-Setup-0.5.2.exe`（**125,168,708B**，约 119.4MB；sha256 `77ab5e4df10986b38d1792123f6e603de082b11e447deb216aae915f4ca8a438`）——应用 + 皮套/模型 + Cubism Core + pet-core + edge-tts + 完整表演数据 + 我们现在的人格；不含记忆/日记/用户数据。
+- ⚠ 已撤回：本版安装包误带测试 Chromium 目录与未脱敏 appid/PCL 路径，请改用 v0.5.3。底座：`DaFeiyu-Setup-0.5.2.exe`（**125,168,708B**，约 119.4MB；sha256 `77ab5e4df10986b38d1792123f6e603de082b11e447deb216aae915f4ca8a438`）——应用 + 皮套/模型 + Cubism Core + pet-core + edge-tts + 完整表演数据 + 我们现在的人格；不含记忆/日记/用户数据。
 - **8 个组件资产与 v0.5.0 / v0.5.1 完全一致**（文件 SHA256 逐位相同，合计 5,539.3MB）；本版没有重建组件包。
 - 新增首启引导：第一次打开设置时弹窗「把她的完整能力装上？」，**8 个组件全部默认选中（全亮）**，点「全部安装」一次性一起下；显示合计 5,539MB、本地视觉三模型约 9.3GB、磁盘 ≥16GB、8GB 显存提示；只提示一次，可「稍后」，组件页随时可装。
 - 修复：`world-extras` JSON 缓存只按 mtime 失效，同一毫秒内 `markDelivered` 重写后会读到旧 `picked`，导致 RSS 第三轮投递偶发 0 注入；改为 mtime+size 双键。
@@ -79,11 +87,11 @@ cd ..\..\.. && node _probe\check-ci.mjs
 
 期望：向导的「最低可用性」在填 key 后为可用；bootstrap 只有「用户自备」项（key / 8090 / 模型服务）非 ok；无代码级红。
 
-## 验证结果（2026-11-28 · v0.5.2）
+## 验证结果（2026-11-28 · v0.5.3）
 
-- 门禁：`node _probe/check-all.mjs --smoke` **201/201**（37.2s）；`--core` **234/234**（132.6s）。
-- 安装包：干净目录静默安装 → 首启弹窗覆盖「模型」页，**8 行全部「已选中」**（合计 5,539MB；磁盘 ≥16GB / 8GB 显存提示）→ 点「全部安装」跳组件页并开始下载 → 同一 userData 二次启动**不再弹**。
-- 组件：清单版本 0.5.2，8 个组件的文件 SHA256 与 v0.5.1 / v0.5.0 逐位一致；安装目录 0 个 `*.jsonl*`、默认配置 0 key。
-- v0.5.1 复核仍在：G1 控制面板 `memoryConsistency()` → `{ok:true, report:{...}}`；G2 组件在位时能力审计 0 问题；公开树可重建（缺 fragments 退出 1；`-CheckModelsOnly` 真下载校 sha256）。
+- 门禁：`node _probe/check-all.mjs --smoke` **201/201**（40.0s）；`--core` **234/234**（139.7s）。
+- 全量安装（子代理）：干净安装 → 首启弹窗 8/8 已选 → 真实点「全部安装」→ 8 个组件全部成功（5,539MB，11 分 33 秒）→ 重启后 ASR/一起看/MemOS/声纹/语义/本地记忆 6 个服务健康 → 真实 key 对话返回 `BANANA`（4.7s）→ 卸载/清理正常。
+- v0.5.3 包复核：0 个 `Tempcc-*`、0 个 dev 杂物（go.bat/conda 脚本）、appid 已置空、插件配置 0 条本机路径、知识库在位、`main.js` 0 处开发机绝对路径；首启弹窗 8 行全选。
+- 对等审计：543 个同名应用文件哈希一致；人格 1393 字同文本、人格内核 605B 同哈希；13 项组件/权重哈希全部一致；隐私扫描 0 真实 key、0 运行日志实文件。
 
 （v0.5.0 及更早的验证结果保留在各版 release notes。）

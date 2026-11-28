@@ -77,6 +77,10 @@ module.exports = async function afterPack(context) {
         path.join(root, 'resources', 'app', 'pet-runtime', 'data', 'facs-clips', 'index.json'),
         path.join(root, 'resources', 'app', 'pet-runtime', 'data', 'perf-sync.json'),
         path.join(root, 'resources', 'app', 'js', 'components', 'manager.js'),
+        // v0.5.3：游戏知识库（产品数据）随包；缺了安装版看屏/游戏读屏会少一大块
+        path.join(root, 'resources', 'app', 'pet-runtime', 'knowledge', 'rules', '我的世界.json'),
+        path.join(root, 'resources', 'app', 'pet-runtime', 'knowledge', 'templates', '点击开始.json'),
+        path.join(root, 'resources', 'app', 'pet-runtime', 'knowledge', 'grid-baseline', '植物大战僵尸杂交版_5x9.json'),
         // v0.5.1（G3）：浏览器标签扩展随包（手动加载）；缺了能力页会指向不存在的目录
         path.join(root, '浏览器扩展', 'browser-tabs', 'manifest.json'),
     ];
@@ -87,9 +91,76 @@ module.exports = async function afterPack(context) {
     const mustNot = [
         path.join(root, 'resources', 'app', 'pet-runtime', 'tools', 'services.json'),
         path.join(root, 'resources', 'app', 'pet-runtime', 'tools', 'doctor.mjs'),
+        // v0.5.3：个人数据目录绝不能随包（她学到的经验 / 个人技能）
+        path.join(root, 'resources', 'app', 'pet-runtime', 'knowledge', 'experience'),
+        path.join(root, 'resources', 'app', 'pet-runtime', 'knowledge', 'skills', 'skills.json'),
+        // v0.5.3：dev 杂物/conda 启动脚本不能随包
+        path.join(appDir, 'go.bat'),
+        path.join(appDir, 'AI_set_live2d.py'),
+        path.join(appDir, '启动 WebUI 控制面板.bat'),
+        path.join(appDir, '一键扫描皮套动作.bat'),
+        path.join(appDir, 'fake_neuro_audio'),
     ];
     for (const p of mustNot) {
-        if (fs.existsSync(p)) throw new Error('[afterPack] 安装包不应包含 dev 维护文件：' + p);
+        if (fs.existsSync(p)) throw new Error('[afterPack] 安装包不应包含 dev/个人文件：' + p);
+    }
+
+    // v0.5.3：Chromium 用户数据目录（--user-data-dir=Tempcc-test 之类）不能进包；
+    // 同时硬断言配置里没有个人 appid / 本机绝对路径（脱敏在 build-installer 里做）。
+    const chromiumLeaks = [];
+    (function walkProfile(dir, depth) {
+        let entries = [];
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+        for (const ent of entries) {
+            if (!ent.isDirectory()) continue;
+            const p = path.join(dir, ent.name);
+            if (/^(Local Storage|Local Storage-journal|GPUCache|DawnCache|Cache_Data|Code Cache)$/i.test(ent.name)) {
+                chromiumLeaks.push(p);
+                continue;
+            }
+            if (depth < 3) walkProfile(p, depth + 1);
+        }
+    })(appDir, 0);
+    if (chromiumLeaks.length) {
+        throw new Error('[afterPack] 安装包含 Chromium 用户数据目录（过滤规则失效）：' + chromiumLeaks.slice(0, 3).join(', '));
+    }
+    for (const dir of fs.readdirSync(appDir)) {
+        if (/^Tempcc-/i.test(dir)) throw new Error('[afterPack] 安装包含测试用户目录：' + dir);
+    }
+    const REDACT_TARGETS = [
+        path.join(appDir, 'config.json'),
+        path.join(appDir, 'config.example.json'),
+    ];
+    for (const p of REDACT_TARGETS) {
+        if (!fs.existsSync(p)) continue;
+        const text = fs.readFileSync(p, 'utf8');
+        const j = JSON.parse(text);
+        for (const k of ['volcengine_tts', 'baidu_asr', 'aliyun_tts']) {
+            const appid = j.cloud && j.cloud[k] && j.cloud[k].appid;
+            if (appid && String(appid).trim()) throw new Error('[afterPack] 安装包配置含个人 appid（' + k + '）：' + p);
+        }
+        if (j.dispatch && j.dispatch.workspaces && Object.keys(j.dispatch.workspaces).length) {
+            throw new Error('[afterPack] 安装包配置含个人工作区：' + p);
+        }
+        if (/(^|[\\/])Users[\\/][^\\/]+|D:[\\/]ai/i.test(text)) {
+            throw new Error('[afterPack] 安装包配置含本机绝对路径：' + p);
+        }
+    }
+    const pluginConfigs = [];
+    (function walkPluginConfigs(dir, depth) {
+        let entries = [];
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+        for (const ent of entries) {
+            const p = path.join(dir, ent.name);
+            if (ent.isDirectory()) { if (depth < 6) walkPluginConfigs(p, depth + 1); continue; }
+            if (ent.name === 'plugin_config.json') pluginConfigs.push(p);
+        }
+    })(path.join(appDir, 'plugins'), 0);
+    for (const p of pluginConfigs) {
+        const text = fs.readFileSync(p, 'utf8');
+        if (/[A-Za-z]:[\\/](Users[\\/][^"'\r\n]+|ai[^"'\r\n]*)/i.test(text)) {
+            throw new Error('[afterPack] 插件配置含本机绝对路径：' + p);
+        }
     }
     console.log('[afterPack] 安装版配置校验通过（provider=' + cfg.llm.provider_id + '，人格 ' + String(cfg.llm.system_prompt).length + ' 字符）');
 };

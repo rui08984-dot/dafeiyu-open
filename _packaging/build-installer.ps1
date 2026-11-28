@@ -198,6 +198,11 @@ function Prepare-AppStage {
         Fail "robocopy 准备构建副本失败，退出码 $LASTEXITCODE。源：$herDir 目标：$appStageDir"
     }
 
+    # v0.5.3：测试期用 --user-data-dir=Tempcc-test 跑过宿主，Chromium 用户数据目录会被 /MIR
+    # 镜像进构建副本（实测 26MB，leveldb 日志里带 dev 绝对路径）。这类目录一律不进包。
+    Get-ChildItem -LiteralPath $appStageDir -Directory -Filter 'Tempcc-*' -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
     # 修正副本里的 package.json：electron → devDependencies
     $stagePkgPath = Join-Path $appStageDir 'package.json'
     if (-not (Test-Path -LiteralPath $stagePkgPath -PathType Leaf)) {
@@ -279,6 +284,26 @@ function Prepare-RuntimeTree {
     if ($LASTEXITCODE -ge 8) { Fail "robocopy pet-runtime/data 失败：$LASTEXITCODE" }
 
     Copy-Item -LiteralPath (Join-Path $here '..\pet-runtime\model-info.mjs') -Destination (Join-Path $rt 'model-info.mjs') -Force
+
+    # v0.5.3：游戏知识库是产品数据，要随包（dev 与安装版对等）。
+    # 只带规则/模板/网格基线；experience（她学到的）与 skills/skills.json（个人技能）不随包。
+    $knSrc = Join-Path $here '..\pet-runtime\knowledge'
+    if (Test-Path -LiteralPath $knSrc -PathType Container) {
+        $knDst = Join-Path $rt 'knowledge'
+        New-Item -ItemType Directory -Force -Path $knDst | Out-Null
+        foreach ($sub in @('rules', 'templates', 'grid-baseline')) {
+            $s = Join-Path $knSrc $sub
+            if (-not (Test-Path -LiteralPath $s -PathType Container)) { continue }
+            & robocopy.exe $s (Join-Path $knDst $sub) /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 /XD _backup .cache | Out-Null
+            if ($LASTEXITCODE -ge 8) { Fail "robocopy knowledge/$sub 失败：$LASTEXITCODE" }
+        }
+        $knReadme = Join-Path $knSrc 'README.md'
+        if (Test-Path -LiteralPath $knReadme -PathType Leaf) { Copy-Item -LiteralPath $knReadme -Destination $knDst -Force }
+        Write-Host '知识库：已随包（rules/templates/grid-baseline；experience/skills 属个人数据，不随包）'
+    } else {
+        Write-Host '[提示] 没有 pet-runtime/knowledge：安装版游戏知识库为空' -ForegroundColor Yellow
+    }
+
     $mb = [math]::Round(((Get-ChildItem -LiteralPath $rt -Recurse -File -ErrorAction SilentlyContinue |
         Measure-Object -Property Length -Sum).Sum / 1MB), 1)
     Write-Host "运行时树已进应用：$rt（约 $mb MB）"
@@ -384,6 +409,53 @@ function Write-PublicDefaults {
     Write-Host "默认配置已写入：人格来自本机（$($persona.Length) 字符）+ provider=cloud（空 key）+ memos/asr 先关（组件启用）"
 }
 
+# ── 2.5b 安装版脱敏（v0.5.3）────────────────────────────────────────
+# 公开树导出脚本早就会清 appid/工作区/PCL 路径，但安装包直接吃 dev 树，没走那套净化，
+# 实测把真实 appid（火山/百度）、D 盘工作区、C:/Users/.../Plain Craft Launcher 带进了包。
+# 这里在打包前再清一遍，afterPack 会硬断言。
+function Redact-StagedConfigs {
+    Write-Step '安装版脱敏（appid / 工作区 / 本机绝对路径）'
+    $changedFiles = @()
+    foreach ($rel in @('config.json', 'config.example.json')) {
+        $p = Join-Path $appStageDir $rel
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+        $j = [IO.File]::ReadAllText($p, [Text.Encoding]::UTF8) | ConvertFrom-Json
+        $changed = $false
+        if ($j.PSObject.Properties['cloud'] -and $j.cloud) {
+            foreach ($k in @('volcengine_tts', 'baidu_asr', 'aliyun_tts')) {
+                $sub = $j.cloud.PSObject.Properties[$k]
+                if ($sub -and $sub.Value -and $sub.Value.PSObject.Properties['appid']) {
+                    $sub.Value.appid = ''
+                    $changed = $true
+                }
+            }
+        }
+        if ($j.PSObject.Properties['dispatch'] -and $j.dispatch) {
+            $j.dispatch.workspaces = [pscustomobject]@{}
+            if ($j.dispatch.PSObject.Properties['defaultWorkspace']) { $j.dispatch.defaultWorkspace = '' }
+            $changed = $true
+        }
+        if ($changed) {
+            [IO.File]::WriteAllText($p, ($j | ConvertTo-Json -Depth 64), $utf8NoBom)
+            $changedFiles += $rel
+        }
+    }
+
+    # 插件配置：default/value 里的绝对路径清空；description 里残留的盘符路径换占位。
+    # 用文本正则而不是 JSON 递归：插件 schema 嵌套深，PS 的 PSCustomObject 递归容易漏。
+    Get-ChildItem -LiteralPath (Join-Path $appStageDir 'plugins') -Recurse -File -Filter 'plugin_config.json' -ErrorAction SilentlyContinue | ForEach-Object {
+        $p = $_.FullName
+        $txt = [IO.File]::ReadAllText($p, [Text.Encoding]::UTF8)
+        $new = [regex]::Replace($txt, '(?i)("(?:default|value)"\s*:\s*")[A-Za-z]:[\\/][^"]*(")', '$1$2')
+        $new = [regex]::Replace($new, '(?i)\b[A-Za-z]:[\\/][^"\r\n]*', '（本机路径）')
+        if ($new -ne $txt) {
+            [IO.File]::WriteAllText($p, $new, $utf8NoBom)
+            $changedFiles += $_.Name
+        }
+    }
+    Write-Host ("脱敏完成" + $(if ($changedFiles.Count) { "：$($changedFiles -join ', ')" } else { '（无需改动）' }))
+}
+
 # ── 2.6 随包运行时（pet-core / edge-tts）────────────────────────────
 # extraResources 会被 electron-builder 放到 resources/ 下：
 #   resources/pet-core/target/release/pet-core.exe  ← main.js resolvePetCore() 的打包后分支
@@ -415,6 +487,16 @@ function Prepare-ExtraResources {
         Write-Host '       或保持 -SkipTts（用户可后配 OpenAI 兼容 TTS / 自装 Python 完整服务）。'
     }
 
+    # v0.5.3：安装说明标题里的版本号由 -Version 注入，避免每次发版忘记改（v0.5.2 就漏成 v0.5.1）。
+    $readmeSrc = Join-Path $here 'build-resources\安装说明.txt'
+    $readmeOut = Join-Path $extraRoot '安装说明.txt'
+    if (Test-Path -LiteralPath $readmeSrc -PathType Leaf) {
+        $txt = [IO.File]::ReadAllText($readmeSrc, [Text.Encoding]::UTF8)
+        $txt = [regex]::Replace($txt, '(安装说明（Windows 10/11 x64 · v)[0-9.]+(）)', ('${1}' + $Version + '${2}'))
+        [IO.File]::WriteAllText($readmeOut, $txt, $utf8NoBom)
+        Write-Host "安装说明：已生成（标题版本 v$Version）"
+    }
+
     # v0.5.1（G3）：浏览器标签扩展随安装包，用户在扩展管理里「加载已解压的扩展程序」。
     # 缺它不是致命项（浏览器感知会降级），但公开树有、安装包没有会让能力页误引导。
     $extSrc = [IO.Path]::GetFullPath((Join-Path $here '..\extensions\browser-tabs'))
@@ -430,6 +512,7 @@ function Prepare-ExtraResources {
 }
 
 Write-PublicDefaults
+Redact-StagedConfigs
 Prepare-ExtraResources
 
 # ── 2.7 人格内核 + 组件清单（v0.4.0）──────────────────────────────────

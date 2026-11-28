@@ -421,6 +421,10 @@ if (typeof module !== 'undefined' && module.exports) {
           done: '完成',
         };
         setComponentsProgress(map[p.phase] || (p.phase || '处理中…'), p.phase === 'done' ? 100 : undefined);
+        // 2026-11-28：批量装 8 个时，列表行原要等整批结束才刷新；每进一个组件/写完配置就重读一次状态
+        if (p.phase === 'component' || p.phase === 'config' || p.phase === 'setup' || p.phase === 'done') {
+          loadComponents().catch(() => {});
+        }
       });
     }
   }

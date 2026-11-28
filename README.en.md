@@ -6,7 +6,7 @@
 
 ## Install (Windows 10/11 x64)
 
-Download **`DaFeiyu-Setup-0.5.2.exe`** (~120 MB) from [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) and run it.
+Download **`DaFeiyu-Setup-0.5.3.exe`** (~120 MB) from [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) and run it.
 
 On first launch the settings window opens on the **Model** page: paste an API key for any OpenAI-compatible endpoint, press Save, and start chatting. No restart needed.
 
@@ -15,6 +15,7 @@ On first launch the settings window opens on the **Model** page: paste an API ke
 - New in v0.5.0: `voiceprint` (263.5 MB, resemblyzer + CPU torch), `local-memory` (2,381.6 MB, MemOperator-4B, CPU inference, hf-mirror), `ollama` (1,637.8 MB portable Ollama v0.40.18; its three models ~9.3 GB are pulled on demand; `paddleocr-vl` is not in the official registry and is optional).
 - v0.5.1 fixes: no dev rotated logs in the installer (build-time assertion), memory-consistency check and the browser-tabs extension now ship with the installer, capability page resolves component-installed organs, and a fresh clone can rebuild component packs (missing weights are downloaded from manifest sources with sha256 verification; persona kernel / Lumen config have in-repo fallbacks).
 - v0.5.2: **first-run prompt installs everything** — on first launch a dialog pre-selects all 8 components (all lit) and installs them in one click; it shows 5,539 MB total, ~9.3 GB for local-vision models, ≥16 GB disk, and an 8 GB VRAM note; it appears once, can be postponed, and the Components page stays available. Also fixes the RSS delivery cache reading stale data after same-millisecond rewrites (world-extras mtime+size key).
+- v0.5.3: **installer hygiene fix** — removes test Chromium profiles and dev junk (go.bat / conda scripts), blanks personal appids/workspaces/PCL paths, ships game knowledge (rules/templates/grid-baseline), routes game-event OCR through Ollama in installed builds, and stops main.js writing dev paths; build-time assertions fail on Tempcc/Chromium dirs, personal appids or local absolute paths.
 - The installer is unsigned; Windows SmartScreen may warn about an unknown publisher. Choose "Run anyway".
 
 ## What she can do

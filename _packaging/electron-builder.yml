@@ -65,6 +65,13 @@ files:
   - "!scripts/.voice-host-work/**"
   # 打包工具自身，没必要进安装包
   - "!scripts/electron-ui-package/**"
+  # v0.5.3：dev 杂物/测试用户目录一律不进包（实测曾把 Tempcc-* 与 conda 启动脚本带进去）
+  - "!Tempcc-*/**"
+  - "!go.bat"
+  - "!AI_set_live2d.py"
+  - "!启动 WebUI 控制面板.bat"
+  - "!一键扫描皮套动作.bat"
+  - "!fake_neuro_audio/**"
 
 # 随包运行时（由 build-installer.ps1 的 Prepare-ExtraResources 准备）：
 #   resources/pet-core/target/release/pet-core.exe → main.js resolvePetCore() 的打包后分支
@@ -80,7 +87,8 @@ extraResources:
 # 表演引擎 data 查找都按「应用相对路径」成立，不依赖 resources 的上一级。
 # 安装根目录放给人看的说明 / 组件入口 / 组件清单 / 人格内核
 extraFiles:
-  - from: build-resources/安装说明.txt
+  # 版本号由 build-installer.ps1 的 Prepare-ExtraResources 注入（-Version），避免文案漂移
+  - from: out/extra/安装说明.txt
     to: 安装说明.txt
   - from: build-resources/安装组件.cmd
     to: 安装组件.cmd

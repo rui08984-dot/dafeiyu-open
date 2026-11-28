@@ -55,7 +55,8 @@ try {
 } catch (e) { /* 老版本没有这些开关时无副作用 */ }
 
 // 启动标记（自检用）：确认跑的是盘上这份 main.js（排查「改了不生效」别靠猜）
-try { fs.writeFileSync(path.join(__dirname, '..', '..', 'main-boot.json'), JSON.stringify({ at: Date.now(), ver: 'ascii-autostart-1', pid: process.pid }), 'utf8'); } catch (e) { /* 写不了不影响启动 */ }
+// 2026-11-28：写 userData，不再写死 <project-root>（安装版会静默失败且泄漏开发路径）
+try { fs.writeFileSync(path.join(app.getPath('userData'), 'main-boot.json'), JSON.stringify({ at: Date.now(), ver: 'ascii-autostart-1', pid: process.pid }), 'utf8'); } catch (e) { /* 写不了不影响启动 */ }
 
 // ⚠ petWinRef 必须在这里（所有函数与创建流程之前）声明。
 // 创建桌宠窗口的流程会立刻 `petWinRef = win` 登记引用，而 `let` 有 TDZ：
@@ -2290,7 +2291,7 @@ async function runTraySelfTest() {
     rec('自检异常', 'FAIL', e && e.message || String(e));
   }
   try {
-    fs.writeFileSync(path.join(__dirname, '..', '..', 'tray-selftest.log'), lines.join('\n') + '\n', 'utf8');
+    fs.writeFileSync(path.join(app.getPath('userData'), 'tray-selftest.log'), lines.join('\n') + '\n', 'utf8');
     console.log('[tray-selftest]\n' + lines.join('\n'));
   } catch (e) { console.error('[tray-selftest] 写日志失败:', e && e.message || e); }
 }
