@@ -85,6 +85,11 @@ let controlWindow = null;
 //   宿主 main.js 也持单实例锁，所以控制中心必须换一个独立 userData（锁随之独立），
 //   否则 requestSingleInstanceLock 失败 → 面板秒退（2026-11-26 实测）。
 const __isolated = process.argv.includes('--control-isolated');
+// 2026-11-28 P0-8：与 main.js 同一契约 —— PET_USER_DATA 指定独立 userData（测试/并行隔离）。
+// 必须放在 setPath('.../control-center') 之前生效，否则隔离目录会被再套一层 control-center。
+if (process.env.PET_USER_DATA) {
+  try { app.setPath('userData', path.resolve(process.env.PET_USER_DATA)); } catch (e) { /* 设置失败沿用默认 */ }
+}
 if (process.argv.includes('--control-center') && !__isolated) {
   try { app.setPath('userData', path.join(app.getPath('userData'), 'control-center')); } catch (e) { /* 取不到就保持默认 */ }
 }
@@ -2187,7 +2192,21 @@ ipcMain.handle('control:memory-graph', () => __memoryGraph());
 // 把 summary / 向量 / 图谱 / BM25 计数回给面板。修复命令只作为一行文本给用户手动执行。
 // 用 Electron 自身当 Node（ELECTRON_RUN_AS_NODE=1）：不依赖用户 PATH 里的 node，
 // 也不会在打包环境里「找不到 node」。
-const MEMOS_CONSISTENCY_SCRIPT = path.resolve(__dirname, '..', '..', '..', 'pet-runtime', 'tools', 'memos-consistency.mjs');
+// 2026-11-28 P0-4（G1）：安装版的脚本在 app.getAppPath()/pet-runtime/tools（打包进 asar 外的 app 目录），
+// dev 在仓库根；两处都试，再不行才报错（以前只拼 dev 的三级相对路径，安装版必然找不到）。
+function resolveMemosConsistencyScript() {
+  let appPath = __dirname;
+  try { if (typeof app.getAppPath === 'function') appPath = app.getAppPath(); } catch (e) { /* 单测里的 electron 桩 */ }
+  const candidates = [
+    path.join(appPath, 'pet-runtime', 'tools', 'memos-consistency.mjs'),
+    path.resolve(__dirname, '..', '..', '..', 'pet-runtime', 'tools', 'memos-consistency.mjs'),
+  ];
+  for (const p of candidates) {
+    try { if (fs.existsSync(p)) return p; } catch (e) { /* 继续找 */ }
+  }
+  return candidates[1];
+}
+const MEMOS_CONSISTENCY_SCRIPT = resolveMemosConsistencyScript();
 ipcMain.handle('control:memory-consistency', async () => {
   if (!fs.existsSync(MEMOS_CONSISTENCY_SCRIPT)) {
     return { ok: false, error: '找不到体检脚本：' + MEMOS_CONSISTENCY_SCRIPT };

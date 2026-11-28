@@ -1,4 +1,4 @@
-大肥鱼 · 安装说明（Windows 10/11 x64）
+大肥鱼 · 安装说明（Windows 10/11 x64 · v0.5.1）
 
 1) 启动
    双击桌面「大肥鱼」。第一次启动约 5–15 秒（皮套 16MB 模型要加载）。
@@ -16,31 +16,41 @@
    本安装包已带 edge-tts（联网访问微软免费语音端点，不需要密钥）。
    想换音色/引擎：设置窗「模型 → 语音」；也支持 OpenAI 兼容 /audio/speech。
 
-4) 完整能力（推荐装）：长期记忆 / 按住说话 / 一起看 / 语义表演
+4) 完整能力（推荐装）：长期记忆 / 按住说话 / 一起看 / 语义表演 / 声纹 / 本地模型
    底座只带「她本人」；Python 侧器官做成组件，按需下载（模型走国内镜像，SHA256 校验）：
-     · 设置窗 → 组件 → 「全部安装」（约 1.8GB，可断点续传）
+     · 设置窗 → 组件 → 「全部安装」（8 个组件合计约 5.5GB，可断点续传）
      · 或双击安装目录里的 安装组件.cmd install --all
    装完重启大肥鱼生效。组件包括：
-     · memory：MemOS 长期记忆 + Qdrant + 嵌入模型（784MB，ModelScope）
-     · voice-asr：SenseVoice 按住说话（239MB，hf-mirror）
-     · cowatch：一起看（系统声音回环）
-     · lumen：LumenAct 语义表演（153MB，hf-mirror）
-   组件目录在安装目录的 components\，删掉对应文件夹即可卸载。
+     · python：服务共用的独立 CPython 运行时（69.7MB）
+     · memory：MemOS 长期记忆 + Qdrant + 嵌入模型（707.4MB，ModelScope）
+     · voice-asr：SenseVoice 按住说话（263.8MB，hf-mirror）
+     · cowatch：一起看（系统声音回环，12.5MB）
+     · lumen：LumenAct 语义表演（203.0MB，hf-mirror）
+     · voiceprint：声纹嵌入（263.5MB，CPU 推理）
+     · local-memory：MemOperator-4B 本地记忆模型（2,381.6MB，CPU 推理；
+       复用 memory 组件的 llama.cpp，依赖 memory）
+     · ollama：便携 Ollama（1,637.8MB；qwen3-vl / glm-ocr 等模型约 9.3GB
+       在安装时按需拉取；paddleocr-vl 非官方 registry，属可选档）
+   组件目录在安装目录的 components\，删掉对应文件夹即可卸载（或
+   安装组件.cmd remove --id=...）。
 
 5) 想让她主动开口
    安装版默认「静默模式：开」（只回应、不主动搭话，避免没配 key 时刷报错）。
    填好 key 后，在托盘右键菜单里把「静默模式」关掉即可。
 
-6) 本地 4B 记忆模型（可选，省钱用；不装也能用云做记忆抽取）
-   需要自备 MemOperator-4B GGUF，并按完整源码部署：
-     live-2d/scripts/start-local-memory-llm.ps1 -Daily
-   完整源码与文档：https://github.com/rui08984-dot/dafeiyu-open
+6) 浏览器标签感知（可选）
+   安装目录的 浏览器扩展\browser-tabs\ 是 Chrome/Edge 的 MV3 扩展：
+   打开浏览器 → 扩展管理 → 开发者模式 → 「加载已解压的扩展程序」→ 选中该目录。
+   不装不影响桌宠本体，只是读不到浏览器标签页。
 
 7) 数据与卸载
    配置、记忆、组件都在本安装目录（卸载不会删除）。
    卸载：Windows 设置 → 应用 → 大肥鱼。
 
 8) 已知限制
-   · 未装组件时：按住 V 说话 / 长期记忆 / 一起看 / 语义表演不可用（其余照常）。
+   · 未装组件时：按住 V 说话 / 长期记忆 / 一起看 / 语义表演 / 声纹不可用（其余照常）。
+   · local-memory 与 ollama 是 CPU 推理；ollama 首次拉模型需 ≥12GB 空闲磁盘。
    · 看屏、窗口操控、UIA 走随包的 Rust 内核（pet-core），始终可用。
    · 安装包未代码签名，Windows SmartScreen 可能提示「未知发布者」，选择「仍要运行」。
+
+完整源码与文档：https://github.com/rui08984-dot/dafeiyu-open

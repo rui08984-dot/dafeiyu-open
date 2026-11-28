@@ -293,14 +293,16 @@ try {
     // ── 日终产出（2026-11-22 审计 U6：模块原先零调用点）────────────────
     // 只在这个临时 PET_DATA_ROOT 下跑：不碰真实 data。
     if (typeof DR.runDaily === 'function') {
-        const r1 = DR.runDaily();
+        // 2026-11-28：runDaily 默认用真实 Date.now()，而夹具固定在 NOW（2026-11-22）；
+        // 跨天后「今天」没有夹具数据 → empty，测试变成随日期变红。这里把时钟钉回 NOW。
+        const r1 = DR.runDaily(NOW);
         ok('runDaily 能产出成绩单文件', r1.ok === true && !!r1.file, JSON.stringify({ ok: r1.ok, empty: r1.empty, file: r1.file }).slice(0, 120));
         ok('runDaily 落在临时记录室', r1.file ? iso.assertIsolated(r1.file) : false, r1.file || '');
-        const r2 = DR.runDaily();
+        const r2 = DR.runDaily(NOW);
         ok('runDaily 幂等（当天不重写）', r2.ok === true && r2.alreadyDone === true);
         if (r1.file) {
             const body = fs.readFileSync(r1.file, 'utf8');
-            ok('成绩单内容带日期与正文', body.startsWith('#' + DR.dayKey()) && body.length > 10, body.split('\n')[0]);
+            ok('成绩单内容带日期与正文', body.startsWith('#' + DR.dayKey(NOW)) && body.length > 10, body.split('\n')[0]);
         }
     } else {
         ok('模块导出 runDaily（U6 接线）', false, 'runDaily 不存在');

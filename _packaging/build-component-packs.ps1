@@ -10,10 +10,14 @@
 
     为什么用 uv：它的 managed CPython 是独立可搬运的；pip --target 装到独立目录，
     靠 PYTHONPATH 拼，不依赖目标机 Python/venv（安装版机器上什么都没有）。
+
+    -CheckModelsOnly：只解析/下载并校验外部权重（ASR / 嵌入 / LumenAct），不构建 zip。
+    公开树用户想先确认镜像可用时用它，不需要 uv。
 #>
 [CmdletBinding()]
 param(
-    [switch]$SkipVoiceprint
+    [switch]$SkipVoiceprint,
+    [switch]$CheckModelsOnly
 )
 $ErrorActionPreference = 'Stop'
 
@@ -22,14 +26,10 @@ $root = [IO.Path]::GetFullPath((Join-Path $here '..'))
 $outDir = Join-Path $here 'out\packs'
 $stageRoot = Join-Path $outDir 'stage'
 $cache = Join-Path $here 'out\packs-cache'
-$uvCmd = Get-Command uv -ErrorAction SilentlyContinue
-if (-not $uvCmd) { throw '找不到 uv：请先 pip install uv，或把 uv.exe 所在目录加进 PATH' }
-$uv = $uvCmd.Source
 $tar = Join-Path $env:SystemRoot 'System32\tar.exe'
 $BUILD_PY = ''   # 由复制出来的独立 Python 赋值；所有 pip --target 都用它
 $index = 'https://mirrors.aliyun.com/pypi/simple/'
 
-if (-not (Test-Path -LiteralPath $uv)) { throw "找不到 uv：$uv" }
 if (-not (Test-Path -LiteralPath $tar)) { throw "找不到 bsdtar：$tar" }
 New-Item -ItemType Directory -Force -Path $outDir, $stageRoot, $cache | Out-Null
 
@@ -68,6 +68,68 @@ function ModelEntry([string]$name, [string]$dest, [string]$localPath, $sources) 
         sources = $sources
     }
 }
+# v0.5.1（P0-3）：公开树没有本机权重目录（~/.dsh、_research）时按清单源下载到 cache，
+# 并用**固定 sha256 + 体积**校验。宁可构建失败，也不接受漂移的权重。
+function Ensure-Model([string]$path, [string]$sha, [long]$size, [string[]]$urls, [string]$label) {
+    if (Test-Path -LiteralPath $path) {
+        if ((Get-Item -LiteralPath $path).Length -eq $size -and (Sha $path) -eq $sha) { return $path }
+        Write-Host "  本地 $label 体积/哈希不符，重新获取（$path）" -ForegroundColor Yellow
+        try { Remove-Item -LiteralPath $path -Force } catch { $null = $_ }
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+    foreach ($u in $urls) {
+        Write-Host "  下载 $label：$u"
+        & curl.exe -L --retry 2 --max-time 1800 -o $path $u
+        if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $path) -and
+            (Get-Item -LiteralPath $path).Length -eq $size -and (Sha $path) -eq $sha) {
+            Write-Host "  ✓ $label 校验通过"
+            return $path
+        }
+        Write-Host "  ! $label 下载/校验失败，换下一个源" -ForegroundColor Yellow
+        try { Remove-Item -LiteralPath $path -Force } catch { $null = $_ }
+    }
+    Fail "无法获取 $label：本地没有且下载全部失败/校验不符（$path）"
+}
+
+# 外部权重唯一解析入口：主流程与 -CheckModelsOnly 共用（保证两条路校验口径一致）。
+function Resolve-ExternalModels {
+    Write-Step '外部模型哈希（ASR / 嵌入 / LumenAct）'
+    $senseModel = Ensure-Model (Join-Path $cache 'model.int8.onnx') 'c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51' 239233841 @(
+        'https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx',
+        'https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx'
+    ) 'SenseVoice model.int8.onnx'
+    $senseTokens = Ensure-Model (Join-Path $cache 'tokens.txt') 'f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc' 315894 @(
+        'https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt',
+        'https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt'
+    ) 'SenseVoice tokens.txt'
+    $embedModel = Ensure-Model (Join-Path $cache 'Qwen3-Embedding-0.6B-Q8_0.gguf') '06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439' 639150592 @(
+        'https://modelscope.cn/models/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/master/Qwen3-Embedding-0.6B-Q8_0.gguf',
+        'https://hf-mirror.com/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/main/Qwen3-Embedding-0.6B-Q8_0.gguf'
+    ) 'Qwen3-Embedding-0.6B-Q8_0.gguf'
+    $lumenModel = Ensure-Model (Join-Path $cache 'selector.onnx') 'b4d53610dc6b95e9f994a371dcc2cd8c24777e28ae56c3720d9d6eebeb1688f2' 153300336 @(
+        'https://hf-mirror.com/AaBbcoder/LumenAct/resolve/df8126a2a854735227ec81b7f12ab62d49a6d989/models/semantic/selector.onnx',
+        'https://huggingface.co/AaBbcoder/LumenAct/resolve/df8126a2a854735227ec81b7f12ab62d49a6d989/models/semantic/selector.onnx'
+    ) 'LumenAct selector.onnx'
+    $lumenTok = Ensure-Model (Join-Path $cache 'tokenizer.json') '7dfbf1966ebf99d471c3796e9b457329d2b2182b817e144f1e904b957745c839' 439124 @(
+        'https://hf-mirror.com/AaBbcoder/LumenAct/resolve/df8126a2a854735227ec81b7f12ab62d49a6d989/models/semantic/tokenizer/tokenizer.json',
+        'https://huggingface.co/AaBbcoder/LumenAct/resolve/df8126a2a854735227ec81b7f12ab62d49a6d989/models/semantic/tokenizer/tokenizer.json'
+    ) 'LumenAct tokenizer.json'
+    return [ordered]@{
+        senseModel = $senseModel; senseTokens = $senseTokens
+        embedModel = $embedModel; lumenModel = $lumenModel; lumenTok = $lumenTok
+    }
+}
+
+if ($CheckModelsOnly) {
+    $null = Resolve-ExternalModels
+    Write-Host ''
+    Write-Host '[CheckModelsOnly] 外部权重全部在位且 sha256/体积校验通过。' -ForegroundColor Green
+    exit 0
+}
+
+$uvCmd = Get-Command uv -ErrorAction SilentlyContinue
+if (-not $uvCmd) { throw '找不到 uv：请先 pip install uv，或把 uv.exe 所在目录加进 PATH' }
+$uv = $uvCmd.Source
 
 # ── 1. Python 运行时 ────────────────────────────────────────────────────
 Write-Step 'Python 3.13.3 独立运行时'
@@ -97,8 +159,13 @@ New-Item -ItemType Directory -Force -Path (Join-Path $asrStage 'asr'), (Join-Pat
 Copy-Item -LiteralPath (Join-Path $root 'asr\asr_server.py') -Destination (Join-Path $asrStage 'asr') -Force
 Copy-Item -LiteralPath (Join-Path $root 'asr\README.md') -Destination (Join-Path $asrStage 'asr') -Force
 Get-ChildItem -LiteralPath (Join-Path $root 'audio_common') -Filter '*.py' -File | Copy-Item -Destination (Join-Path $asrStage 'audio_common') -Force
-$silero = Join-Path $HOME '.dsh\speech-to-text\sensevoice\models\silero\silero_vad.onnx'
-if (-not (Test-Path -LiteralPath $silero)) { Fail "缺 silero：$silero" }
+# Silero VAD：公开树没有 ~/.dsh 缓存 → 从 sherpa-onnx 官方 asr-models 资产下载（sha256 固定）。
+# 本机旧档（~/.dsh 里的 1.8MB v5）与官方资产不是同一份；统一用官方资产保证可复现。
+$silero = Ensure-Model (Join-Path $cache 'silero_vad.onnx') '9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6' 643854 @(
+    'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx',
+    'https://gh-proxy.com/https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx',
+    'https://ghproxy.net/https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx'
+) 'silero_vad.onnx'
 Copy-Item -LiteralPath $silero -Destination (Join-Path $asrStage 'models\silero\silero_vad.onnx') -Force
 UvInstall (Join-Path $asrStage 'site-packages') @('aiohttp', 'sherpa-onnx', 'soundfile')
 $zipAsr = ZipDir $asrStage 'voice-asr-0.4.0.zip'
@@ -167,23 +234,24 @@ if (Test-Path -LiteralPath $lumStage) { Remove-Item -LiteralPath $lumStage -Recu
 New-Item -ItemType Directory -Force -Path (Join-Path $lumStage 'tools'), (Join-Path $lumStage 'models'), (Join-Path $lumStage 'assets') | Out-Null
 Copy-Item -LiteralPath (Join-Path $root 'pet-runtime\tools\lumen-semantic-server.py') -Destination (Join-Path $lumStage 'tools') -Force
 # selector.onnx / tokenizer.json 走外部下载（清单里的 LumenAct 源），不重复塞进 zip
-Copy-Item -LiteralPath (Join-Path $root '_research\lumenact\assets\semantic-config.json') -Destination (Join-Path $lumStage 'assets') -Force
+# v0.5.1（P0-3）：公开树没有 _research/ → 优先用 build-resources 里的同一份小配置。
+$lumCfg = Join-Path $here 'build-resources\lumenact\semantic-config.json'
+if (-not (Test-Path -LiteralPath $lumCfg)) { $lumCfg = Join-Path $root '_research\lumenact\assets\semantic-config.json' }
+if (-not (Test-Path -LiteralPath $lumCfg)) { Fail "缺 semantic-config.json（build-resources/lumenact/ 与 _research/lumenact/assets/ 都没有）" }
+Copy-Item -LiteralPath $lumCfg -Destination (Join-Path $lumStage 'assets') -Force
 UvInstall (Join-Path $lumStage 'site-packages') @('onnxruntime', 'transformers')
 $zipLum = ZipDir $lumStage 'lumen-0.4.0.zip'
 Write-Host "lumen-0.4.0.zip  $(MB (Get-Item $zipLum).Length)MB"
 
 # ── 6. 外部模型（不打包，仅清单 + 哈希）────────────────────────────────
-Write-Step '外部模型哈希（ASR / 嵌入 / LumenAct）'
-$senseModel = Join-Path $HOME '.dsh\speech-to-text\sensevoice\models\sensevoice-onnx\model.int8.onnx'
-$senseTokens = Join-Path $HOME '.dsh\speech-to-text\sensevoice\models\sensevoice-onnx\tokens.txt'
-$embedModel = Join-Path $cache 'Qwen3-Embedding-0.6B-Q8_0.official.gguf'
-if (-not (Test-Path -LiteralPath $embedModel)) {
-    Write-Host '  下载官方 Qwen3-Embedding GGUF（ModelScope）'
-    & curl.exe -L --retry 2 --max-time 900 -o $embedModel 'https://modelscope.cn/models/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/master/Qwen3-Embedding-0.6B-Q8_0.gguf'
-    if ($LASTEXITCODE -ne 0) { Fail '下载官方嵌入模型失败' }
-}
-$lumenModel = Join-Path $root '_research\lumenact\models\selector.onnx'
-$lumenTok = Join-Path $root '_research\lumenact\models\tokenizer.json'
+# v0.5.1（P0-3）：全部走 Resolve-ExternalModels（Ensure-Model）—— 本机没有就按清单源下载，
+# 固定 sha256 + 体积校验。公开树用户不需要 ~/.dsh 或 _research 里的权重也能构建出同样的清单。
+$models = Resolve-ExternalModels
+$senseModel = $models.senseModel
+$senseTokens = $models.senseTokens
+$embedModel = $models.embedModel
+$lumenModel = $models.lumenModel
+$lumenTok = $models.lumenTok
 
 $mSense = ModelEntry 'model.int8.onnx' 'voice-asr/models/sensevoice-onnx/model.int8.onnx' $senseModel @(
     [ordered]@{ url = 'https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx'; priority = 1 }

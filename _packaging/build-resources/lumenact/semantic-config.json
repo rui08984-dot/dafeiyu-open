@@ -1,0 +1,590 @@
+{
+  "schema": "lumenact.semantic.v1",
+  "name": "RBT3-Lumen-38M-v6",
+  "model_file": "selector.onnx",
+  "tokenizer_file": "tokenizer/tokenizer.json",
+  "max_length": 96,
+  "catalog": {
+    "labels": [
+      "卖萌和蔼安详",
+      "厌烦厌恶",
+      "大眼微笑",
+      "头晕目眩",
+      "害羞",
+      "小眼震惊",
+      "尴尬",
+      "微笑",
+      "微笑_闭眼",
+      "思考专注",
+      "惊讶震惊",
+      "意志坚定",
+      "感觉无聊无趣",
+      "担忧担心",
+      "挑眉逗趣",
+      "星星眼",
+      "欣慰宽慰",
+      "爱心眼",
+      "生气愤怒",
+      "痛苦疼痛",
+      "睡眼朦胧敷衍",
+      "自然放松",
+      "进入陌生环境担忧左顾右盼",
+      "道歉抱歉",
+      "难过流泪",
+      "震惊疑惑质问",
+      "骄傲自豪"
+    ],
+    "speech_styles": [
+      "neutral",
+      "guarded",
+      "curious",
+      "warm",
+      "joyful",
+      "playful",
+      "firm",
+      "urgent",
+      "sad",
+      "vulnerable",
+      "fearful",
+      "angry",
+      "awkward",
+      "apologetic"
+    ],
+    "contexts": [
+      {
+        "context_id": "ctx_73c0dc5c3b64",
+        "label": "微笑",
+        "subcategory": "轻微摇头微笑",
+        "environment": "悠闲放松",
+        "emotion": "平静安心",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_05826657fa88",
+        "label": "微笑",
+        "subcategory": "轻微摇头微笑",
+        "environment": "悠闲放松、日常闲聊",
+        "emotion": "平静安心",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_431c925058a9",
+        "label": "挑眉逗趣",
+        "subcategory": "眉毛微微上挑逗趣",
+        "environment": "轻松愉快环境",
+        "emotion": "欢快有趣",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_d8afc9fd96f8",
+        "label": "挑眉逗趣",
+        "subcategory": "抬眼逗趣",
+        "environment": "熟人闲聊、轻松打趣",
+        "emotion": "轻松、略得意",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_67d360495387",
+        "label": "挑眉逗趣",
+        "subcategory": "侧目逗趣",
+        "environment": "熟人闲聊、带点得意地回应",
+        "emotion": "轻松、略得意",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_9cd5bf99183f",
+        "label": "惊讶震惊",
+        "subcategory": "头部一震睁大眼睛",
+        "environment": "通用",
+        "emotion": "震惊",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_361c86796c4c",
+        "label": "惊讶震惊",
+        "subcategory": "头部一震睁大眼睛",
+        "environment": "意外消息、突然发现",
+        "emotion": "震惊",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_e9164b44c331",
+        "label": "惊讶震惊",
+        "subcategory": "惊讶后再次确认",
+        "environment": "听到出乎意料的消息、核对事实",
+        "emotion": "惊讶、难以置信",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_a08285ca7ff2",
+        "label": "惊讶震惊",
+        "subcategory": "侧目愣住",
+        "environment": "突发变化、意外发现",
+        "emotion": "错愕、警觉",
+        "pace": "短暂停顿"
+      },
+      {
+        "context_id": "ctx_c42d38e8de95",
+        "label": "惊讶震惊",
+        "subcategory": "突发惊讶",
+        "environment": "意外消息、突然发现",
+        "emotion": "震惊、错愕",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_2857a7a98b6f",
+        "label": "星星眼",
+        "subcategory": "期待向往",
+        "environment": "看到喜欢的事物、期待好消息",
+        "emotion": "期待、喜悦",
+        "pace": "轻快"
+      },
+      {
+        "context_id": "ctx_fd5d60700ced",
+        "label": "星星眼",
+        "subcategory": "抬眼期待",
+        "environment": "期待回应、盼望好消息",
+        "emotion": "期待、喜悦",
+        "pace": "轻快"
+      },
+      {
+        "context_id": "ctx_942459376b24",
+        "label": "星星眼",
+        "subcategory": "试探期待",
+        "environment": "想知道结果、等待对方回应",
+        "emotion": "期待、好奇",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_40b24d668d9a",
+        "label": "星星眼",
+        "subcategory": "含蓄向往",
+        "environment": "看到喜欢的事物、含蓄表达向往",
+        "emotion": "喜爱、期待",
+        "pace": "从容"
+      },
+      {
+        "context_id": "ctx_8b0cf2dc95cb",
+        "label": "难过流泪",
+        "subcategory": "难过欲泣",
+        "environment": "失落、诉说委屈、动情交流",
+        "emotion": "难过、委屈",
+        "pace": "缓慢"
+      },
+      {
+        "context_id": "ctx_61af1b8e39c1",
+        "label": "难过流泪",
+        "subcategory": "回避目光的难过",
+        "environment": "诉说委屈、不愿让对方看见难过",
+        "emotion": "难过、委屈",
+        "pace": "缓慢"
+      },
+      {
+        "context_id": "ctx_3f6b4bd93993",
+        "label": "小眼震惊",
+        "subcategory": "错愕愣住",
+        "environment": "听到离谱消息、突然不知如何回应",
+        "emotion": "震惊、茫然",
+        "pace": "短暂停顿"
+      },
+      {
+        "context_id": "ctx_dc32cf791cee",
+        "label": "小眼震惊",
+        "subcategory": "错愕回避",
+        "environment": "意外消息、不知如何回应",
+        "emotion": "错愕、不自在",
+        "pace": "短暂停顿"
+      },
+      {
+        "context_id": "ctx_744624d6d5b5",
+        "label": "感觉无聊无趣",
+        "subcategory": "无聊放空",
+        "environment": "等待、重复或乏味的交流",
+        "emotion": "无聊、兴致低落",
+        "pace": "缓慢"
+      },
+      {
+        "context_id": "ctx_463b50f8fd94",
+        "label": "感觉无聊无趣",
+        "subcategory": "侧目不耐烦",
+        "environment": "乏味交流、重复的话题",
+        "emotion": "无聊、轻微不耐烦",
+        "pace": "缓慢"
+      },
+      {
+        "context_id": "ctx_9853c04cd7ed",
+        "label": "爱心眼",
+        "subcategory": "直率喜爱",
+        "environment": "表达喜欢、赞美、亲近互动",
+        "emotion": "喜爱、愉悦",
+        "pace": "轻快"
+      },
+      {
+        "context_id": "ctx_09b6a8a48b74",
+        "label": "爱心眼",
+        "subcategory": "含蓄喜爱",
+        "environment": "亲近交流、含蓄表达好感",
+        "emotion": "喜爱、害羞",
+        "pace": "从容"
+      },
+      {
+        "context_id": "ctx_ae2ec2590ff4",
+        "label": "爱心眼",
+        "subcategory": "柔和亲近",
+        "environment": "温柔交流、表达好感",
+        "emotion": "温柔、喜爱",
+        "pace": "从容"
+      },
+      {
+        "context_id": "ctx_438d141cbec9",
+        "label": "微笑_闭眼",
+        "subcategory": "闭眼安心微笑",
+        "environment": "轻松回应、表达善意",
+        "emotion": "安心、亲切",
+        "pace": "从容"
+      },
+      {
+        "context_id": "ctx_723df873b4ff",
+        "label": "道歉抱歉",
+        "subcategory": "诚恳致歉",
+        "environment": "承认疏忽、请求谅解",
+        "emotion": "歉意、愧疚",
+        "pace": "舒缓"
+      },
+      {
+        "context_id": "ctx_dcf387d7445e",
+        "label": "担忧担心",
+        "subcategory": "牵挂担忧",
+        "environment": "关心对方、等待不确定的结果",
+        "emotion": "担忧、不安",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_659277605098",
+        "label": "大眼微笑",
+        "subcategory": "明亮开心微笑",
+        "environment": "收到好消息、愉快交流",
+        "emotion": "开心、惊喜",
+        "pace": "轻快"
+      },
+      {
+        "context_id": "ctx_4d594d4e3e94",
+        "label": "卖萌和蔼安详",
+        "subcategory": "闭眼温柔卖萌",
+        "environment": "亲近闲聊、撒娇、温柔回应",
+        "emotion": "亲切、愉悦",
+        "pace": "舒缓"
+      },
+      {
+        "context_id": "ctx_9114d0bab058",
+        "label": "意志坚定",
+        "subcategory": "认真坚定",
+        "environment": "作出决定、表达承诺、鼓励自己",
+        "emotion": "坚定、认真",
+        "pace": "稳重"
+      },
+      {
+        "context_id": "ctx_7747ee0d77df",
+        "label": "厌烦厌恶",
+        "subcategory": "不满排斥",
+        "environment": "被打扰、遇到不喜欢的事情",
+        "emotion": "厌烦、不满",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_32f87ce31ed1",
+        "label": "痛苦疼痛",
+        "subcategory": "疼痛难忍",
+        "environment": "身体不适、疼痛反应",
+        "emotion": "痛苦、难受",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_e15f7b0172d6",
+        "label": "欣慰宽慰",
+        "subcategory": "如释重负",
+        "environment": "担忧解除、事情顺利结束",
+        "emotion": "安心、欣慰",
+        "pace": "舒缓"
+      },
+      {
+        "context_id": "ctx_3f91e00f221a",
+        "label": "害羞",
+        "subcategory": "含蓄害羞",
+        "environment": "被夸奖、受到关注、亲近交流",
+        "emotion": "害羞、局促",
+        "pace": "稍慢"
+      },
+      {
+        "context_id": "ctx_5bf7fc0916f5",
+        "label": "进入陌生环境担忧左顾右盼",
+        "subcategory": "警觉观察",
+        "environment": "进入陌生环境、初次到访",
+        "emotion": "担忧、警觉",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_36cc62d3c7b3",
+        "label": "骄傲自豪",
+        "subcategory": "闭眼得意",
+        "environment": "受到肯定、展示成果",
+        "emotion": "自豪、得意",
+        "pace": "从容"
+      },
+      {
+        "context_id": "ctx_b517630fe3dd",
+        "label": "尴尬",
+        "subcategory": "窘迫回避",
+        "environment": "被拆穿、说错话、不知如何回应",
+        "emotion": "尴尬、不自在",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_dd21554b77d0",
+        "label": "睡眼朦胧敷衍",
+        "subcategory": "困倦敷衍",
+        "environment": "疲惫时、提不起精神的交流",
+        "emotion": "困倦、兴致低落",
+        "pace": "缓慢"
+      },
+      {
+        "context_id": "ctx_485587a7a241",
+        "label": "生气愤怒",
+        "subcategory": "表达不满",
+        "environment": "受到冒犯、意见冲突",
+        "emotion": "生气、不满",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_adf456052c9a",
+        "label": "生气愤怒",
+        "subcategory": "紧盯质问",
+        "environment": "严肃对峙、追问原因",
+        "emotion": "愤怒、警惕",
+        "pace": "紧促"
+      },
+      {
+        "context_id": "ctx_0a33c1e06fcc",
+        "label": "震惊疑惑质问",
+        "subcategory": "疑惑质问",
+        "environment": "听到矛盾信息、追问原因",
+        "emotion": "惊讶、怀疑",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_60016c06be4c",
+        "label": "震惊疑惑质问",
+        "subcategory": "反复核实的质问",
+        "environment": "听到矛盾信息、反复确认说法",
+        "emotion": "怀疑、惊讶",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_b457aebcfe3f",
+        "label": "震惊疑惑质问",
+        "subcategory": "寻找解释的疑惑",
+        "environment": "发现不对劲、寻找解释",
+        "emotion": "疑惑、怀疑",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_32786a85ff6f",
+        "label": "头晕目眩",
+        "subcategory": "晕眩失神",
+        "environment": "头晕、信息过载的夸张表现",
+        "emotion": "晕眩、茫然",
+        "pace": "缓慢"
+      },
+      {
+        "context_id": "ctx_2276cb2ece92",
+        "label": "头晕目眩",
+        "subcategory": "晕眩游移",
+        "environment": "头晕、信息过载的夸张表现",
+        "emotion": "晕眩、茫然",
+        "pace": "缓慢"
+      },
+      {
+        "context_id": "ctx_a927519dfb98",
+        "label": "思考专注",
+        "subcategory": "反复确认的思考",
+        "environment": "交流中遇到疑问、核对信息",
+        "emotion": "疑惑、求证",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_5e248937e883",
+        "label": "思考专注",
+        "subcategory": "寻找线索的思考",
+        "environment": "阅读信息、观察线索、整理思路",
+        "emotion": "专注、疑惑",
+        "pace": "中等"
+      },
+      {
+        "context_id": "ctx_b69bcae0fed9",
+        "label": "思考专注",
+        "subcategory": "专注倾听思考",
+        "environment": "日常交流、听取解释",
+        "emotion": "平静、专注",
+        "pace": "从容"
+      },
+      {
+        "context_id": "ctx_437cb3ba1798",
+        "label": "自然放松",
+        "subcategory": "中性自然放松",
+        "environment": "日常待机、安静倾听",
+        "emotion": "平静、中性",
+        "pace": "从容"
+      },
+      {
+        "context_id": "ctx_d89aa0c6e05b",
+        "label": "思考专注",
+        "subcategory": "悠闲琢磨",
+        "environment": "独处、散步休息时想一个有趣的小问题",
+        "emotion": "平静好奇",
+        "pace": "舒缓，有自然停顿"
+      },
+      {
+        "context_id": "ctx_ae487e3271d6",
+        "label": "思考专注",
+        "subcategory": "紧张解题",
+        "environment": "考试或限时处理一个有难度的问题",
+        "emotion": "轻度紧张、认真",
+        "pace": "紧凑，但不慌乱"
+      },
+      {
+        "context_id": "ctx_74a791d291fe",
+        "label": "思考专注",
+        "subcategory": "交流中快速思考",
+        "environment": "面对面聊天，对方等你回答",
+        "emotion": "投入、机敏",
+        "pace": "短促，几次自然的思路变化"
+      },
+      {
+        "context_id": "ctx_2d94a323d51a",
+        "label": "微笑",
+        "subcategory": "会心微笑",
+        "environment": "听懂了朋友的小玩笑或彼此默契的暗示",
+        "emotion": "愉快、会意",
+        "pace": "短暂加深后自然停留"
+      },
+      {
+        "context_id": "ctx_401e87bca817",
+        "label": "微笑",
+        "subcategory": "友善倾听",
+        "environment": "轻松聊天，听朋友分享日常",
+        "emotion": "温和、友好",
+        "pace": "舒缓、稳定"
+      },
+      {
+        "context_id": "ctx_73c8476374d8",
+        "label": "微笑",
+        "subcategory": "含蓄开心",
+        "environment": "收到一个小小的好消息",
+        "emotion": "开心，但较克制",
+        "pace": "由轻到稍深，然后从容"
+      },
+      {
+        "context_id": "ctx_e4c6d3d0946f",
+        "label": "自然放松",
+        "subcategory": "安静休息",
+        "environment": "独处休息，没有需要处理的事情",
+        "emotion": "中性、平静",
+        "pace": "慢、松弛"
+      },
+      {
+        "context_id": "ctx_5e3c3bdfceff",
+        "label": "自然放松",
+        "subcategory": "平静倾听",
+        "environment": "日常交流中认真听普通内容",
+        "emotion": "中性、轻度关注",
+        "pace": "自然，不急"
+      },
+      {
+        "context_id": "ctx_dcfb7ec95fb3",
+        "label": "自然放松",
+        "subcategory": "从容等待",
+        "environment": "等待对方看完消息或整理好东西",
+        "emotion": "中性、耐心",
+        "pace": "舒缓，有停顿"
+      },
+      {
+        "context_id": "ctx_18db60069f9f",
+        "label": "骄傲自豪",
+        "subcategory": "小胜利得意",
+        "environment": "刚完成一件别人觉得你做不到的小事，等熟人夸奖",
+        "emotion": "开心、自信，带一点小得意",
+        "pace": "先亮起来，再带着得意停留"
+      },
+      {
+        "context_id": "ctx_2ea01b826d46",
+        "label": "骄傲自豪",
+        "subcategory": "嘴硬式得意",
+        "environment": "明明很在意夸奖，却装作这本来就很简单",
+        "emotion": "得意、克制，故作淡定",
+        "pace": "短暂扬眉，随后压住笑意"
+      },
+      {
+        "context_id": "ctx_454377f73c31",
+        "label": "挑眉逗趣",
+        "subcategory": "坏笑捉弄",
+        "environment": "你知道一个小秘密，准备逗熟人一下",
+        "emotion": "顽皮、机灵，带一点狡黠",
+        "pace": "先观察，再短促加深坏笑"
+      },
+      {
+        "context_id": "ctx_373dd378faeb",
+        "label": "生气愤怒",
+        "subcategory": "鼓脸闹别扭",
+        "environment": "熟人开了一个不严重却让你不服气的玩笑",
+        "emotion": "小脾气、亲近，没有敌意",
+        "pace": "反应快，之后赌气地停一会儿"
+      },
+      {
+        "context_id": "ctx_a32c73ea122e",
+        "label": "害羞",
+        "subcategory": "被夸后嘴硬害羞",
+        "environment": "被很在意的人当面认真夸奖",
+        "emotion": "开心、羞涩，努力掩饰",
+        "pace": "先意外，随后躲闪又想看回来"
+      },
+      {
+        "context_id": "ctx_8d6f00447921",
+        "label": "尴尬",
+        "subcategory": "被戳穿干笑",
+        "environment": "刚吹过的小牛被熟人轻轻拆穿",
+        "emotion": "窘迫、心虚，仍想圆场",
+        "pace": "短促一僵，接几次不太自在的笑意"
+      },
+      {
+        "context_id": "ctx_a30a085332a5",
+        "label": "微笑",
+        "subcategory": "憋笑失败",
+        "environment": "听见一个不该当场笑出来的小笑话",
+        "emotion": "好笑、忍耐，最后没忍住",
+        "pace": "先压住，再自然泄出笑意"
+      },
+      {
+        "context_id": "ctx_ed11214c70a7",
+        "label": "微笑",
+        "subcategory": "笑容逐渐消失",
+        "environment": "原本笑着，忽然意识到对方没有在开玩笑",
+        "emotion": "愉快退去，转为认真和迟疑",
+        "pace": "连续收住笑意，最后短暂停留"
+      },
+      {
+        "context_id": "ctx_5a24555e15ea",
+        "label": "惊讶震惊",
+        "subcategory": "惊喜亮眼",
+        "environment": "突然得知期待的事情成真了",
+        "emotion": "意外、开心，带期待",
+        "pace": "一下亮起来，再保留兴奋"
+      }
+    ]
+  },
+  "outputs": [
+    "emotion",
+    "context",
+    "speech_style",
+    "approximate"
+  ]
+}

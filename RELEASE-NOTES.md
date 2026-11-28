@@ -1,7 +1,14 @@
 # RELEASE NOTES — 大肥鱼公开代码树
 
 生成方式：`node scripts/export-public-tree.mjs`（源：主仓 + 应用仓的 tracked 文件）。
-状态：**纯本地树**，未配置 remote、未 push。
+状态：公开仓 `main` 由 `node scripts/publish-public.mjs` 导出、自检并推送；本文件随每次发布更新。
+
+## v0.5.1 安装卫生与公开树可重建（2026-11-28）
+
+- 底座：`DaFeiyu-Setup-0.5.1.exe`（**123,964,365B**，约 118.2MB；sha256 `66e89db15fb0e9c9419c278628d51486e8d052ff5d9940994b9aede017f43b41`）——应用 + 皮套/模型 + Cubism Core + pet-core + edge-tts + 完整表演数据 + 我们现在的人格；不含记忆/日记/用户数据。
+- **8 个组件资产与 v0.5.0 完全一致**（文件 SHA256 逐位相同，合计 5,539.3MB）；本版没有重建组件包。
+- 修复（v0.5.0 终验 P0）：随包 `安装说明.txt` 换 v0.5.1 口径；安装包不再混入 dev 轮转日志（`*.jsonl.N` 整树断言）；公开树全新 clone 可重建（人格内核/Lumen 小配置内置、缺权重按清单源下载校 sha256、缺 fragments 非零退出、local-memory cache 优先、无 config 时占位人格并告警）；G1 记忆体检随包并按 `app.getAppPath()` 解析；G2 能力页识别 `components/` 下的语音器官；G3 `浏览器扩展/browser-tabs` 随包；G4 安装版不带 dev 维护脚本/`services.json`；控制中心读 `PET_USER_DATA`；README/RELEASE-NOTES 口径统一。
+- 门禁：smoke **201/201**、core **234/234**；干净安装实测首启「模型」页、真实 key 对话 `BANANA`、8 组件页与 CLI status、安装目录 0 `*.jsonl*` / 0 key。
 
 ## v0.5.0 组件化安装 · 完整能力（2026-11-27）
 
@@ -16,7 +23,7 @@
 ## v0.4.0 组件化安装（2026-11-27）
 
 - 底座：`DaFeiyu-Setup-0.4.0.exe`（约 120MB）——应用 + 皮套/模型 + Cubism Core + pet-core + edge-tts + 表演数据 + 我们现在的人格。
-- 组件（设置 → 组件，一键安装，约 1.3GB）：`memory`（MemOS+Qdrant+嵌入 784MB/ModelScope）、`voice-asr`（SenseVoice 239MB/hf-mirror）、`cowatch`、`lumen`（153MB/hf-mirror）。
+- 组件（设置 → 组件，一键安装，约 1.3GB）：`memory`（MemOS+Qdrant+嵌入，模型单文件 784MB/ModelScope）、`voice-asr`（SenseVoice 模型单文件 239MB/hf-mirror）、`cowatch`、`lumen`（selector 模型单文件 153MB/hf-mirror）。注：组件包 zip 合计为 707.4 / 263.8 / 12.5 / 203.0MB（含 Python 依赖），与模型单文件体积是两种口径。
 - 组件包由 `_packaging/build-component-packs.ps1` 构建；清单 `components/manifest.json` 带 SHA256 与多源。
 - 不含：本地 4B 记忆模型（自备 GGUF）、Ollama 本地视觉（走云）。
 
@@ -64,6 +71,12 @@ cd ..\..\.. && node _probe\check-ci.mjs
 
 期望：向导的「最低可用性」在填 key 后为可用；bootstrap 只有「用户自备」项（key / 8090 / 模型服务）非 ok；无代码级红。
 
-## 验证结果
+## 验证结果（2026-11-28 · v0.5.1）
 
-（待执行后回填）
+- 门禁：`node _probe/check-all.mjs --smoke` **201/201**（43.8s）；`--core` **234/234**（170.1s）。
+- 安装包：干净目录静默安装 → 首启自动落「模型」页（`visible=[model]`）→ 注入真实 key → 真实 LLM 回复 `BANANA`；组件页 8 项齐全，`安装组件.cmd status` 8 行；安装目录 0 个 `*.jsonl*`、默认配置 0 key。
+- G1：控制面板 `memoryConsistency()` → `{ok:true, report:{...}}`；8003 未装时按实报连接失败（不假绿）。
+- G2：组件不在位时只报 asr/cowatch/voiceprint（正确）；模拟 `components/<id>/` 后能力审计 **0 问题**。
+- 公开树复现：`build-components-manifest.cjs` 缺 fragments 退出码 1 / `--allow-empty` 退出码 0；`build-component-packs.ps1 -CheckModelsOnly` 在无本机权重目录的临时 clone 中完成下载与 sha256 校验（结果见交接）。
+
+（v0.5.0 及更早的验证结果保留在各版 release notes。）

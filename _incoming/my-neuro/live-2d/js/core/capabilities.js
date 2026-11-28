@@ -155,7 +155,7 @@ const CAPABILITIES = [
   { id: 'ctx.turn_tool_result_cap', name: '工具回执上限（单轮累计）', group: '上下文', kind: 'config', key: 'context.turn_tool_result_max_chars', default: 32000, hot: false, soft: true, impl: 'js/ai/tool-result-cap.js', note: '一轮工具循环里所有回执合计超过它就省略最旧、保最新（按 offset/artifact 可续读）；单条上限见 ctx.tool_result_cap' },
   { id: 'ctx.tool_filter', name: '会话级工具子集', group: '上下文', kind: 'config', key: 'toolFilter.enabled', default: false, hot: false, soft: true, impl: 'js/ai/tool-picker.js', note: '开启后按当前模式（聊天/操控/游戏/看视频）选一次工具子集，整个会话保持；核心工具永在、minKeep=8。**不合并工具**；模式切换才重选，可能打穿 tools 段缓存。config 缺省=全量' },
   { id: 'memory.diary_local', name: '日记走本地模型', group: '记忆', kind: 'config', key: 'diary.local_enabled', default: false, hot: false, soft: true, impl: 'js/ai/DiaryManager.js', note: 'false=日记摘要走云端主模型（默认）；true 才走本地 llama.cpp:11435（MemOperator-4B）。本地不可用时跳过、不回退云' },
-  { id: 'cost.weekly_budget', name: '周 token 预算', group: '成本', kind: 'config', key: 'cost.weekly_token_budget', default: 0, hot: false, soft: true, impl: 'pet-runtime/tools/doctor.mjs', note: '0=只统计不告警；设为正数后近 7 天云用量（不含本地模型）≥80% 时 doctor 黄警告。只告警不拦截（用户 2026-11-24 拍板）' },
+  { id: 'cost.weekly_budget', name: '周 token 预算', group: '成本', kind: 'config', key: 'cost.weekly_token_budget', default: 0, hot: false, soft: true, impl: 'pet-runtime/tools/doctor.mjs', devOnly: true, note: '0=只统计不告警；设为正数后近 7 天云用量（不含本地模型）≥80% 时 doctor 黄警告。只告警不拦截（用户 2026-11-24 拍板）。**安装版不随 doctor**（dev 维护入口），故能力页在安装版跳过此项实现自检' },
   { id: 'cost.local_memory', name: '本地记忆模型', group: '成本', kind: 'config', key: 'cost.local_memory', default: true, hot: false, soft: true, impl: 'js/core/local-llm.js', note: '默认开：片段卡/画像/日记/MemOS /add 抽取走本地 llama.cpp:11435（MemOperator-4B，32K）；反思/判官仍走云。关掉后后台本地任务跳过（不回退云，避免意外烧配额）' },
   { id: 'ctx.persist', name: '持久化对话历史', group: '上下文', kind: 'config', key: 'context.persistent_history', default: true, hot: false },
   { id: 'ctx.enable_limit', name: '启用上下文条数上限', group: '上下文', kind: 'config', key: 'context.enable_limit', default: true, hot: false, impl: 'js/ai/conversation/ConversationCore.js', note: '关掉后 ctx.limit（max_messages）不生效' },
@@ -283,6 +283,16 @@ function auditCapabilities(env = {}) {
   const plugins = Array.isArray(env.enabledPlugins) ? env.enabledPlugins : null;
   const problems = [];
   const declaredKeys = new Set();
+  // 安装版根（exe 同级有 resources/app/main.js）；开发树为 null。
+  // 2026-11-28 P0-7：安装版有意不带 dev 维护入口（doctor/kill-all/restart/launch），
+  // 只服务 dev 的能力（devOnly）在安装版跳过实现自检，避免误报。
+  let installRoot = null;
+  try {
+    const fs0 = require('fs');
+    const path0 = require('path');
+    const exeDir0 = path0.dirname(process.execPath || '');
+    if (exeDir0 && fs0.existsSync(path0.join(exeDir0, 'resources', 'app', 'main.js'))) installRoot = exeDir0;
+  } catch (e) { /* dev */ }
 
   for (const cap of CAPABILITIES) {
     if (cap.kind === 'config' && cap.key) {
@@ -305,6 +315,7 @@ function auditCapabilities(env = {}) {
       }
     }
     if (cap.impl) {
+      if (cap.devOnly && installRoot) continue;
       try {
         const fs = require('fs');
         const path = require('path');
@@ -312,6 +323,24 @@ function auditCapabilities(env = {}) {
         // 都在那一层；live-2d 在 _incoming/my-neuro/ 下，所以要往上 5 级。
         const repoRoot = path.resolve(__dirname, '..', '..', '..', '..', '..');
         const cands = [path.join(repoRoot, cap.impl), path.join(__dirname, '..', '..', cap.impl)];
+        // 2026-11-28 P0-5（G2）：安装版的器官在 installRoot/components/<组件id>/ 下，
+        // 不在仓库根。不补这些候选，能力页会对 TTS/ASR/一起看/声纹 4 项误报缺失。
+        if (installRoot) {
+          // 底座自带：TTS 是 resources/tts/dafeiyu-tts.exe（源码形态的 edge-tts/tts_server.py 不随包）
+          if (/^edge-tts[\\/]/.test(cap.impl)) cands.push(path.join(installRoot, 'resources', 'tts', 'dafeiyu-tts.exe'));
+          // pet-runtime/** 在 resources/app 下
+          if (/^pet-runtime[\\/]/.test(cap.impl)) cands.push(path.join(installRoot, 'resources', 'app', cap.impl));
+          // 组件器官：components/* 里任何一个命中 <dir>/<impl> 就算在位
+          try {
+            const compRoot = path.join(installRoot, 'components');
+            for (const name of fs.readdirSync(compRoot)) {
+              try {
+                if (!fs.statSync(path.join(compRoot, name)).isDirectory()) continue;
+              } catch (e) { continue; }
+              cands.push(path.join(compRoot, name, cap.impl));
+            }
+          } catch (e) { /* 没装任何组件 */ }
+        }
         if (!cands.some((p) => fs.existsSync(p))) {
           problems.push({ id: cap.id, kind: 'impl-missing', detail: `实现文件找不到：${cap.impl}` });
         }

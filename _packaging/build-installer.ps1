@@ -263,8 +263,11 @@ function Prepare-RuntimeTree {
     $rt = Join-Path $appStageDir 'pet-runtime'
     New-Item -ItemType Directory -Force -Path $rt | Out-Null
 
+    # v0.5.1：dev 维护入口不再随安装包（它们读 dev 相对路径的 services.json，
+    # 在安装版必然误报）；memos-consistency.mjs 反而必须随包（控制面板「记忆体检」用它）。
     & robocopy.exe (Join-Path $here '..\pet-runtime\tools') (Join-Path $rt 'tools') `
-        /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 /XD __pycache__ _archive /XF *.pyc memos-consistency.mjs nightly-deep-eval.ps1 | Out-Null
+        /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 /XD __pycache__ _archive `
+        /XF *.pyc nightly-deep-eval.ps1 services.json doctor.mjs kill-all-pet.ps1 restart-pet.ps1 launch-my-neuro.mjs | Out-Null
     if ($LASTEXITCODE -ge 8) { Fail "robocopy pet-runtime/tools 失败：$LASTEXITCODE" }
 
     & robocopy.exe (Join-Path $here '..\pet-runtime\desktop') (Join-Path $rt 'desktop') `
@@ -272,7 +275,7 @@ function Prepare-RuntimeTree {
     if ($LASTEXITCODE -ge 8) { Fail "robocopy pet-runtime/desktop 失败：$LASTEXITCODE" }
 
     & robocopy.exe (Join-Path $here '..\pet-runtime\data') (Join-Path $rt 'data') `
-        /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 /XF performance-log.jsonl dispatch-history.jsonl *.log* | Out-Null
+        /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 /XF performance-log.jsonl* dispatch-history.jsonl* *.log* | Out-Null
     if ($LASTEXITCODE -ge 8) { Fail "robocopy pet-runtime/data 失败：$LASTEXITCODE" }
 
     Copy-Item -LiteralPath (Join-Path $here '..\pet-runtime\model-info.mjs') -Destination (Join-Path $rt 'model-info.mjs') -Force
@@ -296,14 +299,25 @@ function Write-PublicDefaults {
 
     # 2026-11-27 v0.4.0：人格/表演/语音默认值取「本机正在用的那一份」，
     # 但机器相关的窗口坐标、工作区路径、隐私同意、key 一律不随包。
+    # 2026-11-28 P0-3：公开树全新 clone 没有 config.json（gitignore）。以前这里直接 Fail，
+    # 导致「公开树无法重建安装包」。现在回退到 config.example.json 的占位人格并显式告警；
+    # 正式发布（本机构建）仍要求 ≥200 字符现人格（afterPack 也会拦）。
     $livePath = Join-Path $herDir 'config.json'
-    if (-not (Test-Path -LiteralPath $livePath -PathType Leaf)) {
-        Fail "找不到本机 config.json（人格来源）：$livePath。安装版要求用当前人格打包。"
+    $personaSource = 'live-config'
+    if (Test-Path -LiteralPath $livePath -PathType Leaf) {
+        $live = [IO.File]::ReadAllText($livePath, [Text.Encoding]::UTF8) | ConvertFrom-Json
+    } else {
+        Write-Host '[告警] 没有本机 config.json（人格来源）；公开树构建改用 config.example.json 的占位人格。' -ForegroundColor Yellow
+        Write-Host '       正式发布安装包前请先填 config.json 的 llm.system_prompt（现人格）。' -ForegroundColor Yellow
+        $live = $cfg
+        $personaSource = 'example-placeholder'
     }
-    $live = [IO.File]::ReadAllText($livePath, [Text.Encoding]::UTF8) | ConvertFrom-Json
     $persona = [string]$live.llm.system_prompt
     if ([string]::IsNullOrWhiteSpace($persona) -or $persona.Length -lt 200) {
-        Fail "本机 config.json 的 llm.system_prompt 太短（$($persona.Length) 字符），拒绝用它当默认人格。"
+        if ($personaSource -eq 'live-config') {
+            Fail "本机 config.json 的 llm.system_prompt 太短（$($persona.Length) 字符），拒绝用它当默认人格。"
+        }
+        Write-Host "占位人格 $($persona.Length) 字符（仅用于公开树结构验证，不可当作发布包）" -ForegroundColor Yellow
     }
     $cfg.llm.system_prompt = $persona
     if ($live.PSObject.Properties['performance']) { $cfg.performance = $live.performance }
@@ -336,7 +350,7 @@ function Write-PublicDefaults {
     $cfg | Add-Member -NotePropertyName 'memos' -NotePropertyValue ([pscustomobject]@{ enabled = $false; api_url = 'http://127.0.0.1:8003' }) -Force
     $cfg | Add-Member -NotePropertyName 'components' -NotePropertyValue ([pscustomobject]@{ auto_start = $true }) -Force
     $cfg | Add-Member -NotePropertyName '_install' -NotePropertyValue ([pscustomobject]@{
-        at = (Get-Date).ToString('o'); by = 'installer'; version = $Version; persona = 'live-config'
+        at = (Get-Date).ToString('o'); by = 'installer'; version = $Version; persona = $personaSource
     }) -Force
     [IO.File]::WriteAllText((Join-Path $appStageDir 'config.json'), ($cfg | ConvertTo-Json -Depth 32), $utf8NoBom)
 
@@ -400,6 +414,19 @@ function Prepare-ExtraResources {
         Write-Host '       先跑 `powershell -NoProfile -ExecutionPolicy Bypass -File .\build-tts.ps1` 生成 out\tts\dafeiyu-tts.exe，再重跑 -Nsis。'
         Write-Host '       或保持 -SkipTts（用户可后配 OpenAI 兼容 TTS / 自装 Python 完整服务）。'
     }
+
+    # v0.5.1（G3）：浏览器标签扩展随安装包，用户在扩展管理里「加载已解压的扩展程序」。
+    # 缺它不是致命项（浏览器感知会降级），但公开树有、安装包没有会让能力页误引导。
+    $extSrc = [IO.Path]::GetFullPath((Join-Path $here '..\extensions\browser-tabs'))
+    $extDst = Join-Path $extraRoot 'browser-tabs'
+    if (Test-Path -LiteralPath (Join-Path $extSrc 'manifest.json') -PathType Leaf) {
+        if (Test-Path -LiteralPath $extDst) { Remove-Item -LiteralPath $extDst -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path $extDst | Out-Null
+        Copy-Item -Path (Join-Path $extSrc '*') -Destination $extDst -Recurse -Force
+        Write-Host '浏览器扩展：已随包（extensions/browser-tabs → 浏览器扩展/browser-tabs）'
+    } else {
+        Write-Host '[提示] 未找到 extensions/browser-tabs，安装包不带浏览器扩展' -ForegroundColor Yellow
+    }
 }
 
 Write-PublicDefaults
@@ -411,6 +438,12 @@ function Prepare-PersonaAndManifest {
     $personaOut = Join-Path $here 'out\persona'
     New-Item -ItemType Directory -Force -Path $personaOut | Out-Null
     $kernel = [IO.Path]::GetFullPath((Join-Path $herDir '..\data\人格内核.json'))
+    if (-not (Test-Path -LiteralPath $kernel -PathType Leaf)) {
+        # 公开树没有 data/（gitignore），全新 clone 构建不应因此 Fail：
+        # 回退到 build-resources 里的默认人格内核（605B，与现人格同源）。
+        $kernel = [IO.Path]::GetFullPath((Join-Path $here 'build-resources\persona\人格内核.json'))
+        Write-Host '[提示] 本机没有 data/人格内核.json，改用 build-resources\persona\人格内核.json（默认人格内核）' -ForegroundColor Yellow
+    }
     if (-not (Test-Path -LiteralPath $kernel -PathType Leaf)) {
         Fail "找不到人格内核（persona-layers）：$kernel"
     }

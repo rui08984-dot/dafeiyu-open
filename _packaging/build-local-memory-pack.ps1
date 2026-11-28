@@ -21,10 +21,10 @@
     含中文字面量，请用 pwsh 7 运行（powershell 5.1 会把无 BOM UTF-8 按 GBK 读）。
 
 .PARAMETER ModelPath
-    本地已有 GGUF 的路径（默认 D:/llm/models/MemOperator-4B.Q4_K_M.gguf）。
+    本地已有 GGUF 的路径。不给时按 out/packs-cache → D:/llm/models（本机 dev 兼容）查找。
 
 .PARAMETER Download
-    ModelPath 不存在时从清单源下载到 <out>/packs-cache/（约 2.33GB，走 hf-mirror）。
+    找不到模型时从清单源下载到 <out>/packs-cache/（约 2.33GB，走 hf-mirror）。
 
 .PARAMETER WhatIfFragment
     只打印将写入的 fragment JSON，不写文件。
@@ -34,7 +34,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$ModelPath = 'D:/llm/models/MemOperator-4B.Q4_K_M.gguf',
+    [string]$ModelPath = '',
     [switch]$Download,
     [switch]$WhatIfFragment
 )
@@ -64,9 +64,21 @@ function MB([long]$n) { [math]::Round($n / 1MB, 1) }
 
 # ── 1. 模型文件就位 ──────────────────────────────────────────────────────
 Write-Step '模型文件（MemOperator-4B Q4_K_M，Apache-2.0）'
+# v0.5.1（P0-3）：默认不再写死本机路径。查找顺序：
+#   1) 显式 -ModelPath（最高优先）
+#   2) out/packs-cache/（构建缓存，公开树自前的标准位置）
+#   3) 兼容本机 dev：D:/llm/models/...（存在就用，不重复下载）
+# 都没有时：加 -Download 才下载；否则给出可执行的两条路。
+$legacyDevModel = 'D:/llm/models/MemOperator-4B.Q4_K_M.gguf'
+if (-not $ModelPath) {
+    $cacheModel = Join-Path $cache $GGUF_NAME
+    if (Test-Path -LiteralPath $cacheModel) { $ModelPath = $cacheModel }
+    elseif (Test-Path -LiteralPath $legacyDevModel) { $ModelPath = $legacyDevModel }
+    else { $ModelPath = $cacheModel }
+}
 if (-not (Test-Path -LiteralPath $ModelPath)) {
     if (-not $Download) {
-        Fail "找不到 $ModelPath ；确认路径，或加 -Download 从 hf-mirror 下载到 packs-cache"
+        Fail "找不到 $ModelPath ；加 -Download 从 hf-mirror 下载到 packs-cache，或用 -ModelPath 指向已有 GGUF"
     }
     New-Item -ItemType Directory -Force -Path $cache | Out-Null
     $ModelPath = Join-Path $cache $GGUF_NAME

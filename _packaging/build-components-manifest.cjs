@@ -27,6 +27,7 @@ const HERE = __dirname;
 const fragmentsPath = arg('fragments', path.join(HERE, 'out', 'packs', 'manifest.fragments.json'));
 const outPath = arg('out', path.join(HERE, 'out', 'components', 'manifest.json'));
 const version = String(arg('version', '0.4.0'));
+const allowEmpty = args.includes('--allow-empty');
 const packsDir = path.join(HERE, 'out', 'packs');
 
 function fail(msg) { console.error('✗ ' + msg); process.exit(1); }
@@ -38,7 +39,13 @@ if (isFile(fragmentsPath)) {
     try { fragments = JSON.parse(fs.readFileSync(fragmentsPath, 'utf8')); } catch (e) { fail('fragments JSON 解析失败：' + e.message); }
     if (!Array.isArray(fragments)) { fragments = fragments.components || []; }
 } else {
-    console.warn('[manifest] 没有 fragments（' + fragmentsPath + '），生成仅底座的清单');
+    // v0.5.1（P0-3）：以前这里只 warn → 安装包静默 0 组件（用户看到「组件已全部安装」的空清单）。
+    // 组件清单是产品承诺的一部分（README 写 8 个组件），缺 fragments 必须让构建失败；
+    // 明确只想出「仅底座」包时才允许 --allow-empty。
+    if (!allowEmpty) {
+        fail('没有 components fragments：' + fragmentsPath + '（先跑 build-component-packs.ps1 等组件构建；确实只要底座请加 --allow-empty）');
+    }
+    console.warn('[manifest] --allow-empty：没有 fragments（' + fragmentsPath + '），生成仅底座的清单');
 }
 if (!Array.isArray(fragments)) fail('fragments 不是数组');
 

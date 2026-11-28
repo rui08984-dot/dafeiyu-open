@@ -4,16 +4,18 @@
 
 ## 一键安装（Windows 10/11 x64）
 
-从 [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) 下载 **`DaFeiyu-Setup-0.5.0.exe`**（约 120MB），双击安装。
+从 [Releases](https://github.com/rui08984-dot/dafeiyu-open/releases/latest) 下载 **`DaFeiyu-Setup-0.5.1.exe`**（约 120MB），双击安装。
 
 - 第一次启动会自动打开设置窗的「模型」页：填 **API Key**（支持任意 OpenAI 兼容网关），点保存即可对话。
 - 底座已含：皮套与模型、Cubism Core、Rust 内核 `pet-core`、edge-tts 语音（联网，无需 key）、完整表演数据、我们现在的人格。
-- 完整能力在「设置 → 组件」里**按需安装**（8 个组件合计 5,539.3MB，约 5.5GB，可只装需要的）：长期记忆 / 按住说话 / 一起看 / 语义表演 / 声纹 / 本地 4B 记忆模型 / 本地视觉 OCR。模型走 ModelScope / hf-mirror，Python 运行时与依赖随组件包，装完重启大肥鱼。
+- 完整能力在「设置 → 组件」里**按需安装**（8 个组件合计 5,539.3MB，约 5.5GB，可只装需要的）：Python 运行时 / 长期记忆 / 按住说话 / 一起看 / 语义表演 / 声纹 / 本地 4B 记忆模型 / 本地视觉 OCR。模型走 ModelScope / hf-mirror，Python 运行时与依赖随组件包，装完重启大肥鱼。
 - 本版新增组件：`voiceprint` 263.5MB（声纹，resemblyzer + CPU torch）、`local-memory` 2,381.6MB（MemOperator-4B，CPU 推理，hf-mirror）、`ollama` 1,637.8MB（便携 Ollama v0.40.18；三个模型约 9.3GB 装时按需拉取；`paddleocr-vl` 不在官方 registry，为可选档）。
+- v0.5.1 修复：安装包不再混入 dev 轮转日志（构建期整树断言）；控制面板「记忆体检」与浏览器标签扩展随包；能力页按 `components/` 识别语音器官（安装版不再误报 4 项缺失）；公开树全新 clone 可构建组件包（缺权重自动按清单源下载并校验 sha256，人格内核/lumen 配置有仓库内置回退）。
 - 安装包未代码签名，Windows SmartScreen 可能提示「未知发布者」，选择「仍要运行」。
 
 > 本仓库同时是一份**可公开、可部署的完整代码树**（安装包就是用它构建的），不是免配置一键包。
 > **只需自备 LLM API key**；Live2D 模型（经作者授权）、Cubism SDK/Core、MemOS 均已随仓（含许可文件）。
+> 安装包构建：`_packaging/build-installer.ps1 -Nsis -Version 0.5.1`（组件包先跑 `_packaging/build-component-packs.ps1`，可先用 `-CheckModelsOnly` 验证镜像与 sha256；缺权重会按清单源下载）。全新 clone 没有 `config.json` 时会用 `config.example.json` 的占位人格并在构建日志里告警——正式发布请先填自己的 `llm.system_prompt`。
 >
 > **本项目基于 [morettt/my-neuro](https://github.com/morettt/my-neuro)（MIT）二次开发**，保留上游版权与署名；第三方素材许可见 `NOTICE`。不是上游官方版本。
 
@@ -141,4 +143,4 @@ node scripts\bootstrap.mjs --json # 机器可读体检
 
 - 自有代码：MIT（`LICENSE`）。第三方边界见 `NOTICE`。
 - 密钥/上报：`SECURITY.md`。
-- 本仓库**不含**真实 key、模型、Cubism SDK、MemOS 子树或 git 历史。
+- 本仓库**不含**真实 key、模型权重（SenseVoice / LumenAct / Ollama / GGUF 等按上一节获取）、用户数据或 git 历史；Cubism SDK/Core 与 MemOS 子树**已随仓**（许可见 `NOTICE`，与上一节「已随仓」一致）。

@@ -88,6 +88,9 @@ extraFiles:
     to: components/manifest.json
   - from: out/persona/人格内核.json
     to: resources/data/人格内核.json
+  # v0.5.1（G3）：浏览器标签扩展随包，用户在扩展管理里「加载已解压的扩展程序」
+  - from: out/extra/browser-tabs
+    to: 浏览器扩展/browser-tabs
 
 # 打包后硬校验：删运行日志、校验默认配置无真实 key（见 build-resources/after-pack.cjs）
 afterPack: build-resources/after-pack.cjs
